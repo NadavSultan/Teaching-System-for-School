@@ -1,0 +1,117 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum LifecycleStatus {
+  ACTIVE
+  INACTIVE
+}
+enum WorkspaceType {
+  PERSONAL
+  SCHOOL
+}
+enum MembershipRole {
+  TEACHER
+  COORDINATOR
+  SCHOOL_ADMIN
+  PLATFORM_ADMIN
+}
+enum PublicationStatus {
+  PENDING
+  PROCESSING
+  PUBLISHED
+  FAILED
+}
+
+model User {
+  id                String            @id @default(uuid()) @db.Uuid
+  normalizedEmail   String            @unique @map("normalized_email") @db.VarChar(320)
+  displayName       String?           @map("display_name") @db.VarChar(200)
+  status            LifecycleStatus   @default(ACTIVE)
+  platformAdmin     Boolean           @default(false) @map("platform_admin")
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+  memberships       Membership[]
+  identityMappings  IdentityMapping[]
+  auditEvents       AuditEvent[]       @relation("AuditActor")
+  @@map("users")
+}
+
+model IdentityMapping {
+  id              String   @id @default(uuid()) @db.Uuid
+  provider        String   @db.VarChar(80)
+  providerSubject String   @map("provider_subject") @db.VarChar(255)
+  userId          String   @map("user_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at")
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([provider, providerSubject])
+  @@map("identity_mappings")
+}
+
+model Organization {
+  id            String          @id @default(uuid()) @db.Uuid
+  name          String          @db.VarChar(200)
+  workspaceType WorkspaceType   @map("workspace_type")
+  status        LifecycleStatus @default(ACTIVE)
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+  memberships   Membership[]
+  auditEvents   AuditEvent[]
+  outboxEvents  OutboxEvent[]
+  @@map("organizations")
+}
+
+model Membership {
+  id             String           @id @default(uuid()) @db.Uuid
+  userId         String           @map("user_id") @db.Uuid
+  organizationId String           @map("organization_id") @db.Uuid
+  role           MembershipRole
+  status         LifecycleStatus  @default(ACTIVE)
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+  user           User             @relation(fields: [userId], references: [id], onDelete: Restrict)
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  @@unique([userId, organizationId])
+  @@index([organizationId, status])
+  @@map("memberships")
+}
+
+model AuditEvent {
+  id             String        @id @default(uuid()) @db.Uuid
+  actorUserId    String?       @map("actor_user_id") @db.Uuid
+  organizationId String?       @map("organization_id") @db.Uuid
+  eventType      String        @map("event_type") @db.VarChar(120)
+  targetType     String        @map("target_type") @db.VarChar(120)
+  targetId       String        @map("target_id") @db.VarChar(255)
+  metadata       Json          @default("{}")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  actor          User?         @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  @@index([organizationId, createdAt])
+  @@map("audit_events")
+}
+
+model OutboxEvent {
+  id              String            @id @default(uuid()) @db.Uuid
+  organizationId  String?           @map("organization_id") @db.Uuid
+  eventType       String            @map("event_type") @db.VarChar(120)
+  payload         Json
+  status          PublicationStatus @default(PENDING)
+  attemptCount    Int               @default(0) @map("attempt_count")
+  availableAt     DateTime          @default(now()) @map("available_at")
+  publishedAt     DateTime?         @map("published_at")
+  idempotencyKey  String            @unique @map("idempotency_key") @db.VarChar(255)
+  lastError       String?           @map("last_error") @db.VarChar(500)
+  lockedAt        DateTime?         @map("locked_at")
+  leaseExpiresAt  DateTime?         @map("lease_expires_at")
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+  organization    Organization?     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  @@index([status, availableAt])
+  @@map("outbox_events")
+}

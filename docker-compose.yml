@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_USER: teaching
+      POSTGRES_PASSWORD: teaching_local
+      POSTGRES_DB: teaching
+    ports:
+      - '5432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U teaching -d teaching']
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - teaching-postgres:/var/lib/postgresql/data
+
+volumes:
+  teaching-postgres:

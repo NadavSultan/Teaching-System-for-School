@@ -1,0 +1,41 @@
+{
+  "name": "teaching-system",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": ">=24.0.0 <25"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --parallel",
+    "lint": "eslint . --max-warnings=0",
+    "format": "prettier --write .",
+    "format-check": "prettier --check .",
+    "typecheck": "turbo run typecheck",
+    "test": "vitest run --exclude '**/*.integration.test.ts'",
+    "test-integration": "vitest run --config vitest.integration.config.ts",
+    "test-integration:local": "node scripts/with-test-postgres.mjs",
+    "test:architecture": "vitest run tests/architecture.test.ts",
+    "contracts:generate": "pnpm --filter @teach/contracts build && node packages/contracts/scripts/generate-schemas.mjs",
+    "contracts:check": "pnpm --filter @teach/contracts build && node packages/contracts/scripts/generate-schemas.mjs --check && vitest run packages/contracts/src",
+    "db:generate": "pnpm --filter @teach/db generate",
+    "db:migrate": "pnpm --filter @teach/db migrate",
+    "db:migrate:deploy": "pnpm --filter @teach/db migrate:deploy",
+    "db:reset": "pnpm --filter @teach/db reset",
+    "db:studio": "pnpm --filter @teach/db studio"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.2",
+    "@types/node": "24.10.1",
+    "embedded-postgres": "17.10.0-beta.17",
+    "eslint": "9.39.2",
+    "prettier": "3.8.2",
+    "tsx": "4.23.12",
+    "turbo": "2.10.10",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.67.0",
+    "vitest": "4.1.10"
+  }
+}

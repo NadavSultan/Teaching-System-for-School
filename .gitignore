@@ -1,0 +1,12 @@
+node_modules/
+.pnpm-store/
+.next/
+dist/
+coverage/
+.turbo/
+.env
+.env.local
+.tmp/
+*.log
+*.tsbuildinfo
+packages/db/prisma/dev.db

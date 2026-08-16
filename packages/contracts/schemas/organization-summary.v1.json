@@ -1,0 +1,33 @@
+{
+  "$ref": "#/definitions/OrganizationSummaryV1",
+  "definitions": {
+    "OrganizationSummaryV1": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "workspaceType": {
+          "type": "string",
+          "enum": [
+            "PERSONAL",
+            "SCHOOL"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "workspaceType"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

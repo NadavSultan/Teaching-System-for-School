@@ -1,0 +1,48 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.6-alpine
+        env:
+          POSTGRES_USER: teaching
+          POSTGRES_PASSWORD: teaching_ci
+          POSTGRES_DB: teaching_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U teaching -d teaching_ci"
+          --health-interval 2s --health-timeout 3s --health-retries 20
+    env:
+      DATABASE_URL: postgresql://teaching:teaching_ci@localhost:5432/teaching_ci?schema=public
+      CLEAN_DATABASE_URL: postgresql://teaching:teaching_ci@localhost:5432/teaching_ci?schema=clean_migration
+      NODE_ENV: test
+      AUTH_ADAPTER: test
+      WEB_ORIGIN: http://localhost:3000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 11.19.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24.19.0, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format-check
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm db:migrate:deploy
+      - run: pnpm test-integration
+      - run: pnpm test:architecture
+      - run: pnpm contracts:check
+      - run: pnpm build
+      - name: Verify migrations on a separate clean schema
+        run: DATABASE_URL="$CLEAN_DATABASE_URL" pnpm db:migrate:deploy
+      # Secret scanning remains a documented review gap until an action and immutable SHA are approved.

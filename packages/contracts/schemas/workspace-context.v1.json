@@ -1,0 +1,115 @@
+{
+  "$ref": "#/definitions/WorkspaceContextV1",
+  "definitions": {
+    "WorkspaceContextV1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "principal": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "const": "1.0.0"
+            },
+            "userId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "email": {
+              "type": "string",
+              "format": "email"
+            },
+            "provider": {
+              "type": "string",
+              "minLength": 1
+            },
+            "providerSubject": {
+              "type": "string",
+              "minLength": 1
+            },
+            "platformAdmin": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "version",
+            "userId",
+            "email",
+            "provider",
+            "providerSubject",
+            "platformAdmin"
+          ],
+          "additionalProperties": false
+        },
+        "organization": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/WorkspaceContextV1/properties/principal/properties/userId"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "workspaceType": {
+              "type": "string",
+              "enum": [
+                "PERSONAL",
+                "SCHOOL"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "workspaceType"
+          ],
+          "additionalProperties": false
+        },
+        "membership": {
+          "type": "object",
+          "properties": {
+            "organizationId": {
+              "$ref": "#/definitions/WorkspaceContextV1/properties/principal/properties/userId"
+            },
+            "role": {
+              "type": "string",
+              "enum": [
+                "TEACHER",
+                "COORDINATOR",
+                "SCHOOL_ADMIN",
+                "PLATFORM_ADMIN"
+              ]
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "ACTIVE",
+                "INACTIVE"
+              ]
+            }
+          },
+          "required": [
+            "organizationId",
+            "role",
+            "status"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "version",
+        "principal",
+        "organization",
+        "membership"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

@@ -1,0 +1,20 @@
+# Risk Register
+
+Last updated: 2026-08-16
+
+Scale: likelihood and impact are Low/Medium/High. Owner means accountable product role until named people exist.
+
+| ID    | Risk                                                                                           |   L |   I | Mitigation / evidence needed                                                                                                    | Owner                 | Status |
+| ----- | ---------------------------------------------------------------------------------------------- | --: | --: | ------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ------ |
+| R-001 | Pedagogically incorrect or ambiguous output                                                    |   H |   H | Approved corpus, structured generation, deterministic/semantic validation, Hebrew SME evaluation and mandatory teacher approval | Product/Subject Lead  | Open   |
+| R-002 | Copyright/license does not permit AI use                                                       |   M |   H | Separate usage permission, deny-by-default eligibility, versioned legal evidence, counsel review before commercial use          | Product/Legal         | Open   |
+| R-003 | Hebrew/RTL PDF defects or answer leakage                                                       |   H |   H | Separate view models, embedded licensed fonts, representative visual corpus, extraction/leakage tests                           | Engineering/QA        | Open   |
+| R-004 | Cross-tenant data exposure                                                                     |   M |   H | Foundation ownership model, server policy, private storage, isolation tests, security review                                    | Engineering           | Open   |
+| R-005 | Model behavior changes/regresses                                                               |   H |   H | Pinned configs, version capture, frozen evaluation set, gated changes, fallback/error behavior                                  | AI Lead               | Open   |
+| R-006 | Retrieval returns ineligible or irrelevant context                                             |   M |   H | Central eligibility predicate, relational filter before ranking, benchmark and provenance assertions                            | Knowledge Lead        | Open   |
+| R-007 | Token/API cost becomes uneconomic                                                              |   M |   H | Budgets, quotas, per-run usage/cost, bounded context, caching only where safe, approval for model changes                       | Product/Engineering   | Open   |
+| R-008 | Sensitive student or source data leaks to logs/model providers                                 |   M |   H | Avoid student PII, provider terms/privacy review, redaction, retention controls, server-only keys                               | Security/Product      | Open   |
+| R-009 | AI-assisted implementation creates undocumented drift                                          |   H |   M | Explicit contracts, ADR gate, phase reviews, architecture tests and documentation acceptance criteria                           | Architect             | Open   |
+| R-010 | Over-engineering delays pilot                                                                  |   M |   M | Modular monolith, PostgreSQL-first infrastructure, measured extraction triggers, strict phase out-of-scope                      | Architect/Product     | Open   |
+| R-011 | Fast-moving Node/TypeScript/framework versions introduce compatibility or supply-chain defects |   M |   M | Pin runtime and lockfile, run CI/audit when network is available, review major upgrades deliberately                            | Engineering           | Open   |
+| R-012 | Documented tenancy invariants drift from database/application enforcement                      |   M |   H | Encode invariants in DB/domain tests, require migration review, and compare documentation during every phase review             | Architect/Engineering | Open   |
