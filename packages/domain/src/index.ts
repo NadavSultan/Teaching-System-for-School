@@ -75,15 +75,19 @@ const childType: Record<CurriculumNodeInput['type'], CurriculumNodeInput['type']
 };
 export function validateCurriculumHierarchy(roots: CurriculumNodeInput[]): string[] {
   const errors: string[] = [];
+  let nodeCount = 0;
   const walk = (
     nodes: CurriculumNodeInput[],
     expected: CurriculumNodeInput['type'] | null,
     path: string,
+    depth: number,
   ) => {
     const codes = new Set<string>(),
       orders = new Set<number>();
     for (const [i, node] of nodes.entries()) {
+      nodeCount += 1;
       const p = `${path}[${i}]`;
+      if (depth > 5) errors.push(`${p}: hierarchy depth exceeds five`);
       if (node.type !== expected && !(expected === null && node.type === 'GRADE'))
         errors.push(`${p}: invalid parent type`);
       if (codes.has(node.code)) errors.push(`${p}: duplicate sibling code`);
@@ -97,10 +101,14 @@ export function validateCurriculumHierarchy(roots: CurriculumNodeInput[]): strin
         new Set(node.difficulties ?? []).size !== (node.difficulties ?? []).length
       )
         errors.push(`${p}: duplicate difficulty`);
-      walk(node.children ?? [], childType[node.type], p + '.children');
+      if (node.type === 'SKILL' && node.children?.length)
+        errors.push(`${p}: SKILL cannot have children`);
+      else if (node.type !== 'SKILL')
+        walk(node.children ?? [], childType[node.type], p + '.children', depth + 1);
     }
   };
-  walk(roots, null, 'nodes');
+  walk(roots, null, 'nodes', 1);
+  if (nodeCount > 10_000) errors.push('nodes: hierarchy exceeds 10000 nodes');
   return errors;
 }
 
@@ -135,17 +143,22 @@ export function validateScoreTree(
     if (requireScore && node.scoreUnits === null)
       errors.push({ path, code: 'INVALID_SCORE', message: 'score required' });
     if (node.rubricScores?.length) {
-      if (node.rubricScores.some((score) => score === null))
+      if (
+        node.rubricScores.some((score) => score === null) &&
+        node.rubricScores.some((score) => score !== null)
+      )
         errors.push({
           path: `${path}.rubrics`,
           code: 'RUBRIC_TOTAL_MISMATCH',
           message: 'rubrics cannot mix null and scored values',
         });
       else if (
-        node.rubricScores.some(
+        node.rubricScores.some((score) => score !== null) &&
+        (node.rubricScores.some(
           (score) => !Number.isInteger(score) || score! < 0 || score! > MAX_SCORE_UNITS,
         ) ||
-        node.rubricScores.reduce<number>((sum, score) => sum + (score ?? 0), 0) !== node.scoreUnits
+          node.rubricScores.reduce<number>((sum, score) => sum + (score ?? 0), 0) !==
+            node.scoreUnits)
       )
         errors.push({
           path: `${path}.rubrics`,

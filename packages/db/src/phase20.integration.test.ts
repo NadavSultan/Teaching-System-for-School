@@ -77,6 +77,12 @@ describe('Phase 20 curriculum persistence', () => {
         },
       }),
     ).rejects.toThrow();
+    await expect(
+      prisma.curriculumVersion.update({
+        where: { id: result.version.id },
+        data: { humanLabel: 'tampered' },
+      }),
+    ).rejects.toThrow('immutable');
     await expect(deprecateCurriculumVersion(result.version.id)).resolves.toMatchObject({
       status: 'DEPRECATED',
     });
@@ -151,6 +157,20 @@ describe('Phase 20 curriculum persistence', () => {
         },
       }),
     ).rejects.toThrow();
+    await expect(
+      prisma.assessmentRevision.create({
+        data: {
+          assessmentId: assessment.id,
+          revisionNumber: 2,
+          idempotencyKey: `direct-final-${suffix}`,
+          requestFingerprint: '1'.repeat(64),
+          curriculumVersionId: version.id,
+          scoringMode: 'NONE',
+          totalScoreUnits: null,
+          state: 'FINALIZED',
+        },
+      }),
+    ).rejects.toThrow('created as BUILDING');
   });
 
   it('enforces draft-only creation, complete publication, and skill-only difficulties directly in PostgreSQL', async () => {
@@ -290,7 +310,7 @@ describe('Phase 20 curriculum persistence', () => {
       createAssessmentRevision(context, { ...input, idempotencyKey: `concurrent-b-${suffix}` }),
     ]);
     expect(concurrent.map((revision) => revision.revisionNumber).sort()).toEqual([2, 3]);
-    const { totalScoreUnits: _explicitTotal, ...defaultedInput } = input;
+    const defaultedInput = { ...input, totalScoreUnits: undefined };
     expect(
       (
         await createAssessmentRevision(context, {

@@ -178,13 +178,35 @@ export const assessmentSummarySchema = z.object({
   title: z.string().min(1).max(200),
   latestRevisionNumber: z.number().int().positive().nullable(),
 });
-export const finalizedAssessmentRevisionSchema = assessmentRevisionSchema
-  .omit({ assessmentId: true, idempotencyKey: true })
+const finalizedAnswerSchema = answerSchema.extend({ id: uuidSchema });
+const finalizedRubricSchema = rubricCriterionSchema.extend({ id: uuidSchema });
+const finalizedSubQuestionSchema = subQuestionSchema.omit({ answers: true, rubrics: true }).extend({
+  id: uuidSchema,
+  answers: z.array(finalizedAnswerSchema),
+  rubrics: z.array(finalizedRubricSchema),
+});
+const finalizedQuestionSchema = questionSchema
+  .omit({ answers: true, rubrics: true, subQuestions: true })
   .extend({
     id: uuidSchema,
-    assessmentId: uuidSchema,
-    revisionNumber: z.number().int().positive(),
-    finalized: z.literal(true),
+    answers: z.array(finalizedAnswerSchema),
+    rubrics: z.array(finalizedRubricSchema),
+    subQuestions: z.array(finalizedSubQuestionSchema),
   });
+const finalizedSectionSchema = sectionSchema
+  .omit({ questions: true })
+  .extend({ id: uuidSchema, questions: z.array(finalizedQuestionSchema) });
+export const finalizedAssessmentRevisionSchema = z.object({
+  version: z.literal(ASSESSMENT_SCHEMA_VERSION),
+  id: uuidSchema,
+  assessmentId: uuidSchema,
+  revisionNumber: z.number().int().positive(),
+  curriculumVersionId: uuidSchema,
+  scoringMode: scoringModeSchema,
+  totalScoreUnits: z.number().int().nonnegative().max(1000000).nullable(),
+  finalized: z.literal(true),
+  curriculumNodeIds: z.array(uuidSchema),
+  sections: z.array(finalizedSectionSchema),
+});
 export type CurriculumImport = z.infer<typeof curriculumImportSchema>;
 export type AssessmentRevisionInput = z.infer<typeof assessmentRevisionSchema>;

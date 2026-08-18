@@ -2,8 +2,12 @@ import { PrismaClient, type Prisma } from '@prisma/client';
 import { normalizeEmail } from '@teach/domain';
 import { authorizeWorkspace, type AccessContext } from '@teach/domain';
 import { createHash } from 'node:crypto';
-import { assessmentCreationSchema, assessmentRevisionSchema } from '@teach/contracts';
-import { curriculumImportSchema } from '@teach/contracts';
+import {
+  assessmentCreationSchema,
+  assessmentRevisionSchema,
+  finalizedAssessmentRevisionSchema,
+} from '@teach/contracts';
+import { curriculumImportSchema, publishedCurriculumSchema } from '@teach/contracts';
 import { validateCurriculumHierarchy, validateScoreTree } from '@teach/domain';
 
 export const prisma = new PrismaClient();
@@ -253,11 +257,96 @@ export async function deprecateCurriculumVersion(
 }
 
 export async function getPublishedCurriculum(versionId: string, client: PrismaClient = prisma) {
-  return client.curriculumVersion.findFirst({
+  const version = await client.curriculumVersion.findFirst({
     where: { id: versionId, status: 'PUBLISHED' },
     include: {
       nodes: { include: { difficulties: true }, orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }] },
     },
+  });
+  if (!version) return null;
+  const byParent = new Map<string | null, Array<(typeof version.nodes)[number]>>();
+  for (const node of version.nodes)
+    byParent.set(node.parentId, [...(byParent.get(node.parentId) ?? []), node]);
+  const mapNode = (node: (typeof version.nodes)[number]): unknown => ({
+    id: node.id,
+    code: node.code,
+    type: node.type,
+    label: node.label,
+    ...(node.description ? { description: node.description } : {}),
+    sortOrder: node.sortOrder,
+    ...(node.difficulties.length
+      ? { difficulties: node.difficulties.map((difficulty) => difficulty.band) }
+      : {}),
+    ...(byParent.get(node.id)?.length ? { children: byParent.get(node.id)!.map(mapNode) } : {}),
+  });
+  return publishedCurriculumSchema.parse({
+    version: '1.0.0',
+    id: version.id,
+    curriculumId: version.curriculumId,
+    versionNumber: version.versionNumber,
+    status: 'PUBLISHED',
+    nodes: (byParent.get(null) ?? []).map(mapNode),
+  });
+}
+
+export function mapFinalizedAssessmentRevision(revision: any) {
+  const answer = (item: any) => ({
+    id: item.id,
+    key: item.key,
+    order: item.order,
+    text: item.text,
+    ...(item.answerData && typeof item.answerData === 'object' && !Array.isArray(item.answerData)
+      ? { data: item.answerData }
+      : {}),
+    ...(item.explanation ? { explanation: item.explanation } : {}),
+  });
+  const rubric = (item: any) => ({
+    id: item.id,
+    key: item.key,
+    description: item.description,
+    order: item.order,
+    scoreUnits: item.scoreUnits,
+  });
+  const question = (item: any) => ({
+    id: item.id,
+    key: item.key,
+    type: item.type,
+    prompt: item.prompt,
+    ...(item.instructions ? { instructions: item.instructions } : {}),
+    order: item.order,
+    ...(item.difficulty ? { difficulty: item.difficulty } : {}),
+    scoreUnits: item.scoreUnits,
+    answers: item.answers.map(answer),
+    rubrics: item.rubrics.map(rubric),
+    subQuestions: item.subQuestions.map((sub: any) => ({
+      id: sub.id,
+      key: sub.key,
+      prompt: sub.prompt,
+      order: sub.order,
+      scoreUnits: sub.scoreUnits,
+      answers: sub.answers.map(answer),
+      rubrics: sub.rubrics.map(rubric),
+    })),
+  });
+  return finalizedAssessmentRevisionSchema.parse({
+    version: '1.0.0',
+    id: revision.id,
+    assessmentId: revision.assessmentId,
+    revisionNumber: revision.revisionNumber,
+    curriculumVersionId: revision.curriculumVersionId,
+    scoringMode: revision.scoringMode,
+    totalScoreUnits: revision.totalScoreUnits,
+    finalized: true,
+    curriculumNodeIds: revision.nodeLinks.map((link: any) => link.curriculumNodeId),
+    sections: revision.sections.map((section: any) => ({
+      id: section.id,
+      key: section.key,
+      title: section.title,
+      ...(section.instructions ? { instructions: section.instructions } : {}),
+      order: section.order,
+      scoreUnits: section.scoreUnits,
+      questions: section.questions.map(question),
+    })),
   });
 }
 
@@ -298,7 +387,7 @@ export async function getAssessmentRevision(
   client: PrismaClient = prisma,
 ) {
   authorizeWorkspace(context, context.organizationId, 'READ_ASSESSMENT');
-  return client.assessmentRevision.findFirst({
+  const revision = await client.assessmentRevision.findFirst({
     where: {
       assessmentId,
       revisionNumber,
@@ -328,6 +417,7 @@ export async function getAssessmentRevision(
       },
     },
   });
+  return revision ? mapFinalizedAssessmentRevision(revision) : null;
 }
 
 export async function createAssessmentRevision(

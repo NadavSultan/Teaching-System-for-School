@@ -47,6 +47,44 @@ describe('Phase 20 domain invariants', () => {
         { type: 'GRADE', code: 'G', sortOrder: 0, difficulties: ['LOW'] },
       ]),
     ).not.toEqual([]);
+    expect(
+      validateCurriculumHierarchy([
+        {
+          type: 'GRADE',
+          code: 'G',
+          sortOrder: 0,
+          children: [
+            {
+              type: 'DOMAIN',
+              code: 'D',
+              sortOrder: 0,
+              children: [
+                {
+                  type: 'TOPIC',
+                  code: 'T',
+                  sortOrder: 0,
+                  children: [
+                    {
+                      type: 'SUBTOPIC',
+                      code: 'S',
+                      sortOrder: 0,
+                      children: [
+                        {
+                          type: 'SKILL',
+                          code: 'K',
+                          sortOrder: 0,
+                          children: [{ type: 'GRADE', code: 'BAD', sortOrder: 0 }],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ]),
+    ).not.toEqual([]);
   });
 
   it('uses exact integer scoring and rejects inconsistent totals', () => {
@@ -71,6 +109,11 @@ describe('Phase 20 domain invariants', () => {
         { scoreUnits: 100, questions: [{ scoreUnits: 100, rubricScores: [50, null] }] },
       ]),
     ).not.toEqual([]);
+    expect(
+      validateScoreTree('POINTS', 'WORKSHEET', 100, [
+        { scoreUnits: 100, questions: [{ scoreUnits: 100, rubricScores: [null, null] }] },
+      ]),
+    ).toEqual([]);
   });
 
   it('allows only forward curriculum lifecycle transitions', () => {

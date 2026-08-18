@@ -40,13 +40,25 @@ CREATE CONSTRAINT TRIGGER "assessment_revision_must_finalize"
 AFTER INSERT OR UPDATE OF state ON "assessment_revisions" DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION phase20_reject_building_revision();
 
+CREATE OR REPLACE FUNCTION phase20_revision_state_guard() RETURNS trigger AS $$
+BEGIN
+  IF TG_OP='INSERT' AND NEW.state <> 'BUILDING' THEN RAISE EXCEPTION 'assessment revisions must be created as BUILDING'; END IF;
+  IF TG_OP='UPDATE' AND (OLD.state <> 'BUILDING' OR NEW.state <> 'FINALIZED') THEN RAISE EXCEPTION 'assessment revision state transition must be BUILDING to FINALIZED'; END IF;
+  RETURN NEW;
+END; $$ LANGUAGE plpgsql;
+CREATE TRIGGER "assessment_revision_state_guard" BEFORE INSERT OR UPDATE OF state ON "assessment_revisions" FOR EACH ROW EXECUTE FUNCTION phase20_revision_state_guard();
+
 CREATE OR REPLACE FUNCTION phase20_curriculum_node_guard() RETURNS trigger AS $$
-DECLARE p curriculum_nodes%ROWTYPE; state "CurriculumVersionStatus";
+DECLARE p curriculum_nodes%ROWTYPE; state "CurriculumVersionStatus"; old_state "CurriculumVersionStatus";
 BEGIN
   IF TG_OP='DELETE' THEN
     SELECT status INTO state FROM curriculum_versions WHERE id = OLD.version_id;
     IF state <> 'DRAFT' THEN RAISE EXCEPTION 'curriculum content is immutable after publication'; END IF;
     RETURN OLD;
+  END IF;
+  IF TG_OP='UPDATE' THEN
+    SELECT status INTO old_state FROM curriculum_versions WHERE id=OLD.version_id;
+    IF old_state <> 'DRAFT' THEN RAISE EXCEPTION 'curriculum content is immutable after publication'; END IF;
   END IF;
   SELECT status INTO state FROM curriculum_versions WHERE id = NEW.version_id;
   IF state <> 'DRAFT' THEN RAISE EXCEPTION 'curriculum content is immutable after publication'; END IF;
@@ -62,12 +74,16 @@ END; $$ LANGUAGE plpgsql;
 CREATE TRIGGER "curriculum_node_guard" BEFORE INSERT OR UPDATE OR DELETE ON "curriculum_nodes" FOR EACH ROW EXECUTE FUNCTION phase20_curriculum_node_guard();
 
 CREATE OR REPLACE FUNCTION phase20_curriculum_difficulty_guard() RETURNS trigger AS $$
-DECLARE node_type "CurriculumNodeType"; state "CurriculumVersionStatus";
+DECLARE node_type "CurriculumNodeType"; state "CurriculumVersionStatus"; old_state "CurriculumVersionStatus";
 BEGIN
   IF TG_OP='DELETE' THEN
     SELECT v.status INTO state FROM curriculum_nodes n JOIN curriculum_versions v ON v.id=n.version_id WHERE n.id=OLD.node_id;
     IF state <> 'DRAFT' THEN RAISE EXCEPTION 'curriculum content is immutable after publication'; END IF;
     RETURN OLD;
+  END IF;
+  IF TG_OP='UPDATE' THEN
+    SELECT v.status INTO old_state FROM curriculum_nodes n JOIN curriculum_versions v ON v.id=n.version_id WHERE n.id=OLD.node_id;
+    IF old_state <> 'DRAFT' THEN RAISE EXCEPTION 'curriculum content is immutable after publication'; END IF;
   END IF;
   SELECT n.type, v.status INTO node_type, state FROM curriculum_nodes n JOIN curriculum_versions v ON v.id=n.version_id WHERE n.id=NEW.node_id;
   IF node_type <> 'SKILL' THEN RAISE EXCEPTION 'difficulty applies only to SKILL'; END IF;
@@ -84,7 +100,10 @@ BEGIN
       OR EXISTS (SELECT 1 FROM curriculum_nodes n WHERE n.version_id=NEW.id AND n.type='SKILL' AND NOT EXISTS (SELECT 1 FROM curriculum_skill_difficulties d WHERE d.node_id=n.id))
     THEN RAISE EXCEPTION 'cannot publish incomplete curriculum hierarchy'; END IF;
     NEW.published_at := COALESCE(NEW.published_at, NOW());
-  ELSIF OLD.status='PUBLISHED' AND NEW.status='DEPRECATED' THEN NEW.deprecated_at := COALESCE(NEW.deprecated_at, NOW());
+  ELSIF OLD.status='PUBLISHED' AND NEW.status='DEPRECATED' THEN
+    IF NEW.curriculum_id <> OLD.curriculum_id OR NEW.version_number <> OLD.version_number OR NEW.human_label IS DISTINCT FROM OLD.human_label OR NEW.published_at IS DISTINCT FROM OLD.published_at OR NEW.created_at <> OLD.created_at THEN RAISE EXCEPTION 'published curriculum version is immutable'; END IF;
+    NEW.deprecated_at := COALESCE(NEW.deprecated_at, NOW());
+  ELSIF OLD.status IN ('PUBLISHED','DEPRECATED') THEN RAISE EXCEPTION 'published curriculum version is immutable';
   ELSIF OLD.status <> NEW.status THEN RAISE EXCEPTION 'invalid curriculum lifecycle transition';
   END IF;
   RETURN NEW;
@@ -161,19 +180,21 @@ CREATE TRIGGER "finalized_answer_immutable" BEFORE INSERT OR UPDATE OR DELETE ON
 CREATE TRIGGER "finalized_rubric_immutable" BEFORE INSERT OR UPDATE OR DELETE ON "rubric_criteria" FOR EACH ROW EXECUTE FUNCTION phase20_finalized_descendant_guard();
 
 CREATE OR REPLACE FUNCTION phase20_score_finalization_guard() RETURNS trigger AS $$
-DECLARE section_total INTEGER;
+DECLARE section_total INTEGER; assessment_type "AssessmentType";
 BEGIN
   IF NEW.state <> 'FINALIZED' THEN RETURN NEW; END IF;
   IF NOT EXISTS (SELECT 1 FROM curriculum_versions v WHERE v.id=NEW.curriculum_version_id AND v.status='PUBLISHED') THEN RAISE EXCEPTION 'assessment revisions require a published curriculum version'; END IF;
+  SELECT type INTO assessment_type FROM assessments WHERE id=NEW.assessment_id;
+  IF assessment_type='TEST' AND NEW.scoring_mode <> 'POINTS' THEN RAISE EXCEPTION 'tests require POINTS scoring'; END IF;
   IF NEW.scoring_mode='NONE' THEN
-    IF NEW.total_score_units IS NOT NULL OR EXISTS (SELECT 1 FROM assessment_sections s LEFT JOIN assessment_questions q ON q.section_id=s.id LEFT JOIN assessment_sub_questions sq ON sq.question_id=q.id WHERE s.revision_id=NEW.id AND (s.score_units IS NOT NULL OR q.score_units IS NOT NULL OR sq.score_units IS NOT NULL)) THEN RAISE EXCEPTION 'NONE scoring requires null scores'; END IF;
+    IF NEW.total_score_units IS NOT NULL OR EXISTS (SELECT 1 FROM assessment_sections s LEFT JOIN assessment_questions q ON q.section_id=s.id LEFT JOIN assessment_sub_questions sq ON sq.question_id=q.id LEFT JOIN rubric_criteria r ON r.question_id=q.id OR r.sub_question_id=sq.id WHERE s.revision_id=NEW.id AND (s.score_units IS NOT NULL OR q.score_units IS NOT NULL OR sq.score_units IS NOT NULL OR r.score_units IS NOT NULL)) THEN RAISE EXCEPTION 'NONE scoring requires null scores'; END IF;
   ELSE
     SELECT COALESCE(SUM(score_units),-1) INTO section_total FROM assessment_sections WHERE revision_id=NEW.id;
     IF NEW.total_score_units IS NULL OR section_total <> NEW.total_score_units THEN RAISE EXCEPTION 'revision score total mismatch'; END IF;
     IF EXISTS (SELECT 1 FROM assessment_sections s WHERE s.revision_id=NEW.id AND s.score_units <> (SELECT COALESCE(SUM(q.score_units),-1) FROM assessment_questions q WHERE q.section_id=s.id)) THEN RAISE EXCEPTION 'section score total mismatch'; END IF;
     IF EXISTS (SELECT 1 FROM assessment_questions q WHERE EXISTS (SELECT 1 FROM assessment_sub_questions sq WHERE sq.question_id=q.id) AND q.score_units <> (SELECT COALESCE(SUM(sq.score_units),-1) FROM assessment_sub_questions sq WHERE sq.question_id=q.id)) THEN RAISE EXCEPTION 'question score total mismatch'; END IF;
-    IF EXISTS (SELECT 1 FROM assessment_questions q WHERE EXISTS (SELECT 1 FROM rubric_criteria r WHERE r.question_id=q.id) AND (EXISTS (SELECT 1 FROM rubric_criteria r WHERE r.question_id=q.id AND r.score_units IS NULL) OR q.score_units <> (SELECT COALESCE(SUM(r.score_units),-1) FROM rubric_criteria r WHERE r.question_id=q.id))) THEN RAISE EXCEPTION 'question rubric score total mismatch'; END IF;
-    IF EXISTS (SELECT 1 FROM assessment_sub_questions sq WHERE EXISTS (SELECT 1 FROM rubric_criteria r WHERE r.sub_question_id=sq.id) AND (EXISTS (SELECT 1 FROM rubric_criteria r WHERE r.sub_question_id=sq.id AND r.score_units IS NULL) OR sq.score_units <> (SELECT COALESCE(SUM(r.score_units),-1) FROM rubric_criteria r WHERE r.sub_question_id=sq.id))) THEN RAISE EXCEPTION 'subquestion rubric score total mismatch'; END IF;
+    IF EXISTS (SELECT 1 FROM assessment_questions q WHERE EXISTS (SELECT 1 FROM rubric_criteria r WHERE r.question_id=q.id AND r.score_units IS NOT NULL) AND (EXISTS (SELECT 1 FROM rubric_criteria r WHERE r.question_id=q.id AND r.score_units IS NULL) OR q.score_units <> (SELECT COALESCE(SUM(r.score_units),-1) FROM rubric_criteria r WHERE r.question_id=q.id))) THEN RAISE EXCEPTION 'question rubric score total mismatch'; END IF;
+    IF EXISTS (SELECT 1 FROM assessment_sub_questions sq WHERE EXISTS (SELECT 1 FROM rubric_criteria r WHERE r.sub_question_id=sq.id AND r.score_units IS NOT NULL) AND (EXISTS (SELECT 1 FROM rubric_criteria r WHERE r.sub_question_id=sq.id AND r.score_units IS NULL) OR sq.score_units <> (SELECT COALESCE(SUM(r.score_units),-1) FROM rubric_criteria r WHERE r.sub_question_id=sq.id))) THEN RAISE EXCEPTION 'subquestion rubric score total mismatch'; END IF;
   END IF;
   RETURN NEW;
 END; $$ LANGUAGE plpgsql;

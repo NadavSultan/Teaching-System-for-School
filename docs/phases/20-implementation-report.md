@@ -4,11 +4,12 @@ Status: **implementation complete; not Phase-approved**. Permanent architecture 
 
 Branch: `codex/phase-20-remediation`  
 Baseline: `4502bbd70ed74b80c7a9c8024ca43ac82cc9a5f8`  
-Commit: `234c17ea38fdef30747f96e927768f058d36762d`
+Implementation baseline: `234c17ea38fdef30747f96e927768f058d36762d`  
+Corrective commit: `PENDING_FINAL_CORRECTIVE_COMMIT`
 
 ## Executive summary
 
-Phase 20 delivers platform-wide versioned Curriculum and tenant-owned immutable Assessment revisions. Curriculum uses typed adjacency, draft-only writes, atomic publication/deprecation, deterministic reads, and PostgreSQL lifecycle/content guards. Assessment graphs are built atomically as `BUILDING`, finalized before commit, fingerprinted for idempotency, scoped by trusted `AccessContext`, and immutable after finalization. No Phase 30+ capability was added.
+Phase 20 delivers platform-wide versioned Curriculum and tenant-owned immutable Assessment revisions. The final corrective remediation adds database-only `BUILDING → FINALIZED` entry/transition enforcement, release-identity immutability, exact `NONE` rubric checks, all-null rubric support, terminal Skill hierarchy validation, and validated external read mappings. No Phase 30+ capability was added.
 
 ## Responsibility and enforcement
 
