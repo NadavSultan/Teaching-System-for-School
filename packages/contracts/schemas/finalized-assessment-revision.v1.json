@@ -1,0 +1,315 @@
+{
+  "$ref": "#/definitions/FinalizedAssessmentRevisionV1",
+  "definitions": {
+    "FinalizedAssessmentRevisionV1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "curriculumVersionId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "scoringMode": {
+          "type": "string",
+          "enum": [
+            "NONE",
+            "POINTS"
+          ]
+        },
+        "totalScoreUnits": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "curriculumNodeIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FinalizedAssessmentRevisionV1/properties/curriculumVersionId"
+          },
+          "maxItems": 1000
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "instructions": {
+                "type": "string",
+                "maxLength": 5000
+              },
+              "order": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "scoreUnits": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "questions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 100
+                    },
+                    "type": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64
+                    },
+                    "prompt": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 20000
+                    },
+                    "instructions": {
+                      "type": "string",
+                      "maxLength": 5000
+                    },
+                    "order": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "difficulty": {
+                      "type": "string",
+                      "enum": [
+                        "LOW",
+                        "MEDIUM",
+                        "HIGH"
+                      ]
+                    },
+                    "scoreUnits": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 1000000
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "subQuestions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "key": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 100
+                          },
+                          "prompt": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 10000
+                          },
+                          "order": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "scoreUnits": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 1000000
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "answers": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "key": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 100
+                                },
+                                "order": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 1000
+                                },
+                                "text": {
+                                  "type": "string",
+                                  "maxLength": 10000
+                                },
+                                "data": {
+                                  "type": "object",
+                                  "additionalProperties": {}
+                                },
+                                "explanation": {
+                                  "type": "string",
+                                  "maxLength": 10000
+                                }
+                              },
+                              "required": [
+                                "key",
+                                "order",
+                                "text"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "maxItems": 100
+                          },
+                          "rubrics": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "key": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 100
+                                },
+                                "description": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 2000
+                                },
+                                "order": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "scoreUnits": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 1000000
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "key",
+                                "description",
+                                "order"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "maxItems": 100
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "prompt",
+                          "order",
+                          "answers",
+                          "rubrics"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "maxItems": 100
+                    },
+                    "answers": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/definitions/FinalizedAssessmentRevisionV1/properties/sections/items/properties/questions/items/properties/subQuestions/items/properties/answers/items"
+                      },
+                      "maxItems": 100
+                    },
+                    "rubrics": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/definitions/FinalizedAssessmentRevisionV1/properties/sections/items/properties/questions/items/properties/subQuestions/items/properties/rubrics/items"
+                      },
+                      "maxItems": 100
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "type",
+                    "prompt",
+                    "order",
+                    "subQuestions",
+                    "answers",
+                    "rubrics"
+                  ],
+                  "additionalProperties": false
+                },
+                "maxItems": 1000
+              }
+            },
+            "required": [
+              "key",
+              "title",
+              "order",
+              "questions"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 100
+        },
+        "id": {
+          "$ref": "#/definitions/FinalizedAssessmentRevisionV1/properties/curriculumVersionId"
+        },
+        "assessmentId": {
+          "$ref": "#/definitions/FinalizedAssessmentRevisionV1/properties/curriculumVersionId"
+        },
+        "revisionNumber": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "finalized": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "version",
+        "curriculumVersionId",
+        "scoringMode",
+        "curriculumNodeIds",
+        "sections",
+        "id",
+        "assessmentId",
+        "revisionNumber",
+        "finalized"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

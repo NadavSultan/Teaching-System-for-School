@@ -1,5 +1,10 @@
 import { PrismaClient, type Prisma } from '@prisma/client';
 import { normalizeEmail } from '@teach/domain';
+import { authorizeWorkspace, type AccessContext } from '@teach/domain';
+import { createHash } from 'node:crypto';
+import { assessmentCreationSchema, assessmentRevisionSchema } from '@teach/contracts';
+import { curriculumImportSchema } from '@teach/contracts';
+import { validateCurriculumHierarchy, validateScoreTree } from '@teach/domain';
 
 export const prisma = new PrismaClient();
 
@@ -113,5 +118,387 @@ export async function finishOutbox(id: string, error?: unknown, client: PrismaCl
       lockedAt: null,
       leaseExpiresAt: null,
     },
+  });
+}
+
+export class IdempotencyConflictError extends Error {
+  constructor() {
+    super('Idempotency key was already used with different content');
+  }
+}
+
+export async function createCurriculumWithDraft(input: unknown, client: PrismaClient = prisma) {
+  const parsed = curriculumImportSchema.parse(input);
+  const errors = validateCurriculumHierarchy(parsed.nodes);
+  if (errors.length) throw new Error(errors.join('; '));
+  return client.$transaction(async (tx) => {
+    const curriculum = await tx.curriculum.upsert({
+      where: { code: parsed.code },
+      update: { displayName: parsed.displayName },
+      create: {
+        code: parsed.code,
+        educationSystemCode: parsed.educationSystemCode,
+        subjectCode: parsed.subjectCode,
+        displayName: parsed.displayName,
+      },
+    });
+    const version = await tx.curriculumVersion.create({
+      data: {
+        curriculumId: curriculum.id,
+        versionNumber: parsed.versionNumber,
+        humanLabel: parsed.humanLabel ?? null,
+      },
+    });
+    return { curriculum, version };
+  });
+}
+
+export async function importCurriculumDraft(input: unknown, client: PrismaClient = prisma) {
+  const parsed = curriculumImportSchema.parse(input);
+  const errors = validateCurriculumHierarchy(parsed.nodes);
+  if (errors.length) throw new Error(errors.join('; '));
+  return client.$transaction(async (tx) => {
+    const curriculum = await tx.curriculum.upsert({
+      where: { code: parsed.code },
+      update: { displayName: parsed.displayName },
+      create: {
+        code: parsed.code,
+        educationSystemCode: parsed.educationSystemCode,
+        subjectCode: parsed.subjectCode,
+        displayName: parsed.displayName,
+      },
+    });
+    const version = await tx.curriculumVersion.create({
+      data: {
+        curriculumId: curriculum.id,
+        versionNumber: parsed.versionNumber,
+        humanLabel: parsed.humanLabel ?? null,
+      },
+    });
+    const insert = async (nodes: typeof parsed.nodes, parentId?: string): Promise<void> => {
+      for (const node of nodes) {
+        const saved = await tx.curriculumNode.create({
+          data: {
+            versionId: version.id,
+            parentId: parentId ?? null,
+            type: node.type,
+            code: node.code,
+            label: node.label,
+            description: node.description ?? null,
+            sortOrder: node.sortOrder,
+          },
+        });
+        if (node.difficulties?.length)
+          await tx.curriculumSkillDifficulty.createMany({
+            data: node.difficulties.map((band) => ({ nodeId: saved.id, band })),
+          });
+        if (node.children?.length) await insert(node.children, saved.id);
+      }
+    };
+    await insert(parsed.nodes);
+    return { curriculum, version };
+  });
+}
+
+export async function publishCurriculumVersion(
+  versionId: string,
+  actorUserId?: string,
+  client: PrismaClient = prisma,
+) {
+  return client.$transaction(async (tx) => {
+    const version = await tx.curriculumVersion.findUniqueOrThrow({
+      where: { id: versionId },
+      include: { nodes: true },
+    });
+    if (version.status !== 'DRAFT' || !version.nodes.length)
+      throw new Error('Curriculum draft is not publishable');
+    const published = await tx.curriculumVersion.update({
+      where: { id: versionId },
+      data: { status: 'PUBLISHED', publishedAt: new Date() },
+    });
+    await tx.auditEvent.create({
+      data: {
+        actorUserId: actorUserId ?? null,
+        eventType: 'curriculum.published',
+        targetType: 'curriculum_version',
+        targetId: versionId,
+        metadata: { versionNumber: version.versionNumber },
+      },
+    });
+    return published;
+  });
+}
+
+export async function deprecateCurriculumVersion(
+  versionId: string,
+  actorUserId?: string,
+  client: PrismaClient = prisma,
+) {
+  return client.$transaction(async (tx) => {
+    const version = await tx.curriculumVersion.update({
+      where: { id: versionId },
+      data: { status: 'DEPRECATED', deprecatedAt: new Date() },
+    });
+    await tx.auditEvent.create({
+      data: {
+        actorUserId: actorUserId ?? null,
+        eventType: 'curriculum.deprecated',
+        targetType: 'curriculum_version',
+        targetId: versionId,
+        metadata: { versionNumber: version.versionNumber },
+      },
+    });
+    return version;
+  });
+}
+
+export async function getPublishedCurriculum(versionId: string, client: PrismaClient = prisma) {
+  return client.curriculumVersion.findFirst({
+    where: { id: versionId, status: 'PUBLISHED' },
+    include: {
+      nodes: { include: { difficulties: true }, orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }] },
+    },
+  });
+}
+
+export async function createAssessment(
+  context: AccessContext,
+  input: unknown,
+  client: PrismaClient = prisma,
+) {
+  authorizeWorkspace(context, context.organizationId, 'CREATE_ASSESSMENT');
+  const parsed = assessmentCreationSchema.parse(input);
+  return client.$transaction(async (tx) => {
+    const assessment = await tx.assessment.create({
+      data: {
+        organizationId: context.organizationId,
+        type: parsed.type,
+        title: parsed.title,
+        createdByUserId: context.principal.userId,
+      },
+    });
+    await tx.auditEvent.create({
+      data: {
+        actorUserId: context.principal.userId,
+        organizationId: context.organizationId,
+        eventType: 'assessment.created',
+        targetType: 'assessment',
+        targetId: assessment.id,
+        metadata: { schemaVersion: parsed.version },
+      },
+    });
+    return assessment;
+  });
+}
+
+export async function getAssessmentRevision(
+  context: AccessContext,
+  assessmentId: string,
+  revisionNumber: number,
+  client: PrismaClient = prisma,
+) {
+  authorizeWorkspace(context, context.organizationId, 'READ_ASSESSMENT');
+  return client.assessmentRevision.findFirst({
+    where: {
+      assessmentId,
+      revisionNumber,
+      state: 'FINALIZED',
+      assessment: { organizationId: context.organizationId },
+    },
+    include: {
+      nodeLinks: true,
+      sections: {
+        orderBy: { order: 'asc' },
+        include: {
+          questions: {
+            orderBy: { order: 'asc' },
+            include: {
+              subQuestions: {
+                orderBy: { order: 'asc' },
+                include: {
+                  answers: { orderBy: { order: 'asc' } },
+                  rubrics: { orderBy: { order: 'asc' } },
+                },
+              },
+              answers: { orderBy: { order: 'asc' } },
+              rubrics: { orderBy: { order: 'asc' } },
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+export async function createAssessmentRevision(
+  context: AccessContext,
+  input: unknown,
+  client: PrismaClient = prisma,
+) {
+  authorizeWorkspace(context, context.organizationId, 'CREATE_ASSESSMENT_REVISION');
+  const parsed = assessmentRevisionSchema.parse(input);
+  return client.$transaction(async (tx) => {
+    const assessment = await tx.assessment.findFirst({
+      where: { id: parsed.assessmentId, organizationId: context.organizationId },
+    });
+    if (!assessment) throw new Error('Resource not found or unavailable');
+    const totalScoreUnits =
+      parsed.totalScoreUnits === undefined && assessment.type === 'TEST'
+        ? 10_000
+        : (parsed.totalScoreUnits ?? null);
+    const fingerprint = createHash('sha256')
+      .update(JSON.stringify({ ...parsed, totalScoreUnits }))
+      .digest('hex');
+    const scoreErrors = validateScoreTree(
+      parsed.scoringMode,
+      assessment.type,
+      totalScoreUnits,
+      parsed.sections.map((section) => ({
+        scoreUnits: section.scoreUnits ?? null,
+        questions: section.questions.map((question) => ({
+          scoreUnits: question.scoreUnits ?? null,
+          rubricScores: question.rubrics.map((rubric) => rubric.scoreUnits ?? null),
+          subQuestions: question.subQuestions.map((subQuestion) => ({
+            scoreUnits: subQuestion.scoreUnits ?? null,
+            rubricScores: subQuestion.rubrics.map((rubric) => rubric.scoreUnits ?? null),
+          })),
+        })),
+      })),
+    );
+    if (scoreErrors.length) throw new Error(scoreErrors.map((error) => error.code).join(','));
+    await tx.$queryRaw`SELECT id FROM assessments WHERE id = ${assessment.id}::uuid FOR UPDATE`;
+    const existing = await tx.assessmentRevision.findUnique({
+      where: {
+        assessmentId_idempotencyKey: {
+          assessmentId: assessment.id,
+          idempotencyKey: parsed.idempotencyKey,
+        },
+      },
+    });
+    if (existing) {
+      if (existing.requestFingerprint !== fingerprint) throw new IdempotencyConflictError();
+      return existing;
+    }
+    const curriculum = await tx.curriculumVersion.findFirst({
+      where: { id: parsed.curriculumVersionId, status: 'PUBLISHED' },
+    });
+    if (!curriculum) throw new Error('Curriculum version is unavailable');
+    const count = await tx.assessmentRevision.count({ where: { assessmentId: assessment.id } });
+    const linkedNodes = await tx.curriculumNode.findMany({
+      where: { id: { in: parsed.curriculumNodeIds }, versionId: curriculum.id },
+      select: { id: true },
+    });
+    if (linkedNodes.length !== parsed.curriculumNodeIds.length)
+      throw new Error('Curriculum nodes are unavailable');
+    const revision = await tx.assessmentRevision.create({
+      data: {
+        assessmentId: assessment.id,
+        revisionNumber: count + 1,
+        idempotencyKey: parsed.idempotencyKey,
+        requestFingerprint: fingerprint,
+        curriculumVersionId: curriculum.id,
+        scoringMode: parsed.scoringMode,
+        totalScoreUnits,
+        state: 'BUILDING',
+      },
+    });
+    if (linkedNodes.length)
+      await tx.assessmentRevisionNodeLink.createMany({
+        data: linkedNodes.map((node) => ({ revisionId: revision.id, curriculumNodeId: node.id })),
+      });
+    for (const section of parsed.sections) {
+      const savedSection = await tx.assessmentSection.create({
+        data: {
+          revisionId: revision.id,
+          key: section.key,
+          title: section.title,
+          instructions: section.instructions ?? null,
+          order: section.order,
+          scoreUnits: section.scoreUnits ?? null,
+        },
+      });
+      for (const question of section.questions) {
+        const savedQuestion = await tx.assessmentQuestion.create({
+          data: {
+            sectionId: savedSection.id,
+            key: question.key,
+            type: question.type,
+            prompt: question.prompt,
+            instructions: question.instructions ?? null,
+            difficulty: question.difficulty ?? null,
+            order: question.order,
+            scoreUnits: question.scoreUnits ?? null,
+          },
+        });
+        for (const answer of question.answers)
+          await tx.answer.create({
+            data: {
+              questionId: savedQuestion.id,
+              answerData: JSON.parse(JSON.stringify(answer.data ?? {})) as Prisma.InputJsonValue,
+              key: answer.key,
+              order: answer.order,
+              text: answer.text,
+              explanation: answer.explanation ?? null,
+            },
+          });
+        for (const rubric of question.rubrics)
+          await tx.rubricCriterion.create({
+            data: {
+              questionId: savedQuestion.id,
+              key: rubric.key,
+              description: rubric.description,
+              order: rubric.order,
+              scoreUnits: rubric.scoreUnits ?? null,
+            },
+          });
+        for (const subQuestion of question.subQuestions) {
+          const savedSubQuestion = await tx.assessmentSubQuestion.create({
+            data: {
+              questionId: savedQuestion.id,
+              key: subQuestion.key,
+              prompt: subQuestion.prompt,
+              order: subQuestion.order,
+              scoreUnits: subQuestion.scoreUnits ?? null,
+            },
+          });
+          for (const answer of subQuestion.answers)
+            await tx.answer.create({
+              data: {
+                subQuestionId: savedSubQuestion.id,
+                answerData: JSON.parse(JSON.stringify(answer.data ?? {})) as Prisma.InputJsonValue,
+                key: answer.key,
+                order: answer.order,
+                text: answer.text,
+                explanation: answer.explanation ?? null,
+              },
+            });
+          for (const rubric of subQuestion.rubrics)
+            await tx.rubricCriterion.create({
+              data: {
+                subQuestionId: savedSubQuestion.id,
+                key: rubric.key,
+                description: rubric.description,
+                order: rubric.order,
+                scoreUnits: rubric.scoreUnits ?? null,
+              },
+            });
+        }
+      }
+    }
+    await tx.assessmentRevision.update({
+      where: { id: revision.id },
+      data: { state: 'FINALIZED' },
+    });
+    await tx.auditEvent.create({
+      data: {
+        actorUserId: context.principal.userId,
+        organizationId: context.organizationId,
+        eventType: 'assessment.revision.finalized',
+        targetType: 'assessment_revision',
+        targetId: revision.id,
+        metadata: { revisionNumber: revision.revisionNumber },
+      },
+    });
+    return { ...revision, state: 'FINALIZED' as const };
   });
 }

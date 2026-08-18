@@ -1,0 +1,105 @@
+{
+  "$ref": "#/definitions/PublishedCurriculumV1",
+  "definitions": {
+    "PublishedCurriculumV1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "curriculumId": {
+          "$ref": "#/definitions/PublishedCurriculumV1/properties/id"
+        },
+        "versionNumber": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "status": {
+          "type": "string",
+          "const": "PUBLISHED"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/definitions/PublishedCurriculumV1/properties/id"
+              },
+              "code": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "GRADE",
+                  "DOMAIN",
+                  "TOPIC",
+                  "SUBTOPIC",
+                  "SKILL"
+                ]
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "description": {
+                "type": "string",
+                "maxLength": 2000
+              },
+              "sortOrder": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000
+              },
+              "difficulties": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "LOW",
+                    "MEDIUM",
+                    "HIGH"
+                  ]
+                },
+                "maxItems": 3
+              },
+              "children": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/PublishedCurriculumV1/properties/nodes/items"
+                },
+                "maxItems": 1000
+              }
+            },
+            "required": [
+              "id",
+              "code",
+              "type",
+              "label",
+              "sortOrder"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "version",
+        "id",
+        "curriculumId",
+        "versionNumber",
+        "status",
+        "nodes"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

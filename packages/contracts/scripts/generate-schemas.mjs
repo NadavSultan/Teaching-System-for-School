@@ -9,6 +9,13 @@ import {
   membershipSummarySchema,
   organizationSummarySchema,
   workspaceContextSchema,
+  curriculumImportSchema,
+  publishedCurriculumSchema,
+  assessmentCreationSchema,
+  assessmentRevisionSchema,
+  assessmentSummarySchema,
+  finalizedAssessmentRevisionSchema,
+  scoreValidationResultSchema,
 } from '../dist/index.js';
 
 const outputDirectory = join(dirname(fileURLToPath(import.meta.url)), '..', 'schemas');
@@ -19,6 +26,17 @@ const schemas = [
   ['membership-summary.v1.json', membershipSummarySchema, 'MembershipSummaryV1'],
   ['workspace-context.v1.json', workspaceContextSchema, 'WorkspaceContextV1'],
   ['api-error.v1.json', apiErrorSchema, 'ApiErrorV1'],
+  ['curriculum-import.v1.json', curriculumImportSchema, 'CurriculumImportV1'],
+  ['published-curriculum.v1.json', publishedCurriculumSchema, 'PublishedCurriculumV1'],
+  ['assessment-creation.v1.json', assessmentCreationSchema, 'AssessmentCreationV1'],
+  ['assessment-summary.v1.json', assessmentSummarySchema, 'AssessmentSummaryV1'],
+  ['assessment-revision.v1.json', assessmentRevisionSchema, 'AssessmentRevisionV1'],
+  [
+    'finalized-assessment-revision.v1.json',
+    finalizedAssessmentRevisionSchema,
+    'FinalizedAssessmentRevisionV1',
+  ],
+  ['score-validation-result.v1.json', scoreValidationResultSchema, 'ScoreValidationResultV1'],
 ];
 let drift = false;
 for (const [file, schema, name] of schemas) {

@@ -1,10 +1,10 @@
 # Phase 10 Implementation Report — Secure Foundation and Contracts
 
-Status: implementation complete with environment-limited PostgreSQL evidence; this report does **not** approve Phase 10. Permanent architecture review is required.
+Status: implementation complete with verified local PostgreSQL remediation evidence; this report does **not** approve Phase 10. Permanent architecture review is required.
 
 ## 1. Executive summary
 
-A TypeScript/pnpm/Turborepo foundation now separates Next.js web, NestJS API, and an independent PostgreSQL outbox worker. It adds provider-neutral identity, server-side tenant authorization, Prisma schema/reviewed migration, versioned Zod contracts, safe HTTP defaults, deterministic fake AI boundary, RTL shell, CI, and operational runbooks. Reviewed commit/hash: not available (repository was not initialized or committed by this session).
+A TypeScript/pnpm/Turborepo foundation now separates Next.js web, NestJS API, and an independent PostgreSQL outbox worker. It adds provider-neutral identity, server-side tenant authorization, Prisma schema/reviewed migration, versioned Zod contracts, safe HTTP defaults, deterministic fake AI boundary, RTL shell, CI, and operational runbooks. The original environment-limited evidence below is retained as pre-remediation history; the current verified remediation evidence is in the dedicated final section.
 
 ## 2. Responsibility map
 

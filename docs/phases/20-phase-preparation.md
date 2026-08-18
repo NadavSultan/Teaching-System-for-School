@@ -1,7 +1,8 @@
 # Phase 20 Preparation — Curriculum and Assessment Domain
 
-Status: **PREPARED — implementation prompt not yet issued**  
+Status: **MASTER IMPLEMENTATION PROMPT ISSUED**
 Dependency: Phase 10 approved with tracked follow-ups
+Master prompt issued: 2026-08-18
 
 ## Objective
 
@@ -81,4 +82,4 @@ The implementation session must read all architecture control documents, the Pha
 - TD-007 remains deferred and is not a Phase 20 implementation target.
 - Hosted CI remains unverified until a remote workflow exists; the local CI-equivalent remains mandatory.
 
-When requested, the permanent architecture session will turn this preparation into the complete Phase 20 Master Implementation Prompt.
+The complete implementation handoff is `docs/phases/20-master-implementation-prompt.md`.

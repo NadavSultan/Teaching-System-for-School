@@ -63,6 +63,7 @@ model Organization {
   memberships   Membership[]
   auditEvents   AuditEvent[]
   outboxEvents  OutboxEvent[]
+  assessments   Assessment[]
   @@map("organizations")
 }
 
@@ -114,4 +115,192 @@ model OutboxEvent {
   organization    Organization?     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   @@index([status, availableAt])
   @@map("outbox_events")
+}
+
+enum CurriculumLifecycle {
+  ACTIVE
+  DEPRECATED
+}
+enum CurriculumVersionStatus {
+  DRAFT
+  PUBLISHED
+  DEPRECATED
+}
+enum CurriculumNodeType {
+  GRADE
+  DOMAIN
+  TOPIC
+  SUBTOPIC
+  SKILL
+}
+enum DifficultyBand {
+  LOW
+  MEDIUM
+  HIGH
+}
+enum AssessmentType {
+  WORKSHEET
+  TEST
+}
+enum ScoringMode {
+  NONE
+  POINTS
+}
+enum AssessmentRevisionState {
+  BUILDING
+  FINALIZED
+}
+model Curriculum {
+ id String @id @default(uuid()) @db.Uuid
+ code String @unique @db.VarChar(64)
+ educationSystemCode String @map("education_system_code") @db.VarChar(64)
+ subjectCode String @map("subject_code") @db.VarChar(64)
+ displayName String @map("display_name") @db.VarChar(200)
+ lifecycle CurriculumLifecycle @default(ACTIVE)
+ createdAt DateTime @default(now()) @map("created_at")
+ updatedAt DateTime @updatedAt @map("updated_at")
+ versions CurriculumVersion[]
+ @@map("curricula")
+}
+model CurriculumVersion {
+  id String @id @default(uuid()) @db.Uuid
+  curriculumId String @map("curriculum_id") @db.Uuid
+  versionNumber Int @map("version_number")
+  humanLabel String? @map("human_label") @db.VarChar(200)
+  status CurriculumVersionStatus @default(DRAFT)
+  publishedAt DateTime? @map("published_at")
+  deprecatedAt DateTime? @map("deprecated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  curriculum Curriculum @relation(fields: [curriculumId], references: [id])
+  nodes CurriculumNode[]
+  revisions AssessmentRevision[]
+  @@unique([curriculumId, versionNumber])
+  @@map("curriculum_versions")
+}
+model CurriculumNode {
+  id String @id @default(uuid()) @db.Uuid
+  versionId String @map("version_id") @db.Uuid
+  parentId String? @map("parent_id") @db.Uuid
+  type CurriculumNodeType
+  code String
+  label String
+  description String? @db.VarChar(2000)
+  sortOrder Int @map("sort_order")
+  version CurriculumVersion @relation(fields: [versionId], references: [id])
+  parent CurriculumNode? @relation("Tree", fields: [parentId], references: [id])
+  children CurriculumNode[] @relation("Tree")
+  difficulties CurriculumSkillDifficulty[]
+  links AssessmentRevisionNodeLink[]
+  @@map("curriculum_nodes")
+}
+model CurriculumSkillDifficulty {
+  id String @id @default(uuid()) @db.Uuid
+  nodeId String @map("node_id") @db.Uuid
+  band DifficultyBand
+  node CurriculumNode @relation(fields: [nodeId], references: [id])
+  @@map("curriculum_skill_difficulties")
+}
+model Assessment {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  type AssessmentType
+  title String
+  createdByUserId String? @map("created_by_user_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  organization Organization @relation(fields: [organizationId], references: [id])
+  revisions AssessmentRevision[]
+  @@map("assessments")
+}
+model AssessmentRevision {
+  id String @id @default(uuid()) @db.Uuid
+  assessmentId String @map("assessment_id") @db.Uuid
+  revisionNumber Int @map("revision_number")
+  idempotencyKey String @map("idempotency_key")
+  requestFingerprint String @map("request_fingerprint") @db.Char(64)
+  state AssessmentRevisionState @default(BUILDING)
+  curriculumVersionId String @map("curriculum_version_id") @db.Uuid
+  scoringMode ScoringMode @map("scoring_mode")
+  totalScoreUnits Int? @map("total_score_units")
+  createdAt DateTime @default(now()) @map("created_at")
+  assessment Assessment @relation(fields: [assessmentId], references: [id])
+  curriculumVersion CurriculumVersion @relation(fields: [curriculumVersionId], references: [id])
+  sections AssessmentSection[]
+  nodeLinks AssessmentRevisionNodeLink[]
+  @@unique([assessmentId, revisionNumber])
+  @@unique([assessmentId, idempotencyKey])
+  @@map("assessment_revisions")
+}
+model AssessmentRevisionNodeLink {
+  id String @id @default(uuid()) @db.Uuid
+  revisionId String @map("revision_id") @db.Uuid
+  curriculumNodeId String @map("curriculum_node_id") @db.Uuid
+  revision AssessmentRevision @relation(fields: [revisionId], references: [id])
+  node CurriculumNode @relation(fields: [curriculumNodeId], references: [id])
+  @@map("assessment_revision_node_links")
+}
+model AssessmentSection {
+  id String @id @default(uuid()) @db.Uuid
+  revisionId String @map("revision_id") @db.Uuid
+  key String
+  title String
+  instructions String? @db.VarChar(5000)
+  order Int
+  scoreUnits Int? @map("score_units")
+  revision AssessmentRevision @relation(fields: [revisionId], references: [id])
+  questions AssessmentQuestion[]
+  @@map("assessment_sections")
+}
+model AssessmentQuestion {
+  id String @id @default(uuid()) @db.Uuid
+  sectionId String @map("section_id") @db.Uuid
+  key String
+  type String
+  prompt String
+  instructions String? @db.VarChar(5000)
+  difficulty DifficultyBand?
+  order Int
+  scoreUnits Int? @map("score_units")
+  section AssessmentSection @relation(fields: [sectionId], references: [id])
+  subQuestions AssessmentSubQuestion[]
+  answers Answer[]
+  rubrics RubricCriterion[]
+  @@map("assessment_questions")
+}
+model AssessmentSubQuestion {
+  id String @id @default(uuid()) @db.Uuid
+  questionId String @map("question_id") @db.Uuid
+  key String
+  prompt String
+  order Int
+  scoreUnits Int? @map("score_units")
+  question AssessmentQuestion @relation(fields: [questionId], references: [id])
+  answers Answer[]
+  rubrics RubricCriterion[]
+  @@map("assessment_sub_questions")
+}
+model Answer {
+  id String @id @default(uuid()) @db.Uuid
+  questionId String? @map("question_id") @db.Uuid
+  subQuestionId String? @map("sub_question_id") @db.Uuid
+  answerData Json @map("answer_data")
+  key String @db.VarChar(100)
+  order Int
+  text String @db.VarChar(10000)
+  explanation String? @db.VarChar(10000)
+  question AssessmentQuestion? @relation(fields: [questionId], references: [id])
+  subQuestion AssessmentSubQuestion? @relation(fields: [subQuestionId], references: [id])
+  @@map("answers")
+}
+model RubricCriterion {
+  id String @id @default(uuid()) @db.Uuid
+  questionId String? @map("question_id") @db.Uuid
+  subQuestionId String? @map("sub_question_id") @db.Uuid
+  key String
+  description String
+  order Int
+  scoreUnits Int? @map("score_units")
+  question AssessmentQuestion? @relation(fields: [questionId], references: [id])
+  subQuestion AssessmentSubQuestion? @relation(fields: [subQuestionId], references: [id])
+  @@map("rubric_criteria")
 }
