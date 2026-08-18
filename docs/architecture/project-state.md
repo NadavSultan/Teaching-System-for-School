@@ -2,19 +2,19 @@
 
 Last updated: 2026-08-18
 
-| Field                     | State                                                                                               |
-| ------------------------- | --------------------------------------------------------------------------------------------------- |
-| Current Phase             | 20 — Final re-review found narrow Critical database enforcement defects                             |
-| Completed Phases          | 00 — Product Control & System Architecture; 10 — Secure Foundation and Contracts                    |
-| Next Phase                | Phase 20 remediation; Phase 30 remains blocked pending approval                                     |
-| Architecture Version      | 1.0                                                                                                 |
-| Curriculum Schema Version | 1.0.0 candidate definitions exist; not established until Phase 20 approval                          |
-| Knowledge Schema Version  | Not established; v1 proposed for Phase 30                                                           |
-| Assessment Schema Version | 1.0.0 candidate definitions exist; not established until Phase 20 approval                          |
-| Open ADRs                 | None; ADR-001 through ADR-007 are APPROVED                                                          |
-| Technical Debt            | TD-001–TD-006 and TD-008 closed; TD-007 deferred; TD-009–TD-013 Phase 20 blockers                   |
-| Known Risks               | R-001 through R-014 in risk register                                                                |
-| Blocking Issues           | Direct-finalized insert, published-version mutation, NONE/rubric DB bypass, lint, and evidence gaps |
+| Field                     | State                                                                                                 |
+| ------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Current Phase             | 20 — Corrective re-review found finalized-child reparent and contract-drift blockers                  |
+| Completed Phases          | 00 — Product Control & System Architecture; 10 — Secure Foundation and Contracts                      |
+| Next Phase                | Phase 20 remediation; Phase 30 remains blocked pending approval                                       |
+| Architecture Version      | 1.0                                                                                                   |
+| Curriculum Schema Version | 1.0.0 candidate definitions exist; not established until Phase 20 approval                            |
+| Knowledge Schema Version  | Not established; v1 proposed for Phase 30                                                             |
+| Assessment Schema Version | 1.0.0 candidate definitions exist; not established until Phase 20 approval                            |
+| Open ADRs                 | None; ADR-001 through ADR-007 are APPROVED                                                            |
+| Technical Debt            | TD-001–TD-006 and TD-008 closed; TD-007 deferred; TD-009–TD-013 Phase 20 blockers                     |
+| Known Risks               | R-001 through R-014 in risk register                                                                  |
+| Blocking Issues           | Finalized OLD-owner reparent bypass; stale generated contract artifact; incomplete permanent evidence |
 
 ## Architectural invariants
 
