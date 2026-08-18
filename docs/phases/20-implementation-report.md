@@ -5,7 +5,7 @@ Status: **implementation complete; not Phase-approved**. Permanent architecture 
 Branch: `codex/phase-20-remediation`  
 Baseline: `4502bbd70ed74b80c7a9c8024ca43ac82cc9a5f8`  
 Implementation baseline: `234c17ea38fdef30747f96e927768f058d36762d`  
-Corrective commit: `PENDING_FINAL_CORRECTIVE_COMMIT`
+Corrective commit: `0f79cd3f90b743b30b460e473261f5ef9cbc8433`
 
 ## Executive summary
 
