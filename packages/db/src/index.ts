@@ -1,6 +1,6 @@
 import { PrismaClient, type Prisma } from '@prisma/client';
 import { normalizeEmail } from '@teach/domain';
-import { authorizeWorkspace, type AccessContext } from '@teach/domain';
+import { AccessDeniedError, authorizeWorkspace, type AccessContext } from '@teach/domain';
 import { createHash } from 'node:crypto';
 import {
   assessmentCreationSchema,
@@ -11,6 +11,28 @@ import { curriculumImportSchema, publishedCurriculumSchema } from '@teach/contra
 import { validateCurriculumHierarchy, validateScoreTree } from '@teach/domain';
 
 export const prisma = new PrismaClient();
+
+/** Resolves the only trusted tenant context accepted by Assessment operations. */
+export async function resolveAccessContext(
+  principal: AccessContext['principal'],
+  organizationId: string,
+  client: PrismaClient = prisma,
+): Promise<AccessContext> {
+  const membership = await client.membership.findUnique({
+    where: { userId_organizationId: { userId: principal.userId, organizationId } },
+    include: { user: true, organization: true },
+  });
+  if (!membership) throw new AccessDeniedError();
+  return {
+    principal,
+    organizationId: membership.organizationId,
+    userStatus: membership.user.status,
+    membershipStatus: membership.status,
+    role: membership.role,
+    organizationStatus: membership.organization.status,
+    workspaceType: membership.organization.workspaceType,
+  };
+}
 
 export async function databaseReady(client: PrismaClient = prisma): Promise<boolean> {
   try {

@@ -12,31 +12,19 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { CONTRACT_VERSION } from '@teach/contracts';
-import { databaseReady, databaseReadyAt, prisma } from '@teach/db';
+import { databaseReady, databaseReadyAt, prisma, resolveAccessContext } from '@teach/db';
 import { AccessDeniedError, authorizeWorkspace } from '@teach/domain';
 import { AuthService } from './auth.js';
 
 @Injectable()
 export class WorkspaceService {
   async context(principal: ReturnType<AuthService['authenticate']>, organizationId: string) {
-    const membership = await prisma.membership.findUnique({
+    const context = await resolveAccessContext(principal, organizationId);
+    const membership = await prisma.membership.findUniqueOrThrow({
       where: { userId_organizationId: { userId: principal.userId, organizationId } },
-      include: { user: true, organization: true },
+      include: { organization: true },
     });
-    if (!membership || membership.organization.status !== 'ACTIVE') throw new AccessDeniedError();
-    authorizeWorkspace(
-      {
-        principal,
-        organizationId: membership.organizationId,
-        userStatus: membership.user.status,
-        membershipStatus: membership.status,
-        role: membership.role,
-        organizationStatus: membership.organization.status,
-        workspaceType: membership.organization.workspaceType,
-      },
-      membership.organizationId,
-      'READ_WORKSPACE_CONTEXT',
-    );
+    authorizeWorkspace(context, membership.organizationId, 'READ_WORKSPACE_CONTEXT');
     return {
       version: CONTRACT_VERSION,
       principal,

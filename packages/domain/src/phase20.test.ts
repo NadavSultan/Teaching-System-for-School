@@ -122,4 +122,54 @@ describe('Phase 20 domain invariants', () => {
     expect(canTransitionCurriculumLifecycle('PUBLISHED', 'DRAFT')).toBe(false);
     expect(canTransitionCurriculumLifecycle('DEPRECATED', 'PUBLISHED')).toBe(false);
   });
+
+  it('enforces the aggregate hierarchy-size boundary', () => {
+    const nodes = Array.from({ length: 10_001 }, (_, index) => ({
+      type: 'GRADE' as const,
+      code: `G${index}`,
+      sortOrder: index,
+    }));
+    expect(validateCurriculumHierarchy(nodes)).toContain('nodes: hierarchy exceeds 10000 nodes');
+  });
+
+  it('makes depth greater than five and cycles impossible after terminal SKILL', () => {
+    const errors = validateCurriculumHierarchy([
+      {
+        type: 'GRADE',
+        code: 'G',
+        sortOrder: 0,
+        children: [
+          {
+            type: 'DOMAIN',
+            code: 'D',
+            sortOrder: 0,
+            children: [
+              {
+                type: 'TOPIC',
+                code: 'T',
+                sortOrder: 0,
+                children: [
+                  {
+                    type: 'SUBTOPIC',
+                    code: 'S',
+                    sortOrder: 0,
+                    children: [
+                      {
+                        type: 'SKILL',
+                        code: 'K',
+                        sortOrder: 0,
+                        difficulties: ['LOW'],
+                        children: [{ type: 'GRADE', code: 'CYCLE', sortOrder: 0 }],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+    expect(errors.some((error) => error.includes('SKILL cannot have children'))).toBe(true);
+  });
 });

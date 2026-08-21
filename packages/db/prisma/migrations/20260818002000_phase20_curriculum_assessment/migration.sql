@@ -120,20 +120,29 @@ CREATE UNIQUE INDEX "curriculum_root_code_unique" ON "curriculum_nodes"("version
 CREATE UNIQUE INDEX "curriculum_root_order_unique" ON "curriculum_nodes"("version_id", "sort_order") WHERE "parent_id" IS NULL;
 
 CREATE OR REPLACE FUNCTION phase20_revision_reference_guard() RETURNS trigger AS $$
-DECLARE revision_version UUID; revision_state "AssessmentRevisionState"; node_version UUID; version_status "CurriculumVersionStatus";
+DECLARE revision_version UUID; revision_state "AssessmentRevisionState"; old_revision_state "AssessmentRevisionState"; node_version UUID; version_status "CurriculumVersionStatus";
 BEGIN
   SELECT curriculum_version_id, state INTO revision_version, revision_state FROM assessment_revisions WHERE id=NEW.revision_id;
+  IF TG_OP='UPDATE' THEN
+    SELECT state INTO old_revision_state FROM assessment_revisions WHERE id=OLD.revision_id;
+    IF old_revision_state='FINALIZED' OR revision_state='FINALIZED' THEN RAISE EXCEPTION 'finalized revision content is immutable'; END IF;
+  END IF;
   SELECT n.version_id, v.status INTO node_version, version_status FROM curriculum_nodes n JOIN curriculum_versions v ON v.id=n.version_id WHERE n.id=NEW.curriculum_node_id;
   IF revision_state <> 'BUILDING' OR node_version <> revision_version OR version_status <> 'PUBLISHED' THEN RAISE EXCEPTION 'invalid assessment curriculum node reference'; END IF;
   RETURN NEW;
 END; $$ LANGUAGE plpgsql;
 CREATE TRIGGER "assessment_revision_node_reference_guard" BEFORE INSERT OR UPDATE ON "assessment_revision_node_links" FOR EACH ROW EXECUTE FUNCTION phase20_revision_reference_guard();
-CREATE OR REPLACE FUNCTION phase20_finalized_link_delete_guard() RETURNS trigger AS $$
+CREATE OR REPLACE FUNCTION phase20_finalized_link_guard() RETURNS trigger AS $$
 BEGIN
-  IF EXISTS (SELECT 1 FROM assessment_revisions WHERE id=OLD.revision_id AND state='FINALIZED') THEN RAISE EXCEPTION 'finalized revision content is immutable'; END IF;
-  RETURN OLD;
+  -- On UPDATE both relationships matter: otherwise a row can be moved out of
+  -- a historical revision before the NEW owner is checked.
+  IF EXISTS (SELECT 1 FROM assessment_revisions WHERE id=OLD.revision_id AND state='FINALIZED')
+     OR (TG_OP <> 'DELETE' AND EXISTS (SELECT 1 FROM assessment_revisions WHERE id=NEW.revision_id AND state='FINALIZED'))
+  THEN RAISE EXCEPTION 'finalized revision content is immutable'; END IF;
+  IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+  RETURN NEW;
 END; $$ LANGUAGE plpgsql;
-CREATE TRIGGER "finalized_link_immutable" BEFORE DELETE ON "assessment_revision_node_links" FOR EACH ROW EXECUTE FUNCTION phase20_finalized_link_delete_guard();
+CREATE TRIGGER "finalized_link_immutable" BEFORE UPDATE OR DELETE ON "assessment_revision_node_links" FOR EACH ROW EXECUTE FUNCTION phase20_finalized_link_guard();
 
 CREATE OR REPLACE FUNCTION phase20_finalized_revision_guard() RETURNS trigger AS $$
 BEGIN
@@ -143,35 +152,48 @@ END; $$ LANGUAGE plpgsql;
 CREATE TRIGGER "finalized_revision_immutable" BEFORE UPDATE OR DELETE ON "assessment_revisions" FOR EACH ROW EXECUTE FUNCTION phase20_finalized_revision_guard();
 
 CREATE OR REPLACE FUNCTION phase20_finalized_section_guard() RETURNS trigger AS $$
-DECLARE revision_id UUID;
 BEGIN
-  revision_id := CASE WHEN TG_OP='DELETE' THEN OLD.revision_id ELSE NEW.revision_id END;
-  IF EXISTS (SELECT 1 FROM assessment_revisions WHERE id=revision_id AND state='FINALIZED') THEN RAISE EXCEPTION 'finalized revision content is immutable'; END IF;
+  IF (TG_OP <> 'INSERT' AND EXISTS (SELECT 1 FROM assessment_revisions WHERE id=OLD.revision_id AND state='FINALIZED'))
+     OR (TG_OP <> 'DELETE' AND EXISTS (SELECT 1 FROM assessment_revisions WHERE id=NEW.revision_id AND state='FINALIZED'))
+  THEN RAISE EXCEPTION 'finalized revision content is immutable'; END IF;
   IF TG_OP='DELETE' THEN RETURN OLD; END IF;
   RETURN NEW;
 END; $$ LANGUAGE plpgsql;
 CREATE TRIGGER "finalized_section_immutable" BEFORE INSERT OR UPDATE OR DELETE ON "assessment_sections" FOR EACH ROW EXECUTE FUNCTION phase20_finalized_section_guard();
 
 CREATE OR REPLACE FUNCTION phase20_finalized_question_guard() RETURNS trigger AS $$
-DECLARE section_id UUID;
 BEGIN
-  section_id := CASE WHEN TG_OP='DELETE' THEN OLD.section_id ELSE NEW.section_id END;
-  IF EXISTS (SELECT 1 FROM assessment_sections s JOIN assessment_revisions r ON r.id=s.revision_id WHERE s.id=section_id AND r.state='FINALIZED') THEN RAISE EXCEPTION 'finalized revision content is immutable'; END IF;
+  IF (TG_OP <> 'INSERT' AND EXISTS (SELECT 1 FROM assessment_sections s JOIN assessment_revisions r ON r.id=s.revision_id WHERE s.id=OLD.section_id AND r.state='FINALIZED'))
+     OR (TG_OP <> 'DELETE' AND EXISTS (SELECT 1 FROM assessment_sections s JOIN assessment_revisions r ON r.id=s.revision_id WHERE s.id=NEW.section_id AND r.state='FINALIZED'))
+  THEN RAISE EXCEPTION 'finalized revision content is immutable'; END IF;
   IF TG_OP='DELETE' THEN RETURN OLD; END IF;
   RETURN NEW;
 END; $$ LANGUAGE plpgsql;
 CREATE TRIGGER "finalized_question_immutable" BEFORE INSERT OR UPDATE OR DELETE ON "assessment_questions" FOR EACH ROW EXECUTE FUNCTION phase20_finalized_question_guard();
 
-CREATE OR REPLACE FUNCTION phase20_finalized_descendant_guard() RETURNS trigger AS $$
-DECLARE resolved_question_id UUID; resolved_sub_question_id UUID;
+CREATE OR REPLACE FUNCTION phase20_question_owner_is_finalized(question_id UUID, sub_question_id UUID) RETURNS boolean AS $$
 BEGIN
-  IF TG_TABLE_NAME='assessment_sub_questions' THEN resolved_question_id := CASE WHEN TG_OP='DELETE' THEN OLD.question_id ELSE NEW.question_id END;
+  RETURN EXISTS (
+    SELECT 1 FROM assessment_questions q
+    JOIN assessment_sections s ON s.id=q.section_id
+    JOIN assessment_revisions r ON r.id=s.revision_id
+    WHERE q.id=COALESCE(question_id, (SELECT sq.question_id FROM assessment_sub_questions sq WHERE sq.id=sub_question_id))
+      AND r.state='FINALIZED'
+  );
+END; $$ LANGUAGE plpgsql STABLE;
+CREATE OR REPLACE FUNCTION phase20_finalized_descendant_guard() RETURNS trigger AS $$
+DECLARE old_question_id UUID; old_sub_question_id UUID; new_question_id UUID; new_sub_question_id UUID;
+BEGIN
+  IF TG_TABLE_NAME='assessment_sub_questions' THEN
+    IF TG_OP <> 'INSERT' THEN old_question_id := OLD.question_id; END IF;
+    IF TG_OP <> 'DELETE' THEN new_question_id := NEW.question_id; END IF;
   ELSE
-    resolved_question_id := CASE WHEN TG_OP='DELETE' THEN OLD.question_id ELSE NEW.question_id END;
-    resolved_sub_question_id := CASE WHEN TG_OP='DELETE' THEN OLD.sub_question_id ELSE NEW.sub_question_id END;
-    IF resolved_question_id IS NULL AND resolved_sub_question_id IS NOT NULL THEN SELECT sq.question_id INTO resolved_question_id FROM assessment_sub_questions sq WHERE sq.id=resolved_sub_question_id; END IF;
+    IF TG_OP <> 'INSERT' THEN old_question_id := OLD.question_id; old_sub_question_id := OLD.sub_question_id; END IF;
+    IF TG_OP <> 'DELETE' THEN new_question_id := NEW.question_id; new_sub_question_id := NEW.sub_question_id; END IF;
   END IF;
-  IF EXISTS (SELECT 1 FROM assessment_questions q JOIN assessment_sections s ON s.id=q.section_id JOIN assessment_revisions r ON r.id=s.revision_id WHERE q.id=resolved_question_id AND r.state='FINALIZED') THEN RAISE EXCEPTION 'finalized revision content is immutable'; END IF;
+  IF (TG_OP <> 'INSERT' AND phase20_question_owner_is_finalized(old_question_id, old_sub_question_id))
+     OR (TG_OP <> 'DELETE' AND phase20_question_owner_is_finalized(new_question_id, new_sub_question_id))
+  THEN RAISE EXCEPTION 'finalized revision content is immutable'; END IF;
   IF TG_OP='DELETE' THEN RETURN OLD; END IF;
   RETURN NEW;
 END; $$ LANGUAGE plpgsql;
@@ -189,12 +211,16 @@ BEGIN
   IF NEW.scoring_mode='NONE' THEN
     IF NEW.total_score_units IS NOT NULL OR EXISTS (SELECT 1 FROM assessment_sections s LEFT JOIN assessment_questions q ON q.section_id=s.id LEFT JOIN assessment_sub_questions sq ON sq.question_id=q.id LEFT JOIN rubric_criteria r ON r.question_id=q.id OR r.sub_question_id=sq.id WHERE s.revision_id=NEW.id AND (s.score_units IS NOT NULL OR q.score_units IS NOT NULL OR sq.score_units IS NOT NULL OR r.score_units IS NOT NULL)) THEN RAISE EXCEPTION 'NONE scoring requires null scores'; END IF;
   ELSE
+    IF EXISTS (SELECT 1 FROM assessment_sections s WHERE s.revision_id=NEW.id AND s.score_units IS NULL)
+      OR EXISTS (SELECT 1 FROM assessment_questions q JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=NEW.id AND q.score_units IS NULL)
+      OR EXISTS (SELECT 1 FROM assessment_sub_questions sq JOIN assessment_questions q ON q.id=sq.question_id JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=NEW.id AND sq.score_units IS NULL)
+    THEN RAISE EXCEPTION 'POINTS scoring requires complete aggregate scores'; END IF;
     SELECT COALESCE(SUM(score_units),-1) INTO section_total FROM assessment_sections WHERE revision_id=NEW.id;
     IF NEW.total_score_units IS NULL OR section_total <> NEW.total_score_units THEN RAISE EXCEPTION 'revision score total mismatch'; END IF;
-    IF EXISTS (SELECT 1 FROM assessment_sections s WHERE s.revision_id=NEW.id AND s.score_units <> (SELECT COALESCE(SUM(q.score_units),-1) FROM assessment_questions q WHERE q.section_id=s.id)) THEN RAISE EXCEPTION 'section score total mismatch'; END IF;
-    IF EXISTS (SELECT 1 FROM assessment_questions q WHERE EXISTS (SELECT 1 FROM assessment_sub_questions sq WHERE sq.question_id=q.id) AND q.score_units <> (SELECT COALESCE(SUM(sq.score_units),-1) FROM assessment_sub_questions sq WHERE sq.question_id=q.id)) THEN RAISE EXCEPTION 'question score total mismatch'; END IF;
-    IF EXISTS (SELECT 1 FROM assessment_questions q WHERE EXISTS (SELECT 1 FROM rubric_criteria r WHERE r.question_id=q.id AND r.score_units IS NOT NULL) AND (EXISTS (SELECT 1 FROM rubric_criteria r WHERE r.question_id=q.id AND r.score_units IS NULL) OR q.score_units <> (SELECT COALESCE(SUM(r.score_units),-1) FROM rubric_criteria r WHERE r.question_id=q.id))) THEN RAISE EXCEPTION 'question rubric score total mismatch'; END IF;
-    IF EXISTS (SELECT 1 FROM assessment_sub_questions sq WHERE EXISTS (SELECT 1 FROM rubric_criteria r WHERE r.sub_question_id=sq.id AND r.score_units IS NOT NULL) AND (EXISTS (SELECT 1 FROM rubric_criteria r WHERE r.sub_question_id=sq.id AND r.score_units IS NULL) OR sq.score_units <> (SELECT COALESCE(SUM(r.score_units),-1) FROM rubric_criteria r WHERE r.sub_question_id=sq.id))) THEN RAISE EXCEPTION 'subquestion rubric score total mismatch'; END IF;
+    IF EXISTS (SELECT 1 FROM assessment_sections s WHERE s.revision_id=NEW.id AND s.score_units IS DISTINCT FROM (SELECT COALESCE(SUM(q.score_units),-1) FROM assessment_questions q WHERE q.section_id=s.id)) THEN RAISE EXCEPTION 'section score total mismatch'; END IF;
+    IF EXISTS (SELECT 1 FROM assessment_questions q JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=NEW.id AND EXISTS (SELECT 1 FROM assessment_sub_questions sq WHERE sq.question_id=q.id) AND q.score_units IS DISTINCT FROM (SELECT COALESCE(SUM(sq.score_units),-1) FROM assessment_sub_questions sq WHERE sq.question_id=q.id)) THEN RAISE EXCEPTION 'question score total mismatch'; END IF;
+    IF EXISTS (SELECT 1 FROM assessment_questions q JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=NEW.id AND EXISTS (SELECT 1 FROM rubric_criteria r WHERE r.question_id=q.id AND r.score_units IS NOT NULL) AND (EXISTS (SELECT 1 FROM rubric_criteria r WHERE r.question_id=q.id AND r.score_units IS NULL) OR q.score_units IS DISTINCT FROM (SELECT COALESCE(SUM(r.score_units),-1) FROM rubric_criteria r WHERE r.question_id=q.id))) THEN RAISE EXCEPTION 'question rubric score total mismatch'; END IF;
+    IF EXISTS (SELECT 1 FROM assessment_sub_questions sq JOIN assessment_questions q ON q.id=sq.question_id JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=NEW.id AND EXISTS (SELECT 1 FROM rubric_criteria r WHERE r.sub_question_id=sq.id AND r.score_units IS NOT NULL) AND (EXISTS (SELECT 1 FROM rubric_criteria r WHERE r.sub_question_id=sq.id AND r.score_units IS NULL) OR sq.score_units IS DISTINCT FROM (SELECT COALESCE(SUM(r.score_units),-1) FROM rubric_criteria r WHERE r.sub_question_id=sq.id))) THEN RAISE EXCEPTION 'subquestion rubric score total mismatch'; END IF;
   END IF;
   RETURN NEW;
 END; $$ LANGUAGE plpgsql;

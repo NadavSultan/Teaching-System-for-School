@@ -54,6 +54,7 @@ try {
   await pg.start();
   await pg.createDatabase('teaching_test');
   await pg.createDatabase('teaching_clean');
+  await pg.createDatabase('teaching_shadow');
   const client = pg.getPgClient();
   await client.connect();
   const version = await client.query('SHOW server_version');
@@ -63,6 +64,25 @@ try {
   await run(['test-integration'], 'teaching_test');
   await run(['db:migrate:deploy'], 'teaching_clean');
   console.log('CLEAN_DATABASE_MIGRATIONS=PASS');
+  await run(
+    [
+      '--filter',
+      '@teach/db',
+      'exec',
+      'prisma',
+      'migrate',
+      'diff',
+      '--from-migrations',
+      'prisma/migrations',
+      '--to-schema-datasource',
+      'prisma/schema.prisma',
+      '--shadow-database-url',
+      'postgresql://phase10:phase10_local_only@127.0.0.1:55432/teaching_shadow?schema=public',
+      '--exit-code',
+    ],
+    'teaching_clean',
+  );
+  console.log('MIGRATION_DRIFT=PASS');
 } finally {
   if (process.platform === 'win32' && pg.process?.pid) {
     spawnSync('taskkill', ['/pid', String(pg.process.pid), '/f', '/t'], { stdio: 'ignore' });
