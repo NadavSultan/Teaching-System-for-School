@@ -364,7 +364,6 @@ export const generationRunStateSchema = z.enum([
 ]);
 export const generationFailureCodeSchema = z.enum([
   'CONTEXT_EMPTY',
-  'CONTEXT_INVALIDATED',
   'TIMEOUT',
   'RATE_LIMITED',
   'TRANSIENT_EXHAUSTED',
@@ -523,6 +522,10 @@ export const generationContextItemSchema = z
     text: z.string().min(1).max(30000),
     characterCount: z.number().int().positive().max(30000),
     estimatedTokens: z.number().int().positive().max(10000),
+    lineage: z
+      .array(z.object({ curriculumVersionId: uuidSchema, curriculumNodeId: uuidSchema }).strict())
+      .min(1)
+      .max(100),
   })
   .strict();
 export const generationContextProvenanceSchema = generationContextItemSchema.omit({ text: true });

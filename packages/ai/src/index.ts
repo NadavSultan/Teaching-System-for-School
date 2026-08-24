@@ -6,6 +6,7 @@ export type GatewayOutcome =
   | 'malformed'
   | 'schema-violation'
   | 'timeout'
+  | 'hang'
   | 'rate-limit'
   | 'transient'
   | 'permanent'
@@ -35,7 +36,7 @@ export type ModelRequest = {
 };
 
 export type ModelResponse = {
-  provider: 'fake';
+  provider: string;
   model: string;
   requestId: string;
   output: unknown;
@@ -109,6 +110,16 @@ export function liveEvaluationPreflight(): { enabled: false; reason: string } {
     enabled: false,
     reason: 'LIVE_PROVIDER_EVALUATION_REQUIRES_OWNER_APPROVAL_AND_SEPARATE_ADAPTER',
   };
+}
+
+export function resolveConfiguredGenerationGateway(): ModelGateway | null {
+  if (
+    process.env.PHASE40_GATEWAY === 'fake' &&
+    ['test', 'development'].includes(process.env.NODE_ENV ?? '')
+  ) {
+    return new DeterministicFakeModelGateway();
+  }
+  return null;
 }
 
 function contextIds(input: Readonly<Record<string, unknown>>): string[] {
@@ -190,6 +201,19 @@ export class DeterministicFakeModelGateway implements ModelGateway {
   async execute(request: ModelRequest): Promise<ModelResponse> {
     const outcome = this.outcomes.get(request.operationId) ?? 'valid-draft';
     if (outcome === 'timeout') throw new GatewayFailure('TIMEOUT');
+    if (outcome === 'hang') {
+      await new Promise<never>((_, reject) => {
+        const timer = setTimeout(() => reject(new GatewayFailure('TIMEOUT')), 60_000);
+        request.signal?.addEventListener(
+          'abort',
+          () => {
+            clearTimeout(timer);
+            reject(new GatewayFailure('TIMEOUT'));
+          },
+          { once: true },
+        );
+      });
+    }
     if (outcome === 'rate-limit') throw new GatewayFailure('RATE_LIMITED');
     if (outcome === 'transient') throw new GatewayFailure('TRANSIENT');
     if (outcome === 'permanent') throw new GatewayFailure('PERMANENT');
@@ -211,7 +235,7 @@ export class DeterministicFakeModelGateway implements ModelGateway {
       finishReason: outcome === 'over-budget' ? 'length' : 'stop',
     };
     return {
-      provider: 'fake',
+      provider: modelConfiguration.provider,
       model: modelConfiguration.model,
       requestId: `fake:${request.operationId}`,
       output,

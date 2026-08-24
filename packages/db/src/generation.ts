@@ -18,7 +18,7 @@ import {
   getGenerationModelConfiguration,
   getGenerationPromptTemplate,
   type ModelGateway,
-  DeterministicFakeModelGateway,
+  resolveConfiguredGenerationGateway,
 } from '@teach/ai';
 import { AccessDeniedError, authorizeWorkspace, type AccessContext } from '@teach/domain';
 import {
@@ -42,6 +42,7 @@ type ContextRow = {
   textHash: string;
   curriculumVersionId: string;
   curriculumNodeId: string;
+  lineage: Array<{ curriculumVersionId: string; curriculumNodeId: string }>;
   rank: number;
   score: number;
   text: string;
@@ -353,6 +354,14 @@ export async function getGenerationResult(
       score: item.score,
       characterCount: item.characterCount,
       estimatedTokens: item.estimatedTokens,
+      lineage: Array.isArray(item.lineage)
+        ? item.lineage
+        : [
+            {
+              curriculumVersionId: item.curriculumVersionId,
+              curriculumNodeId: item.curriculumNodeId,
+            },
+          ],
     }),
   );
   return generationResultSchema.parse({
@@ -392,16 +401,48 @@ export async function selectGenerationContext(
      ORDER BY score DESC, ki.id ASC, link.curriculum_version_id ASC, link.curriculum_node_id ASC
      LIMIT 100`;
   const byItem = new Map<string, ContextRow>();
-  for (const row of rows)
-    if (!byItem.has(row.knowledgeItemId)) byItem.set(row.knowledgeItemId, row);
+  for (const row of rows) {
+    const existing = byItem.get(row.knowledgeItemId);
+    if (existing) {
+      existing.lineage.push({
+        curriculumVersionId: row.curriculumVersionId,
+        curriculumNodeId: row.curriculumNodeId,
+      });
+    } else {
+      byItem.set(row.knowledgeItemId, {
+        ...row,
+        lineage: [
+          { curriculumVersionId: row.curriculumVersionId, curriculumNodeId: row.curriculumNodeId },
+        ],
+      });
+    }
+  }
   return [...byItem.values()]
-    .slice(0, getGenerationModelConfiguration().maxContextItems)
+    .sort((a, b) => a.rank - b.rank || a.knowledgeItemId.localeCompare(b.knowledgeItemId))
+    .reduce<ContextRow[]>((selected, row) => {
+      const model = getGenerationModelConfiguration();
+      const chars = selected.reduce((sum, item) => sum + item.text.length, 0);
+      const tokens = selected.reduce(
+        (sum, item) => sum + Math.max(1, Math.ceil(item.text.length / 4)),
+        0,
+      );
+      if (
+        selected.length < model.maxContextItems &&
+        row.text.length <= model.maxContextChars &&
+        Math.max(1, Math.ceil(row.text.length / 4)) <= model.maxContextTokens &&
+        chars + row.text.length <= model.maxContextChars &&
+        tokens + Math.max(1, Math.ceil(row.text.length / 4)) <= model.maxContextTokens
+      )
+        selected.push(row);
+      return selected;
+    }, [])
     .map((row, index) =>
       generationContextItemSchema.parse({
         ...row,
         rank: index + 1,
         characterCount: row.text.length,
         estimatedTokens: Math.max(1, Math.ceil(row.text.length / 4)),
+        lineage: row.lineage,
       }),
     );
 }
@@ -409,11 +450,12 @@ export async function selectGenerationContext(
 async function contextStillEligible(
   runId: string,
   items: Array<{ knowledgeItemId: string }>,
-  client: PrismaClient,
+  client: PrismaClient | GenerationTx,
 ) {
   if (!items.length) return false;
   const run = await client.generationRun.findUniqueOrThrow({ where: { id: runId } });
   const specification = frozenGenerationSpecificationSchema.parse(run.frozenSpecification);
+  await client.$queryRaw`SELECT source_version_id FROM knowledge_items WHERE id = ANY(${items.map((item) => item.knowledgeItemId)}::uuid[]) FOR UPDATE`;
   const rows = await client.$queryRaw<Array<{ id: string }>>`
     SELECT ki.id FROM knowledge_items ki
     JOIN source_versions sv ON sv.id = ki.source_version_id
@@ -425,7 +467,7 @@ async function contextStillEligible(
       AND ki.status = 'ACTIVE' AND lifecycle.to_status = 'ACTIVE' AND review.decision = 'APPROVED'
       AND permission.decision = 'ALLOWED' AND (permission.valid_until IS NULL OR permission.valid_until > NOW())
       AND (ks.visibility = 'PLATFORM_SHARED' OR ks.organization_id = ${run.organizationId}::uuid)
-      AND sv.id IN (SELECT source_version_id FROM knowledge_item_curriculum_node_links WHERE curriculum_version_id = ${specification.curriculumVersionId}::uuid AND curriculum_node_id = ANY(${specification.curriculumNodeIds}::uuid[]))`;
+      AND EXISTS (SELECT 1 FROM knowledge_item_curriculum_node_links l WHERE l.knowledge_item_id = ki.id AND l.curriculum_version_id = ${specification.curriculumVersionId}::uuid AND l.curriculum_node_id = ANY(${specification.curriculumNodeIds}::uuid[]))`;
   return (
     new Set(rows.map((row) => row.id)).size ===
     new Set(items.map((item) => item.knowledgeItemId)).size
@@ -609,10 +651,11 @@ async function persistRevision(
           where: { id: itemId },
           include: { sourceVersion: true, curriculumLinks: true },
         });
-        const lineage =
-          item.curriculumLinks.find(
-            (link) => link.curriculumVersionId === run.curriculumVersionId,
-          ) ?? item.curriculumLinks[0];
+        const lineage = item.curriculumLinks.find(
+          (link) =>
+            link.curriculumVersionId === run.curriculumVersionId &&
+            parsed.curriculumNodeIds.includes(link.curriculumNodeId),
+        );
         if (!lineage) throw new Error('OUTPUT_INVALID');
         await tx.questionSourceLink.create({
           data: {
@@ -804,6 +847,7 @@ async function persistRegeneratedRevision(
         curriculumVersionId: link.curriculumVersionId,
         curriculumNodeId: link.curriculumNodeId,
         lineage: 'CARRIED_FORWARD',
+        priorQuestionId: link.assessmentQuestionId,
       },
     });
   }
@@ -849,8 +893,9 @@ function safeCode(error: unknown): string {
 export async function processGenerationRun(
   runId: string,
   client: PrismaClient = prisma,
-  gateway: ModelGateway = new DeterministicFakeModelGateway(),
+  gateway?: ModelGateway,
 ) {
+  const configuredGateway = gateway ?? resolveConfiguredGenerationGateway();
   const locked = await client.$transaction(async (tx) => {
     const lockedRows = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT id FROM generation_runs WHERE id = ${runId}::uuid FOR UPDATE
@@ -858,14 +903,32 @@ export async function processGenerationRun(
     if (!lockedRows[0]) return null;
     const run = await tx.generationRun.findUnique({ where: { id: runId } });
     if (!run || ['SUCCEEDED', 'INSUFFICIENT_CONTEXT', 'FAILED'].includes(run.state)) return run;
-    if (run.state !== 'PENDING') return null;
+    if (run.state === 'PROCESSING' && run.leaseExpiresAt && run.leaseExpiresAt > new Date())
+      throw new Error('GENERATION_LEASE_ACTIVE');
     return tx.generationRun.update({
       where: { id: runId },
-      data: { state: 'PROCESSING', attempts: { increment: 1 } },
+      data: {
+        state: 'PROCESSING',
+        attempts: { increment: 1 },
+        processingStartedAt: new Date(),
+        leaseExpiresAt: new Date(Date.now() + 5_000),
+      },
     });
   });
   if (!locked) return locked ? mapRun(locked) : null;
   if (['SUCCEEDED', 'INSUFFICIENT_CONTEXT', 'FAILED'].includes(locked.state)) return mapRun(locked);
+  if (!configuredGateway) {
+    const failed = await client.generationRun.update({
+      where: { id: runId },
+      data: {
+        state: 'FAILED',
+        failureCode: 'CONFIGURATION_ERROR',
+        processedAt: new Date(),
+        leaseExpiresAt: null,
+      },
+    });
+    return mapRun(failed);
+  }
   const selected = await selectGenerationContext(runId, client);
   const totalChars = selected.reduce((sum, item) => sum + item.characterCount, 0);
   const totalTokens = selected.reduce((sum, item) => sum + item.estimatedTokens, 0);
@@ -880,14 +943,15 @@ export async function processGenerationRun(
         state: 'INSUFFICIENT_CONTEXT',
         failureCode: 'CONTEXT_EMPTY',
         processedAt: new Date(),
+        leaseExpiresAt: null,
       },
     });
     return mapRun(failed);
   }
   await client.generationContextItem.createMany({
-    data: selected.map((item) => ({
+    data: selected.map((item, index) => ({
       generationRunId: runId,
-      selectedOrder: item.rank - 1,
+      selectedOrder: index,
       knowledgeItemId: item.knowledgeItemId,
       sourceVersionId: item.sourceVersionId,
       locator: item.locator,
@@ -898,6 +962,7 @@ export async function processGenerationRun(
       score: item.score,
       characterCount: item.characterCount,
       estimatedTokens: item.estimatedTokens,
+      lineage: item.lineage,
     })),
   });
   let attempt = locked.attempts;
@@ -908,18 +973,35 @@ export async function processGenerationRun(
   while (attempt <= MAX_ATTEMPTS) {
     const operationId = `${runId}:${attempt}`;
     try {
-      const response = await gateway.execute({
-        operationId,
-        idempotencyKey: operationId,
-        operation: specification.operation,
-        promptTemplateVersion: prompt.version,
-        promptTemplateHash: prompt.hash,
-        modelConfigurationVersion: model.version,
-        modelConfigurationHash: model.hash,
-        responseSchemaVersion: '1.0.0',
-        responseSchemaHash: RESPONSE_SCHEMA_HASH,
-        input: { specification, context: selected },
-      });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), model.timeoutMs);
+      let response;
+      try {
+        response = await Promise.race([
+          configuredGateway.execute({
+            operationId,
+            idempotencyKey: operationId,
+            operation: specification.operation,
+            promptTemplateVersion: prompt.version,
+            promptTemplateHash: prompt.hash,
+            modelConfigurationVersion: model.version,
+            modelConfigurationHash: model.hash,
+            responseSchemaVersion: '1.0.0',
+            responseSchemaHash: RESPONSE_SCHEMA_HASH,
+            input: { specification, context: selected },
+            signal: controller.signal,
+          }),
+          new Promise<never>((_, reject) =>
+            controller.signal.addEventListener(
+              'abort',
+              () => reject(new GatewayFailure('TIMEOUT')),
+              { once: true },
+            ),
+          ),
+        ]);
+      } finally {
+        clearTimeout(timeout);
+      }
       await client.generationUsage.create({
         data: {
           generationRunId: runId,
@@ -951,41 +1033,66 @@ export async function processGenerationRun(
           ),
         );
         const revisionInput = buildDraftRevisionInput(run, output);
-        if (!(await contextStillEligible(runId, selected, client)))
-          throw new Error('CONTEXT_INVALIDATED');
-        revisionId = await client.$transaction(async (tx) =>
-          persistRevision(tx, run, revisionInput, linksByQuestion),
-        );
+        const succeeded = await client.$transaction(async (tx) => {
+          if (!(await contextStillEligible(runId, selected, tx)))
+            throw new Error('CONTEXT_INVALIDATED');
+          revisionId = await persistRevision(tx, run, revisionInput, linksByQuestion);
+          const result = await tx.generationRun.update({
+            where: { id: runId },
+            data: {
+              state: 'SUCCEEDED',
+              outputRevisionId: revisionId,
+              provider: response.provider,
+              model: response.model,
+              processedAt: new Date(),
+              leaseExpiresAt: null,
+            },
+          });
+          await tx.auditEvent.create({
+            data: {
+              actorUserId: run.requestingUserId,
+              organizationId: run.organizationId,
+              eventType: 'generation.succeeded',
+              targetType: 'generation_run',
+              targetId: runId,
+              metadata: { attempt, outputRevisionId: revisionId, contextCount: selected.length },
+            },
+          });
+          return result;
+        });
+        return mapRun(succeeded);
       } else {
         const output = generatedQuestionOutputSchema.parse(response.output);
         if (output.citations.some((id) => !selectedIds.has(id))) throw new Error('OUTPUT_INVALID');
-        if (!(await contextStillEligible(runId, selected, client)))
-          throw new Error('CONTEXT_INVALIDATED');
-        revisionId = await client.$transaction(async (tx) =>
-          persistRegeneratedRevision(tx, run, output, selectedIds),
-        );
+        const succeeded = await client.$transaction(async (tx) => {
+          if (!(await contextStillEligible(runId, selected, tx)))
+            throw new Error('CONTEXT_INVALIDATED');
+          revisionId = await persistRegeneratedRevision(tx, run, output, selectedIds);
+          const result = await tx.generationRun.update({
+            where: { id: runId },
+            data: {
+              state: 'SUCCEEDED',
+              outputRevisionId: revisionId,
+              provider: response.provider,
+              model: response.model,
+              processedAt: new Date(),
+              leaseExpiresAt: null,
+            },
+          });
+          await tx.auditEvent.create({
+            data: {
+              actorUserId: run.requestingUserId,
+              organizationId: run.organizationId,
+              eventType: 'generation.succeeded',
+              targetType: 'generation_run',
+              targetId: runId,
+              metadata: { attempt, outputRevisionId: revisionId, contextCount: selected.length },
+            },
+          });
+          return result;
+        });
+        return mapRun(succeeded);
       }
-      const succeeded = await client.generationRun.update({
-        where: { id: runId },
-        data: {
-          state: 'SUCCEEDED',
-          outputRevisionId: revisionId,
-          provider: response.provider,
-          model: response.model,
-          processedAt: new Date(),
-        },
-      });
-      await client.auditEvent.create({
-        data: {
-          actorUserId: run.requestingUserId,
-          organizationId: run.organizationId,
-          eventType: 'generation.succeeded',
-          targetType: 'generation_run',
-          targetId: runId,
-          metadata: { attempt, outputRevisionId: revisionId, contextCount: selected.length },
-        },
-      });
-      return mapRun(succeeded);
     } catch (error) {
       const code = safeCode(error);
       if (
@@ -995,10 +1102,17 @@ export async function processGenerationRun(
         attempt += 1;
         await client.generationRun.update({
           where: { id: runId },
-          data: { state: 'PENDING', attempts: attempt },
+          data: { state: 'PENDING', attempts: attempt, leaseExpiresAt: null },
         });
         await client.$transaction(async (tx) =>
-          tx.generationRun.update({ where: { id: runId }, data: { state: 'PROCESSING' } }),
+          tx.generationRun.update({
+            where: { id: runId },
+            data: {
+              state: 'PROCESSING',
+              processingStartedAt: new Date(),
+              leaseExpiresAt: new Date(Date.now() + 5_000),
+            },
+          }),
         );
         continue;
       }
@@ -1008,6 +1122,7 @@ export async function processGenerationRun(
           state: code === 'CONTEXT_INVALIDATED' ? 'INSUFFICIENT_CONTEXT' : 'FAILED',
           failureCode: code === 'BUDGET_EXCEEDED' ? 'BUDGET_EXCEEDED' : code,
           processedAt: new Date(),
+          leaseExpiresAt: null,
         },
       });
       return mapRun(terminal);

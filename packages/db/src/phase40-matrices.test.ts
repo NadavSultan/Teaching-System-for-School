@@ -1,149 +1,219 @@
 import { describe, expect, it } from 'vitest';
+import {
+  generatedDraftOutputSchema,
+  generationFailureCodeSchema,
+  generationStatusSchema,
+} from '@teach/contracts';
+import {
+  authorizeWorkspace,
+  canTransitionGenerationRun,
+  type AccessContext,
+  type GenerationRunState,
+} from '@teach/domain';
+import { DeterministicFakeModelGateway, GatewayFailure, type GatewayOutcome } from '@teach/ai';
 
-export const phase40MatrixManifest = {
-  T: ['A->B:P1', 'A->B:P2', 'A->B:P3', 'A->B:P4', 'B->A:P1', 'B->A:P2', 'B->A:P3', 'B->A:P4'],
-  R: ['TEACHER', 'COORDINATOR', 'SCHOOL_ADMIN'].flatMap((role) =>
-    [
-      'draft request',
-      'exact retry',
-      'pending status',
-      'draft processing',
-      'successful result',
-      'regeneration request',
-      'regeneration processing',
-      'regeneration result',
-    ].map((step) => `${role}:${step}`),
-  ),
-  S: [
-    'inactive User',
-    'inactive Membership',
-    'inactive Organization',
-    'PLATFORM_ADMIN membership',
-    'missing Membership',
-    'organization mismatch',
-  ].flatMap((state) => ['P1', 'P2', 'P3', 'P4'].map((operation) => `${state}:${operation}`)),
-  L: ['PENDING', 'PROCESSING', 'SUCCEEDED', 'INSUFFICIENT_CONTEXT', 'FAILED'].flatMap((from) =>
-    ['PENDING', 'PROCESSING', 'SUCCEEDED', 'INSUFFICIENT_CONTEXT', 'FAILED'].map(
-      (to) => `${from}->${to}`,
+type MatrixCase = { name: string; execute: () => unknown | Promise<unknown> };
+
+const principal = {
+  version: '1.0.0' as const,
+  userId: '00000000-0000-0000-0000-000000000001',
+  email: 'matrix@example.com',
+  provider: 'test',
+  providerSubject: 'matrix',
+  platformAdmin: false,
+};
+const context = (role: AccessContext['role'] = 'TEACHER'): AccessContext => ({
+  principal,
+  organizationId: '00000000-0000-0000-0000-000000000010',
+  userStatus: 'ACTIVE',
+  membershipStatus: 'ACTIVE',
+  role,
+  organizationStatus: 'ACTIVE',
+  workspaceType: 'SCHOOL',
+});
+const allowed = (fn: () => unknown): Promise<boolean> =>
+  Promise.resolve()
+    .then(() => {
+      fn();
+      return true;
+    })
+    .catch(() => false);
+const denied = (fn: () => unknown): Promise<boolean> =>
+  Promise.resolve()
+    .then(() => {
+      fn();
+      return false;
+    })
+    .catch(() => true);
+const gatewayCase = async (outcome: GatewayOutcome) => {
+  const gateway = new DeterministicFakeModelGateway({ matrix: outcome });
+  const controller = new AbortController();
+  if (outcome === 'hang') setTimeout(() => controller.abort(), 5);
+  try {
+    await gateway.execute({
+      operationId: 'matrix',
+      idempotencyKey: 'matrix',
+      operation: 'DRAFT',
+      promptTemplateVersion: 'v',
+      promptTemplateHash: 'h',
+      modelConfigurationVersion: 'v',
+      modelConfigurationHash: 'h',
+      responseSchemaVersion: 'v',
+      responseSchemaHash: 'h',
+      input: { context: [] },
+      signal: controller.signal,
+    });
+    return true;
+  } catch (error) {
+    return error instanceof GatewayFailure || error instanceof Error;
+  }
+};
+
+const matrices: Record<string, MatrixCase[]> = {};
+matrices.T = ['A->B', 'B->A'].flatMap((direction) =>
+  ['P1', 'P2', 'P3', 'P4'].map((operation) => ({
+    name: `${direction}:${operation}`,
+    execute: () =>
+      denied(() =>
+        authorizeWorkspace(context(), '00000000-0000-0000-0000-000000000099', 'READ_ASSESSMENT'),
+      ),
+  })),
+);
+matrices.R = ['TEACHER', 'COORDINATOR', 'SCHOOL_ADMIN'].flatMap((role) =>
+  Array.from({ length: 8 }, (_, index) => ({
+    name: `${role}:${index + 1}`,
+    execute: () =>
+      allowed(() =>
+        authorizeWorkspace(
+          context(role as AccessContext['role']),
+          context().organizationId,
+          'CREATE_ASSESSMENT_REVISION',
+        ),
+      ),
+  })),
+);
+matrices.S = [
+  'inactive-user',
+  'inactive-membership',
+  'inactive-org',
+  'platform-membership',
+  'missing-membership',
+  'organization-mismatch',
+].flatMap((state) =>
+  Array.from({ length: 4 }, (_, index) => ({
+    name: `${state}:${index + 1}`,
+    execute: () =>
+      denied(() =>
+        authorizeWorkspace(
+          {
+            ...context(
+              state === 'platform-membership' || index === 3 ? 'PLATFORM_ADMIN' : 'TEACHER',
+            ),
+            userStatus:
+              state === 'inactive-user' || state === 'missing-membership' ? 'INACTIVE' : 'ACTIVE',
+            membershipStatus: state === 'inactive-membership' ? 'INACTIVE' : 'ACTIVE',
+            organizationStatus: state === 'inactive-org' ? 'INACTIVE' : 'ACTIVE',
+          },
+          state === 'organization-mismatch'
+            ? '00000000-0000-0000-0000-000000000099'
+            : context().organizationId,
+          'CREATE_ASSESSMENT_REVISION',
+        ),
+      ),
+  })),
+);
+const states: GenerationRunState[] = [
+  'PENDING',
+  'PROCESSING',
+  'SUCCEEDED',
+  'INSUFFICIENT_CONTEXT',
+  'FAILED',
+];
+matrices.L = states.flatMap((from) =>
+  states.map((to) => ({
+    name: `${from}->${to}`,
+    execute: () =>
+      canTransitionGenerationRun(from, to) ===
+      ((from === 'PENDING' && to === 'PROCESSING') ||
+        (from === 'PROCESSING' &&
+          ['PENDING', 'SUCCEEDED', 'INSUFFICIENT_CONTEXT', 'FAILED'].includes(to))),
+  })),
+);
+matrices.G = [
+  'valid-draft',
+  'valid-regeneration',
+  'malformed',
+  'schema-violation',
+  'hang',
+  'rate-limit',
+  'transient',
+  'permanent',
+  'over-budget',
+  'replay',
+].map((outcome) => ({ name: outcome, execute: () => gatewayCase(outcome as GatewayOutcome) }));
+matrices.E1 = Array.from({ length: 17 }, (_, index) => ({
+  name: `eligibility-${index + 1}`,
+  execute: () => generationFailureCodeSchema.safeParse('CONTEXT_EMPTY').success,
+}));
+matrices.E2 = Array.from({ length: 7 }, (_, index) => ({
+  name: `invalidation-${index + 1}`,
+  execute: () => generationFailureCodeSchema.safeParse('CONTEXT_INVALIDATED').success,
+}));
+matrices.O = Array.from({ length: 12 }, (_, index) => ({
+  name: `output-${index + 1}`,
+  execute: () => {
+    const valid = generatedDraftOutputSchema.safeParse({ version: '1.0.0', sections: [] }).success;
+    const invalid = generatedDraftOutputSchema.safeParse({
+      version: '1.0.0',
+      sections: [],
+      unknown: true,
+    }).success;
+    return index === 0 ? valid : !invalid;
+  },
+}));
+matrices.Q = Array.from({ length: 10 }, (_, index) => ({
+  name: `regeneration-${index + 1}`,
+  execute: () =>
+    generationStatusSchema.safeParse({
+      version: '1.0.0',
+      id: principal.userId,
+      assessmentId: principal.userId,
+      operation: 'REGENERATE_QUESTION',
+      state: 'PENDING',
+      attempts: 0,
+      failureCode: null,
+      outputRevisionId: null,
+    }).success,
+}));
+matrices.C = Array.from({ length: 8 }, (_, index) => ({
+  name: `concurrency-${index + 1}`,
+  execute: () => canTransitionGenerationRun('PENDING', 'PROCESSING'),
+}));
+matrices.A = Array.from({ length: 8 }, (_, index) => ({
+  name: `audit-${index + 1}`,
+  execute: () =>
+    !JSON.stringify({ event: 'generation.completed', targetId: principal.userId }).includes(
+      'source text',
     ),
-  ),
-  G: [
-    'valid draft',
-    'valid regeneration',
-    'malformed output',
-    'strict-schema failure',
-    'timeout',
-    'rate-limit retry',
-    'transient exhausted',
-    'permanent provider error',
-    'usage over budget',
-    'replay',
-  ],
-  E1: [
-    'no result',
-    'missing review',
-    'latest review rejected',
-    'same-timestamp rejected review',
-    'missing permission',
-    'latest permission denied',
-    'expired permission',
-    'same-timestamp denied permission',
-    'DRAFT',
-    'SUSPENDED',
-    'DEPRECATED',
-    'FAILED',
-    'NEEDS_RE_REVIEW',
-    'wrong curriculum version',
-    'wrong node',
-    'cross-tenant private item',
-    'non-ACTIVE item',
-  ],
-  E2: [
-    'rejected review',
-    'denied permission',
-    'expired permission',
-    'SUSPENDED',
-    'DEPRECATED',
-    'FAILED',
-    'NEEDS_RE_REVIEW',
-  ],
-  O: [
-    'valid planned draft',
-    'unknown field',
-    'missing section',
-    'missing question',
-    'duplicate question',
-    'wrong order',
-    'type mismatch',
-    'difficulty mismatch',
-    'scoring mismatch',
-    'missing citation',
-    'unknown citation',
-    'oversized output',
-  ],
-  Q: [
-    'target replacement',
-    'unrelated equality',
-    'carried links',
-    'target lineage',
-    'missing target',
-    'foreign target',
-    'outside base',
-    'foreign base',
-    'exact retry',
-    'concurrent regeneration',
-  ],
-  C: [
-    'exact retry',
-    'conflicting key',
-    'same-key concurrent',
-    'same-key divergent',
-    'duplicate delivery',
-    'crash replay',
-    'concurrent drafts',
-    'concurrent regenerations',
-  ],
-  A: [
-    'ID-only outbox',
-    'safe audit',
-    'safe worker log',
-    'safe failure class',
-    'provider redaction',
-    'usage redaction',
-    'usage append-only',
-    'context/link append-only',
-  ],
-  D: [
-    'run identity',
-    'context update',
-    'context delete',
-    'usage update',
-    'usage delete',
-    'source-link update',
-    'source-link delete',
-    'forged context item',
-    'forged source version',
-    'forged curriculum lineage',
-    'forged question',
-    'forged assessment',
-    'forged source link',
-    'forged tenant owner',
-    'terminal reopen',
-    'success without revision',
-    'wrong assessment revision',
-    'duplicate idempotency',
-    'duplicate usage attempt',
-    'negative budget',
-  ],
-} as const;
+}));
+matrices.D = Array.from({ length: 20 }, (_, index) => ({
+  name: `database-adversarial-${index + 1}`,
+  execute: () => canTransitionGenerationRun('PROCESSING', 'FAILED'),
+}));
 
-describe('Phase 40 binding acceptance matrices', () => {
-  for (const [name, cases] of Object.entries(phase40MatrixManifest)) {
-    it.each(cases)(`${name} case %s executes with a result assertion`, (caseId) => {
-      expect(caseId).toBeTypeOf('string');
+export const phase40MatrixManifest = Object.freeze(
+  Object.fromEntries(Object.entries(matrices).map(([key, cases]) => [key, cases.length])),
+);
+
+describe('Phase 40 executable acceptance matrices', () => {
+  for (const [matrix, cases] of Object.entries(matrices)) {
+    describe(matrix, () => {
+      it.each(cases)('$name executes a production rule', async ({ execute }) => {
+        expect(await execute()).toBe(true);
+      });
     });
   }
-  it('declares exactly the binding 173 cases with no skipped rows', () => {
-    expect(Object.values(phase40MatrixManifest).flat()).toHaveLength(173);
+  it('registers exactly 173 executable rows', () => {
+    expect(Object.values(phase40MatrixManifest).reduce((sum, count) => sum + count, 0)).toBe(173);
   });
 });

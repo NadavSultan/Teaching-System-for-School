@@ -630,6 +630,8 @@ model GenerationRun {
   createdAt                 DateTime                @default(now()) @map("created_at")
   updatedAt                 DateTime                @updatedAt @map("updated_at")
   processedAt               DateTime?               @map("processed_at")
+  processingStartedAt       DateTime?               @map("processing_started_at")
+  leaseExpiresAt            DateTime?               @map("lease_expires_at")
   organization              Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   requestingUser            User                    @relation(fields: [requestingUserId], references: [id], onDelete: Restrict)
   assessment                Assessment              @relation(fields: [assessmentId], references: [id], onDelete: Restrict)
@@ -660,6 +662,7 @@ model GenerationContextItem {
   score               Float
   characterCount      Int               @map("character_count")
   estimatedTokens     Int               @map("estimated_tokens")
+  lineage             Json              @default("[]")
   createdAt           DateTime          @default(now()) @map("created_at")
   generationRun       GenerationRun     @relation(fields: [generationRunId], references: [id], onDelete: Restrict)
   knowledgeItem       KnowledgeItem     @relation(fields: [knowledgeItemId], references: [id], onDelete: Restrict)

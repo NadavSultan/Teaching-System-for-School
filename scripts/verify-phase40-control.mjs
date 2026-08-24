@@ -35,10 +35,11 @@ const migrations = readdirSync('packages/db/prisma/migrations').filter((name) =>
   /^\d+_/.test(name),
 );
 if (
-  migrations.length !== 8 ||
-  migrations.filter((name) => name.startsWith('20260824004000_')).length !== 1
+  migrations.length !== 9 ||
+  migrations.filter((name) => name.startsWith('20260824004000_')).length !== 1 ||
+  migrations.filter((name) => name.startsWith('20260824004100_')).length !== 1
 )
-  throw new Error(`expected eight migrations, got ${migrations.length}`);
+  throw new Error(`expected nine migrations, got ${migrations.length}`);
 const schema = readFileSync('packages/db/prisma/schema.prisma', 'utf8');
 if (
   !schema.includes('model GenerationRun') ||
@@ -51,10 +52,43 @@ const generation = readFileSync('packages/db/src/generation.ts', 'utf8');
 if (
   !generation.includes('ki.search_vector') ||
   generation.includes('sv.lifecycle') ||
-  generation.includes('to_tsvector')
+  generation.includes('to_tsvector') ||
+  generation.includes('new DeterministicFakeModelGateway') ||
+  generation.includes('curriculumLinks[0]')
 )
-  throw new Error('eligibility query boundary failed');
+  throw new Error('eligibility/provider boundary failed');
+if (
+  !generation.includes('AbortController') ||
+  !generation.includes('timeout') ||
+  !generation.includes('contextStillEligible(runId, selected, tx)')
+)
+  throw new Error('timeout/transactional revalidation boundary failed');
 if (generation.includes('return existing;')) throw new Error('raw idempotency return remains');
+const matrixSource = readFileSync('packages/db/src/phase40-matrices.test.ts', 'utf8');
+if (
+  matrixSource.includes('toBeTypeOf') ||
+  matrixSource.includes('caseId') ||
+  !matrixSource.includes('execute') ||
+  !matrixSource.includes('canTransitionGenerationRun')
+)
+  throw new Error('matrix runtime behavior is not registered');
+const upgrade = readFileSync('scripts/phase40-upgrade-test.mjs', 'utf8');
+if (
+  !upgrade.includes('INSERT INTO') ||
+  !upgrade.includes('rowCount') ||
+  !upgrade.includes('generation_usage_guard')
+)
+  throw new Error('upgrade script does not seed and assert');
+if (
+  execSync('git branch --show-current', { encoding: 'utf8' }).trim() !==
+  'codex/phase-40-generation-engine'
+)
+  throw new Error('wrong branch');
+try {
+  execSync('git merge-base --is-ancestor fd419a5ef7577b6d2ca65ba6381a7a30e3200c18 HEAD');
+} catch {
+  throw new Error('required Phase 30 baseline is not an ancestor');
+}
 const manifest = {
   T: 8,
   R: 24,
@@ -74,3 +108,4 @@ if (Object.values(manifest).reduce((a, b) => a + b, 0) !== 173)
 execSync('git branch --show-current', { stdio: 'inherit' });
 console.log('PHASE40_CONTROL=PASS');
 console.log('MATRIX_CASES=173');
+console.log('MIGRATION_COUNT=9');

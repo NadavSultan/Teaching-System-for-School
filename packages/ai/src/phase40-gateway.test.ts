@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { DeterministicFakeModelGateway, GatewayFailure, liveEvaluationPreflight } from './index.js';
+import {
+  DeterministicFakeModelGateway,
+  GatewayFailure,
+  liveEvaluationPreflight,
+  resolveConfiguredGenerationGateway,
+} from './index.js';
 
 const request = (operationId: string) => ({
   operationId,
@@ -57,5 +62,21 @@ describe('Phase 40 deterministic gateway outcomes', () => {
       enabled: false,
       reason: 'LIVE_PROVIDER_EVALUATION_REQUIRES_OWNER_APPROVAL_AND_SEPARATE_ADAPTER',
     });
+  });
+
+  it('requires explicit local fake configuration and observes abort', async () => {
+    const previous = process.env.PHASE40_GATEWAY;
+    delete process.env.PHASE40_GATEWAY;
+    expect(resolveConfiguredGenerationGateway()).toBeNull();
+    process.env.PHASE40_GATEWAY = 'fake';
+    process.env.NODE_ENV = 'test';
+    expect(resolveConfiguredGenerationGateway()).toBeInstanceOf(DeterministicFakeModelGateway);
+    const controller = new AbortController();
+    const gateway = new DeterministicFakeModelGateway({ hang: 'hang' });
+    const promise = gateway.execute({ ...request('hang'), signal: controller.signal });
+    controller.abort();
+    await expect(promise).rejects.toMatchObject({ code: 'TIMEOUT' });
+    if (previous === undefined) delete process.env.PHASE40_GATEWAY;
+    else process.env.PHASE40_GATEWAY = previous;
   });
 });

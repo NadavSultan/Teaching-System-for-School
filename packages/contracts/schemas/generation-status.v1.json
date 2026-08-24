@@ -42,7 +42,6 @@
               "type": "string",
               "enum": [
                 "CONTEXT_EMPTY",
-                "CONTEXT_INVALIDATED",
                 "TIMEOUT",
                 "RATE_LIMITED",
                 "TRANSIENT_EXHAUSTED",

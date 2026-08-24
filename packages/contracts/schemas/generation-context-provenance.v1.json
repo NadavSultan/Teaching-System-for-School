@@ -43,6 +43,27 @@
           "type": "integer",
           "exclusiveMinimum": 0,
           "maximum": 10000
+        },
+        "lineage": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "curriculumVersionId": {
+                "$ref": "#/definitions/GenerationContextProvenanceV1/properties/knowledgeItemId"
+              },
+              "curriculumNodeId": {
+                "$ref": "#/definitions/GenerationContextProvenanceV1/properties/knowledgeItemId"
+              }
+            },
+            "required": [
+              "curriculumVersionId",
+              "curriculumNodeId"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 100
         }
       },
       "required": [
@@ -55,7 +76,8 @@
         "rank",
         "score",
         "characterCount",
-        "estimatedTokens"
+        "estimatedTokens",
+        "lineage"
       ],
       "additionalProperties": false
     }
