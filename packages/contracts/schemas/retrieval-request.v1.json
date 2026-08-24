@@ -1,0 +1,47 @@
+{
+  "$ref": "#/definitions/RetrievalRequestV1",
+  "definitions": {
+    "RetrievalRequestV1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "query": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "organizationId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "curriculumVersionId": {
+          "$ref": "#/definitions/RetrievalRequestV1/properties/organizationId"
+        },
+        "curriculumNodeIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RetrievalRequestV1/properties/organizationId"
+          },
+          "maxItems": 1000
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 20
+        }
+      },
+      "required": [
+        "version",
+        "query",
+        "organizationId",
+        "curriculumVersionId",
+        "curriculumNodeIds"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

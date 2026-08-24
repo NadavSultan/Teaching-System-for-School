@@ -1,0 +1,57 @@
+{
+  "$ref": "#/definitions/SourceCreationV1",
+  "definitions": {
+    "SourceCreationV1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "visibility": {
+          "type": "string",
+          "enum": [
+            "PLATFORM_SHARED",
+            "ORGANIZATION_PRIVATE"
+          ]
+        },
+        "origin": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "default": {}
+        }
+      },
+      "required": [
+        "version",
+        "title",
+        "visibility",
+        "origin"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

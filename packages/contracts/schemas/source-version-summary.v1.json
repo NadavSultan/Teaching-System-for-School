@@ -1,0 +1,50 @@
+{
+  "$ref": "#/definitions/SourceVersionSummaryV1",
+  "definitions": {
+    "SourceVersionSummaryV1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sourceId": {
+          "$ref": "#/definitions/SourceVersionSummaryV1/properties/id"
+        },
+        "versionNumber": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "contentHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "lifecycle": {
+          "type": "string",
+          "enum": [
+            "DRAFT",
+            "ACTIVE",
+            "SUSPENDED",
+            "DEPRECATED",
+            "FAILED",
+            "NEEDS_RE_REVIEW"
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "id",
+        "sourceId",
+        "versionNumber",
+        "contentHash",
+        "lifecycle"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

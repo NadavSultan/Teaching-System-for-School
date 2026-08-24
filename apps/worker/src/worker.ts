@@ -1,21 +1,33 @@
-import { claimOutbox, finishOutbox, prisma } from '@teach/db';
+import { claimOutbox, finishOutbox, prisma, runIngestion } from '@teach/db';
 
 export type WorkerLogger = (event: Readonly<Record<string, unknown>>) => void;
-export type OutboxHandler = (event: { id: string; eventType: string }) => Promise<void>;
+export type OutboxHandler = (event: {
+  id: string;
+  eventType: string;
+  payload: unknown;
+}) => Promise<void>;
 
 export class OutboxWorker {
   private stopping = false;
   private timer?: ReturnType<typeof setTimeout>;
   constructor(
     private readonly logger: WorkerLogger = (event) => console.log(JSON.stringify(event)),
-    private readonly handler: OutboxHandler = async () => undefined,
+    private readonly handler: OutboxHandler = async (event) => {
+      if (
+        event.eventType === 'source.ingest.requested' &&
+        typeof event.payload === 'object' &&
+        event.payload &&
+        'ingestionRunId' in event.payload
+      )
+        await runIngestion(String((event.payload as { ingestionRunId: unknown }).ingestionRunId));
+    },
   ) {}
   async pollOnce(): Promise<boolean> {
     const event = await claimOutbox();
     if (!event) return false;
     const correlationId = event.idempotencyKey;
     try {
-      await this.handler({ id: event.id, eventType: event.eventType });
+      await this.handler({ id: event.id, eventType: event.eventType, payload: event.payload });
       await finishOutbox(event.id);
       this.logger({
         service: 'worker',

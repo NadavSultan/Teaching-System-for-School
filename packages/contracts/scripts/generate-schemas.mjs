@@ -16,6 +16,17 @@ import {
   assessmentSummarySchema,
   finalizedAssessmentRevisionSchema,
   scoreValidationResultSchema,
+  sourceCreationSchema,
+  sourceSummarySchema,
+  sourceVersionRegistrationSchema,
+  sourceVersionSummarySchema,
+  pedagogicalReviewDecisionSchema,
+  usagePermissionDecisionContractSchema,
+  ingestionRequestSchema,
+  ingestionStatusSchema,
+  eligibleKnowledgeItemSchema,
+  retrievalRequestSchema,
+  retrievalResultSchema,
 } from '../dist/index.js';
 
 const outputDirectory = join(dirname(fileURLToPath(import.meta.url)), '..', 'schemas');
@@ -37,6 +48,29 @@ const schemas = [
     'FinalizedAssessmentRevisionV1',
   ],
   ['score-validation-result.v1.json', scoreValidationResultSchema, 'ScoreValidationResultV1'],
+  ['source-creation.v1.json', sourceCreationSchema, 'SourceCreationV1'],
+  ['source-summary.v1.json', sourceSummarySchema, 'SourceSummaryV1'],
+  [
+    'source-version-registration.v1.json',
+    sourceVersionRegistrationSchema,
+    'SourceVersionRegistrationV1',
+  ],
+  ['source-version-summary.v1.json', sourceVersionSummarySchema, 'SourceVersionSummaryV1'],
+  [
+    'pedagogical-review-decision.v1.json',
+    pedagogicalReviewDecisionSchema,
+    'PedagogicalReviewDecisionV1',
+  ],
+  [
+    'usage-permission-decision.v1.json',
+    usagePermissionDecisionContractSchema,
+    'UsagePermissionDecisionV1',
+  ],
+  ['ingestion-request.v1.json', ingestionRequestSchema, 'IngestionRequestV1'],
+  ['ingestion-status.v1.json', ingestionStatusSchema, 'IngestionStatusV1'],
+  ['eligible-knowledge-item.v1.json', eligibleKnowledgeItemSchema, 'EligibleKnowledgeItemV1'],
+  ['retrieval-request.v1.json', retrievalRequestSchema, 'RetrievalRequestV1'],
+  ['retrieval-result.v1.json', retrievalResultSchema, 'RetrievalResultV1'],
 ];
 let drift = false;
 for (const [file, schema, name] of schemas) {

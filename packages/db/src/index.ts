@@ -9,6 +9,18 @@ import {
 } from '@teach/contracts';
 import { curriculumImportSchema, publishedCurriculumSchema } from '@teach/contracts';
 import { validateCurriculumHierarchy, validateScoreTree } from '@teach/domain';
+import { normalizeSourceText, parsePlainTextSource } from '@teach/domain';
+import {
+  retrievalRequestSchema,
+  sourceCreationSchema,
+  sourceVersionRegistrationSchema,
+  pedagogicalReviewDecisionSchema,
+  usagePermissionDecisionContractSchema,
+  ingestionRequestSchema,
+  ingestionStatusSchema,
+  eligibleKnowledgeItemSchema,
+  retrievalResultSchema,
+} from '@teach/contracts';
 
 export const prisma = new PrismaClient();
 
@@ -613,4 +625,405 @@ export async function createAssessmentRevision(
     });
     return { ...revision, state: 'FINALIZED' as const };
   });
+}
+
+function assertSourceContext(context: AccessContext, organizationId: string, write = false): void {
+  if (
+    context.organizationId !== organizationId ||
+    context.userStatus !== 'ACTIVE' ||
+    context.membershipStatus !== 'ACTIVE' ||
+    context.organizationStatus !== 'ACTIVE' ||
+    context.role === 'PLATFORM_ADMIN' ||
+    (write && !['TEACHER', 'COORDINATOR', 'SCHOOL_ADMIN'].includes(context.role))
+  )
+    throw new AccessDeniedError();
+}
+
+export async function createKnowledgeSource(
+  context: AccessContext,
+  input: unknown,
+  client: PrismaClient = prisma,
+) {
+  assertSourceContext(context, context.organizationId, true);
+  const parsed = sourceCreationSchema.parse(input);
+  if (parsed.visibility === 'PLATFORM_SHARED' && context.role === 'TEACHER')
+    throw new AccessDeniedError();
+  const source = await client.knowledgeSource.create({
+    data: {
+      organizationId: parsed.visibility === 'ORGANIZATION_PRIVATE' ? context.organizationId : null,
+      visibility: parsed.visibility,
+      title: parsed.title,
+      origin: parsed.origin,
+      metadata: parsed.metadata,
+    },
+  });
+  await client.auditEvent.create({
+    data: {
+      actorUserId: context.principal.userId,
+      organizationId: context.organizationId,
+      eventType: 'source.created',
+      targetType: 'knowledge_source',
+      targetId: source.id,
+      metadata: { visibility: source.visibility },
+    },
+  });
+  return source;
+}
+
+export async function registerSourceVersion(
+  context: AccessContext,
+  input: unknown,
+  client: PrismaClient = prisma,
+) {
+  const parsed = sourceVersionRegistrationSchema.parse(input);
+  const source = await client.knowledgeSource.findFirst({
+    where: {
+      id: parsed.sourceId,
+      OR: [
+        { organizationId: context.organizationId },
+        { visibility: 'PLATFORM_SHARED', organizationId: null },
+      ],
+    },
+  });
+  if (!source) throw new AccessDeniedError();
+  assertSourceContext(context, context.organizationId, true);
+  if (/^https?:\/\//i.test(parsed.contentReference))
+    throw new Error('RemoteContentReferenceNotAllowed');
+  const contentHash = createHash('sha256').update(parsed.content, 'utf8').digest('hex');
+  const fingerprint = createHash('sha256')
+    .update(JSON.stringify({ ...parsed, content: undefined, contentHash }))
+    .digest('hex');
+  return client.$transaction(async (tx) => {
+    const existing = await tx.sourceVersion.findUnique({
+      where: {
+        sourceId_idempotencyKey: { sourceId: source.id, idempotencyKey: parsed.idempotencyKey },
+      },
+    });
+    if (existing) {
+      if (existing.requestFingerprint !== fingerprint) throw new IdempotencyConflictError();
+      return existing;
+    }
+    const curriculum = await tx.curriculumVersion.findFirst({
+      where: { id: parsed.curriculumVersionId, status: 'PUBLISHED' },
+    });
+    if (!curriculum) throw new Error('Curriculum version is unavailable');
+    const nodes = await tx.curriculumNode.findMany({
+      where: { id: { in: parsed.curriculumNodeIds }, versionId: curriculum.id },
+      select: { id: true },
+    });
+    if (nodes.length !== parsed.curriculumNodeIds.length)
+      throw new Error('Curriculum nodes are unavailable');
+    const count = await tx.sourceVersion.count({ where: { sourceId: source.id } });
+    const version = await tx.sourceVersion.create({
+      data: {
+        sourceId: source.id,
+        versionNumber: count + 1,
+        contentHash,
+        contentReference: parsed.contentReference,
+        contentMimeType: parsed.contentMimeType,
+        metadata: { ...parsed.metadata, fixtureContent: parsed.content },
+        requestFingerprint: fingerprint,
+        idempotencyKey: parsed.idempotencyKey,
+        curriculumLinks: {
+          create: parsed.curriculumNodeIds.map((curriculumNodeId) => ({
+            curriculumNodeId,
+            curriculumVersionId: curriculum.id,
+          })),
+        },
+      },
+    });
+    await tx.auditEvent.create({
+      data: {
+        actorUserId: context.principal.userId,
+        organizationId: context.organizationId,
+        eventType: 'source.version.registered',
+        targetType: 'source_version',
+        targetId: version.id,
+        metadata: { versionNumber: version.versionNumber, contentHash },
+      },
+    });
+    return version;
+  });
+}
+
+export async function recordPedagogicalReview(
+  context: AccessContext,
+  input: unknown,
+  client: PrismaClient = prisma,
+) {
+  const parsed = pedagogicalReviewDecisionSchema.parse(input);
+  const version = await client.sourceVersion.findUnique({
+    where: { id: parsed.sourceVersionId },
+    include: { source: true },
+  });
+  if (
+    !version ||
+    (version.source.organizationId !== context.organizationId &&
+      version.source.visibility !== 'PLATFORM_SHARED')
+  )
+    throw new AccessDeniedError();
+  assertSourceContext(context, context.organizationId, true);
+  const row = await client.pedagogicalReview.create({
+    data: {
+      sourceVersionId: version.id,
+      reviewerUserId: context.principal.userId,
+      decision: parsed.decision,
+      reason: parsed.reason,
+      evidenceMetadata: parsed.evidenceMetadata,
+    },
+  });
+  await client.auditEvent.create({
+    data: {
+      actorUserId: context.principal.userId,
+      organizationId: context.organizationId,
+      eventType: 'source.review.recorded',
+      targetType: 'source_version',
+      targetId: version.id,
+      metadata: { decision: row.decision },
+    },
+  });
+  return row;
+}
+
+export async function recordUsagePermission(
+  context: AccessContext,
+  input: unknown,
+  client: PrismaClient = prisma,
+) {
+  const parsed = usagePermissionDecisionContractSchema.parse(input);
+  const version = await client.sourceVersion.findUnique({
+    where: { id: parsed.sourceVersionId },
+    include: { source: true },
+  });
+  if (
+    !version ||
+    (version.source.organizationId !== context.organizationId &&
+      version.source.visibility !== 'PLATFORM_SHARED')
+  )
+    throw new AccessDeniedError();
+  assertSourceContext(context, context.organizationId, true);
+  const row = await client.usagePermission.create({
+    data: {
+      sourceVersionId: version.id,
+      reviewerUserId: context.principal.userId,
+      decision: parsed.decision,
+      evidenceReference: parsed.evidenceReference,
+      scope: parsed.scope,
+      validUntil: parsed.validUntil ? new Date(parsed.validUntil) : null,
+    },
+  });
+  await client.auditEvent.create({
+    data: {
+      actorUserId: context.principal.userId,
+      organizationId: context.organizationId,
+      eventType: 'source.permission.recorded',
+      targetType: 'source_version',
+      targetId: version.id,
+      metadata: { decision: row.decision, scope: row.scope },
+    },
+  });
+  return row;
+}
+
+export async function setSourceLifecycle(
+  context: AccessContext,
+  sourceVersionId: string,
+  toStatus: 'ACTIVE' | 'SUSPENDED' | 'DEPRECATED' | 'FAILED' | 'NEEDS_RE_REVIEW',
+  reason: string,
+  client: PrismaClient = prisma,
+) {
+  const version = await client.sourceVersion.findUnique({
+    where: { id: sourceVersionId },
+    include: { source: true },
+  });
+  if (
+    !version ||
+    (version.source.organizationId !== context.organizationId &&
+      version.source.visibility !== 'PLATFORM_SHARED')
+  )
+    throw new AccessDeniedError();
+  assertSourceContext(context, context.organizationId, true);
+  if (reason.length < 1 || reason.length > 1000) throw new Error('InvalidLifecycleReason');
+  return client.$transaction(async (tx) => {
+    const updated = await tx.sourceVersion.update({
+      where: { id: version.id },
+      data: { lifecycle: toStatus },
+    });
+    await tx.sourceLifecycleEvent.create({
+      data: {
+        sourceVersionId: version.id,
+        sourceId: version.sourceId,
+        organizationId: version.source.organizationId,
+        actorUserId: context.principal.userId,
+        fromStatus: version.lifecycle,
+        toStatus,
+        reason,
+        safeMetadata: {},
+      },
+    });
+    return updated;
+  });
+}
+
+export async function requestIngestion(
+  context: AccessContext,
+  input: unknown,
+  client: PrismaClient = prisma,
+) {
+  const parsed = ingestionRequestSchema.parse(input);
+  const version = await client.sourceVersion.findUnique({
+    where: { id: parsed.sourceVersionId },
+    include: { source: true },
+  });
+  if (
+    !version ||
+    (version.source.organizationId !== context.organizationId &&
+      version.source.visibility !== 'PLATFORM_SHARED')
+  )
+    throw new AccessDeniedError();
+  assertSourceContext(context, context.organizationId, true);
+  const run = await client.ingestionRun.upsert({
+    where: {
+      contentHash_pipelineVersion: {
+        contentHash: version.contentHash,
+        pipelineVersion: parsed.pipelineVersion,
+      },
+    },
+    update: {},
+    create: {
+      sourceVersionId: version.id,
+      contentHash: version.contentHash,
+      pipelineVersion: parsed.pipelineVersion,
+      parserVersion: 'plain-text-v1',
+    },
+  });
+  await client.outboxEvent.upsert({
+    where: { idempotencyKey: `ingest:${run.id}` },
+    update: {},
+    create: {
+      organizationId: version.source.organizationId,
+      eventType: 'source.ingest.requested',
+      payload: { ingestionRunId: run.id },
+      idempotencyKey: `ingest:${run.id}`,
+    },
+  });
+  return ingestionStatusSchema.parse({
+    version: '1.0.0',
+    id: run.id,
+    sourceVersionId: run.sourceVersionId,
+    status: run.status,
+    attempts: run.attempts,
+    failureClass: run.failureClass,
+  });
+}
+
+export async function runIngestion(ingestionRunId: string, client: PrismaClient = prisma) {
+  const run = await client.ingestionRun.findUniqueOrThrow({
+    where: { id: ingestionRunId },
+    include: { sourceVersion: { include: { source: true, curriculumLinks: true } } },
+  });
+  if (run.status === 'SUCCEEDED') return run;
+  const updated = await client.ingestionRun.update({
+    where: { id: run.id },
+    data: {
+      status: 'PROCESSING',
+      attempts: { increment: 1 },
+      startedAt: new Date(),
+      failureClass: null,
+    },
+  });
+  try {
+    const items = parsePlainTextSource(
+      normalizeSourceText(
+        (run.sourceVersion.metadata as { fixtureContent?: string }).fixtureContent ?? '',
+      ),
+      1000,
+    );
+    if (!items.length) throw new Error('EmptySource');
+    const result = await client.$transaction(async (tx) => {
+      const curriculumLinks = await tx.curriculumNode.findMany({
+        where: { version: { status: 'PUBLISHED' } },
+        take: 0,
+      });
+      void curriculumLinks;
+      for (const item of items) {
+        const hash = createHash('sha256').update(item.text).digest('hex');
+        const saved = await tx.knowledgeItem.upsert({
+          where: {
+            sourceVersionId_locator_textHash: {
+              sourceVersionId: run.sourceVersionId,
+              locator: item.locator,
+              textHash: hash,
+            },
+          },
+          update: {},
+          create: {
+            sourceVersionId: run.sourceVersionId,
+            ingestionRunId: run.id,
+            organizationId: run.sourceVersion.source.organizationId,
+            visibility: run.sourceVersion.source.visibility,
+            locator: item.locator,
+            normalizedText: item.text,
+            textHash: hash,
+            metadata: {},
+            pipelineVersion: run.pipelineVersion,
+            parserVersion: run.parserVersion,
+            status: 'ACTIVE',
+          },
+        });
+        await tx.knowledgeItemCurriculumNodeLink.createMany({
+          data: run.sourceVersion.curriculumLinks.map((link) => ({
+            knowledgeItemId: saved.id,
+            curriculumVersionId: link.curriculumVersionId,
+            curriculumNodeId: link.curriculumNodeId,
+          })),
+          skipDuplicates: true,
+        });
+      }
+      return tx.ingestionRun.update({
+        where: { id: run.id },
+        data: { status: 'SUCCEEDED', completedAt: new Date() },
+      });
+    });
+    return result;
+  } catch (error) {
+    await client.ingestionRun.update({
+      where: { id: updated.id },
+      data: {
+        status: 'FAILED',
+        completedAt: new Date(),
+        failureClass: error instanceof Error ? error.name.slice(0, 120) : 'UnknownError',
+      },
+    });
+    throw error;
+  }
+}
+
+export async function retrieveEligibleKnowledge(
+  context: AccessContext,
+  input: unknown,
+  client: PrismaClient = prisma,
+) {
+  const parsed = retrievalRequestSchema.parse(input);
+  assertSourceContext(context, parsed.organizationId);
+  const query = parsed.query.trim();
+  const rows = await client.$queryRaw<
+    Array<any>
+  >`SELECT ki.id, ki.source_version_id AS "sourceVersionId", ki.locator, ki.text_hash AS "textHash", ki.metadata, ki.visibility, link.curriculum_version_id AS "curriculumVersionId", link.curriculum_node_id AS "curriculumNodeId", ts_rank(to_tsvector('simple', ki.normalized_text), plainto_tsquery('simple', ${query})) AS score FROM knowledge_items ki JOIN knowledge_item_curriculum_node_links link ON link.knowledge_item_id = ki.id JOIN source_versions sv ON sv.id = ki.source_version_id JOIN knowledge_sources ks ON ks.id = sv.source_id JOIN LATERAL (SELECT decision FROM pedagogical_reviews WHERE source_version_id = sv.id ORDER BY created_at DESC LIMIT 1) pr ON true JOIN LATERAL (SELECT decision, valid_until FROM usage_permissions WHERE source_version_id = sv.id ORDER BY created_at DESC LIMIT 1) up ON true JOIN curriculum_versions cv ON cv.id = link.curriculum_version_id WHERE ki.status = 'ACTIVE' AND sv.lifecycle = 'ACTIVE' AND pr.decision = 'APPROVED' AND up.decision = 'ALLOWED' AND (up.valid_until IS NULL OR up.valid_until > NOW()) AND cv.status = 'PUBLISHED' AND link.curriculum_version_id = ${parsed.curriculumVersionId}::uuid AND link.curriculum_node_id = ANY(${parsed.curriculumNodeIds}::uuid[]) AND (ks.visibility = 'PLATFORM_SHARED' OR ks.organization_id = ${context.organizationId}::uuid) AND (${query} = '' OR to_tsvector('simple', ki.normalized_text) @@ plainto_tsquery('simple', ${query})) ORDER BY score DESC, ki.id ASC LIMIT ${parsed.limit}`;
+  const items = rows.map((row, index) =>
+    eligibleKnowledgeItemSchema.parse({
+      version: '1.0.0',
+      id: row.id,
+      sourceVersionId: row.sourceVersionId,
+      locator: row.locator,
+      textHash: row.textHash,
+      metadata: row.metadata ?? {},
+      score: Number(row.score),
+      rank: index + 1,
+      curriculumVersionId: row.curriculumVersionId,
+      curriculumNodeId: row.curriculumNodeId,
+      visibility: row.visibility,
+    }),
+  );
+  return retrievalResultSchema.parse({ version: '1.0.0', items });
 }

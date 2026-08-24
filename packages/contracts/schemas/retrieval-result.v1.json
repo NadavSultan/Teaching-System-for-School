@@ -1,0 +1,100 @@
+{
+  "$ref": "#/definitions/RetrievalResultV1",
+  "definitions": {
+    "RetrievalResultV1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "string",
+                "const": "1.0.0"
+              },
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "sourceVersionId": {
+                "$ref": "#/definitions/RetrievalResultV1/properties/items/items/properties/id"
+              },
+              "locator": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              },
+              "textHash": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 500
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                }
+              },
+              "score": {
+                "type": "number"
+              },
+              "rank": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              "curriculumVersionId": {
+                "$ref": "#/definitions/RetrievalResultV1/properties/items/items/properties/id"
+              },
+              "curriculumNodeId": {
+                "$ref": "#/definitions/RetrievalResultV1/properties/items/items/properties/id"
+              },
+              "visibility": {
+                "type": "string",
+                "enum": [
+                  "PLATFORM_SHARED",
+                  "ORGANIZATION_PRIVATE"
+                ]
+              }
+            },
+            "required": [
+              "version",
+              "id",
+              "sourceVersionId",
+              "locator",
+              "textHash",
+              "metadata",
+              "score",
+              "rank",
+              "curriculumVersionId",
+              "curriculumNodeId",
+              "visibility"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 50
+        }
+      },
+      "required": [
+        "version",
+        "items"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

@@ -210,3 +210,118 @@ export const finalizedAssessmentRevisionSchema = z.object({
 });
 export type CurriculumImport = z.infer<typeof curriculumImportSchema>;
 export type AssessmentRevisionInput = z.infer<typeof assessmentRevisionSchema>;
+
+export const SOURCE_SCHEMA_VERSION = '1.0.0' as const;
+export const sourceVisibilitySchema = z.enum(['PLATFORM_SHARED', 'ORGANIZATION_PRIVATE']);
+export const sourceLifecycleSchema = z.enum([
+  'DRAFT',
+  'ACTIVE',
+  'SUSPENDED',
+  'DEPRECATED',
+  'FAILED',
+  'NEEDS_RE_REVIEW',
+]);
+export const reviewDecisionSchema = z.enum(['APPROVED', 'REJECTED']);
+export const usagePermissionDecisionSchema = z.enum(['ALLOWED', 'DENIED']);
+const boundedMetadataSchema = z
+  .record(z.string(), z.union([z.string().max(500), z.number(), z.boolean()]))
+  .refine((value) => Object.keys(value).length <= 30);
+export const sourceCreationSchema = z
+  .object({
+    version: z.literal(SOURCE_SCHEMA_VERSION),
+    title: z.string().min(1).max(200),
+    visibility: sourceVisibilitySchema,
+    origin: z.string().min(1).max(120),
+    metadata: boundedMetadataSchema.default({}),
+  })
+  .strict();
+export const sourceSummarySchema = z.object({
+  version: z.literal(SOURCE_SCHEMA_VERSION),
+  id: uuidSchema,
+  title: z.string().min(1).max(200),
+  visibility: sourceVisibilitySchema,
+  organizationId: uuidSchema.nullable(),
+  lifecycle: sourceLifecycleSchema,
+});
+export const sourceVersionRegistrationSchema = z
+  .object({
+    version: z.literal(SOURCE_SCHEMA_VERSION),
+    sourceId: uuidSchema,
+    idempotencyKey: z.string().min(1).max(255),
+    content: z.string().min(1).max(1000000),
+    contentReference: z.string().min(1).max(1000),
+    contentMimeType: z.string().min(1).max(120),
+    metadata: boundedMetadataSchema.default({}),
+    curriculumVersionId: uuidSchema,
+    curriculumNodeIds: z.array(uuidSchema).min(1).max(1000),
+  })
+  .strict();
+export const sourceVersionSummarySchema = z.object({
+  version: z.literal(SOURCE_SCHEMA_VERSION),
+  id: uuidSchema,
+  sourceId: uuidSchema,
+  versionNumber: z.number().int().positive(),
+  contentHash: z.string().regex(/^[a-f0-9]{64}$/),
+  lifecycle: sourceLifecycleSchema,
+});
+export const pedagogicalReviewDecisionSchema = z
+  .object({
+    version: z.literal(SOURCE_SCHEMA_VERSION),
+    sourceVersionId: uuidSchema,
+    decision: reviewDecisionSchema,
+    reason: z.string().min(1).max(1000),
+    evidenceMetadata: boundedMetadataSchema.default({}),
+  })
+  .strict();
+export const usagePermissionDecisionContractSchema = z
+  .object({
+    version: z.literal(SOURCE_SCHEMA_VERSION),
+    sourceVersionId: uuidSchema,
+    decision: usagePermissionDecisionSchema,
+    evidenceReference: z.string().min(1).max(1000),
+    scope: z.string().min(1).max(200),
+    validUntil: z.string().datetime().nullable().optional(),
+  })
+  .strict();
+export const ingestionRequestSchema = z
+  .object({
+    version: z.literal(SOURCE_SCHEMA_VERSION),
+    sourceVersionId: uuidSchema,
+    pipelineVersion: z.string().regex(/^[A-Za-z0-9._-]{1,80}$/),
+  })
+  .strict();
+export const ingestionStatusSchema = z.object({
+  version: z.literal(SOURCE_SCHEMA_VERSION),
+  id: uuidSchema,
+  sourceVersionId: uuidSchema,
+  status: z.enum(['PENDING', 'PROCESSING', 'SUCCEEDED', 'FAILED']),
+  attempts: z.number().int().nonnegative(),
+  failureClass: z.string().max(120).nullable(),
+});
+export const eligibleKnowledgeItemSchema = z.object({
+  version: z.literal(SOURCE_SCHEMA_VERSION),
+  id: uuidSchema,
+  sourceVersionId: uuidSchema,
+  locator: z.string().min(1).max(500),
+  textHash: z.string().regex(/^[a-f0-9]{64}$/),
+  metadata: boundedMetadataSchema,
+  score: z.number(),
+  rank: z.number().int().positive(),
+  curriculumVersionId: uuidSchema,
+  curriculumNodeId: uuidSchema,
+  visibility: sourceVisibilitySchema,
+});
+export const retrievalRequestSchema = z
+  .object({
+    version: z.literal(SOURCE_SCHEMA_VERSION),
+    query: z.string().max(500),
+    organizationId: uuidSchema,
+    curriculumVersionId: uuidSchema,
+    curriculumNodeIds: z.array(uuidSchema).max(1000),
+    limit: z.number().int().min(1).max(50).default(20),
+  })
+  .strict();
+export const retrievalResultSchema = z.object({
+  version: z.literal(SOURCE_SCHEMA_VERSION),
+  items: z.array(eligibleKnowledgeItemSchema).max(50),
+});

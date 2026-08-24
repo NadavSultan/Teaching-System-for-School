@@ -263,3 +263,43 @@ export function validateScoreTree(
     });
   return errors;
 }
+
+export type EligibilityInput = {
+  pedagogicalApproved: boolean;
+  usageAllowed: boolean;
+  sourceLifecycle: 'ACTIVE' | 'DRAFT' | 'SUSPENDED' | 'DEPRECATED' | 'FAILED' | 'NEEDS_RE_REVIEW';
+  itemLifecycle: 'ACTIVE' | 'SUSPENDED' | 'DEPRECATED';
+  visibilityPermitted: boolean;
+  exactPublishedCurriculum: boolean;
+};
+export function isEligibleKnowledgeItem(input: EligibilityInput): boolean {
+  return (
+    input.pedagogicalApproved &&
+    input.usageAllowed &&
+    input.sourceLifecycle === 'ACTIVE' &&
+    input.itemLifecycle === 'ACTIVE' &&
+    input.visibilityPermitted &&
+    input.exactPublishedCurriculum
+  );
+}
+
+export function normalizeSourceText(text: string): string {
+  return text
+    .normalize('NFKC')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+export type ParsedKnowledgeItem = { locator: string; text: string };
+export function parsePlainTextSource(text: string, maxItems = 1000): ParsedKnowledgeItem[] {
+  const normalized = normalizeSourceText(text);
+  if (!normalized || normalized.length > 1_000_000) throw new Error('InvalidSourceInput');
+  const paragraphs = normalized
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (paragraphs.length > maxItems) throw new Error('SourceItemLimitExceeded');
+  return paragraphs.map((part, index) => ({ locator: `paragraph:${index + 1}`, text: part }));
+}

@@ -11,16 +11,19 @@ enum LifecycleStatus {
   ACTIVE
   INACTIVE
 }
+
 enum WorkspaceType {
   PERSONAL
   SCHOOL
 }
+
 enum MembershipRole {
   TEACHER
   COORDINATOR
   SCHOOL_ADMIN
   PLATFORM_ADMIN
 }
+
 enum PublicationStatus {
   PENDING
   PROCESSING
@@ -28,17 +31,58 @@ enum PublicationStatus {
   FAILED
 }
 
+enum SourceVisibility {
+  PLATFORM_SHARED
+  ORGANIZATION_PRIVATE
+}
+
+enum SourceLifecycleStatus {
+  DRAFT
+  ACTIVE
+  SUSPENDED
+  DEPRECATED
+  FAILED
+  NEEDS_RE_REVIEW
+}
+
+enum ReviewDecision {
+  APPROVED
+  REJECTED
+}
+
+enum UsagePermissionDecision {
+  ALLOWED
+  DENIED
+}
+
+enum IngestionRunStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+}
+
+enum KnowledgeItemStatus {
+  ACTIVE
+  SUSPENDED
+  DEPRECATED
+}
+
 model User {
-  id                String            @id @default(uuid()) @db.Uuid
-  normalizedEmail   String            @unique @map("normalized_email") @db.VarChar(320)
-  displayName       String?           @map("display_name") @db.VarChar(200)
-  status            LifecycleStatus   @default(ACTIVE)
-  platformAdmin     Boolean           @default(false) @map("platform_admin")
-  createdAt         DateTime          @default(now()) @map("created_at")
-  updatedAt         DateTime          @updatedAt @map("updated_at")
-  memberships       Membership[]
-  identityMappings  IdentityMapping[]
-  auditEvents       AuditEvent[]       @relation("AuditActor")
+  id                    String                 @id @default(uuid()) @db.Uuid
+  normalizedEmail       String                 @unique @map("normalized_email") @db.VarChar(320)
+  displayName           String?                @map("display_name") @db.VarChar(200)
+  status                LifecycleStatus        @default(ACTIVE)
+  platformAdmin         Boolean                @default(false) @map("platform_admin")
+  createdAt             DateTime               @default(now()) @map("created_at")
+  updatedAt             DateTime               @updatedAt @map("updated_at")
+  memberships           Membership[]
+  identityMappings      IdentityMapping[]
+  auditEvents           AuditEvent[]           @relation("AuditActor")
+  pedagogicalReviews    PedagogicalReview[]
+  usagePermissions      UsagePermission[]
+  sourceLifecycleEvents SourceLifecycleEvent[]
+
   @@map("users")
 }
 
@@ -49,34 +93,39 @@ model IdentityMapping {
   userId          String   @map("user_id") @db.Uuid
   createdAt       DateTime @default(now()) @map("created_at")
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@unique([provider, providerSubject])
   @@map("identity_mappings")
 }
 
 model Organization {
-  id            String          @id @default(uuid()) @db.Uuid
-  name          String          @db.VarChar(200)
-  workspaceType WorkspaceType   @map("workspace_type")
-  status        LifecycleStatus @default(ACTIVE)
-  createdAt     DateTime        @default(now()) @map("created_at")
-  updatedAt     DateTime        @updatedAt @map("updated_at")
-  memberships   Membership[]
-  auditEvents   AuditEvent[]
-  outboxEvents  OutboxEvent[]
-  assessments   Assessment[]
+  id                String                 @id @default(uuid()) @db.Uuid
+  name              String                 @db.VarChar(200)
+  workspaceType     WorkspaceType          @map("workspace_type")
+  status            LifecycleStatus        @default(ACTIVE)
+  createdAt         DateTime               @default(now()) @map("created_at")
+  updatedAt         DateTime               @updatedAt @map("updated_at")
+  memberships       Membership[]
+  auditEvents       AuditEvent[]
+  outboxEvents      OutboxEvent[]
+  assessments       Assessment[]
+  knowledgeSources  KnowledgeSource[]
+  auditSourceEvents SourceLifecycleEvent[]
+
   @@map("organizations")
 }
 
 model Membership {
-  id             String           @id @default(uuid()) @db.Uuid
-  userId         String           @map("user_id") @db.Uuid
-  organizationId String           @map("organization_id") @db.Uuid
+  id             String          @id @default(uuid()) @db.Uuid
+  userId         String          @map("user_id") @db.Uuid
+  organizationId String          @map("organization_id") @db.Uuid
   role           MembershipRole
-  status         LifecycleStatus  @default(ACTIVE)
-  createdAt      DateTime         @default(now()) @map("created_at")
-  updatedAt      DateTime         @updatedAt @map("updated_at")
-  user           User             @relation(fields: [userId], references: [id], onDelete: Restrict)
-  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  status         LifecycleStatus @default(ACTIVE)
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+  user           User            @relation(fields: [userId], references: [id], onDelete: Restrict)
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
   @@unique([userId, organizationId])
   @@index([organizationId, status])
   @@map("memberships")
@@ -93,26 +142,28 @@ model AuditEvent {
   createdAt      DateTime      @default(now()) @map("created_at")
   actor          User?         @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
   organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
   @@index([organizationId, createdAt])
   @@map("audit_events")
 }
 
 model OutboxEvent {
-  id              String            @id @default(uuid()) @db.Uuid
-  organizationId  String?           @map("organization_id") @db.Uuid
-  eventType       String            @map("event_type") @db.VarChar(120)
-  payload         Json
-  status          PublicationStatus @default(PENDING)
-  attemptCount    Int               @default(0) @map("attempt_count")
-  availableAt     DateTime          @default(now()) @map("available_at")
-  publishedAt     DateTime?         @map("published_at")
-  idempotencyKey  String            @unique @map("idempotency_key") @db.VarChar(255)
-  lastError       String?           @map("last_error") @db.VarChar(500)
-  lockedAt        DateTime?         @map("locked_at")
-  leaseExpiresAt  DateTime?         @map("lease_expires_at")
-  createdAt       DateTime          @default(now()) @map("created_at")
-  updatedAt       DateTime          @updatedAt @map("updated_at")
-  organization    Organization?     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String?           @map("organization_id") @db.Uuid
+  eventType      String            @map("event_type") @db.VarChar(120)
+  payload        Json
+  status         PublicationStatus @default(PENDING)
+  attemptCount   Int               @default(0) @map("attempt_count")
+  availableAt    DateTime          @default(now()) @map("available_at")
+  publishedAt    DateTime?         @map("published_at")
+  idempotencyKey String            @unique @map("idempotency_key") @db.VarChar(255)
+  lastError      String?           @map("last_error") @db.VarChar(500)
+  lockedAt       DateTime?         @map("locked_at")
+  leaseExpiresAt DateTime?         @map("lease_expires_at")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+  organization   Organization?     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
   @@index([status, availableAt])
   @@map("outbox_events")
 }
@@ -121,11 +172,13 @@ enum CurriculumLifecycle {
   ACTIVE
   DEPRECATED
 }
+
 enum CurriculumVersionStatus {
   DRAFT
   PUBLISHED
   DEPRECATED
 }
+
 enum CurriculumNodeType {
   GRADE
   DOMAIN
@@ -133,174 +186,373 @@ enum CurriculumNodeType {
   SUBTOPIC
   SKILL
 }
+
 enum DifficultyBand {
   LOW
   MEDIUM
   HIGH
 }
+
 enum AssessmentType {
   WORKSHEET
   TEST
 }
+
 enum ScoringMode {
   NONE
   POINTS
 }
+
 enum AssessmentRevisionState {
   BUILDING
   FINALIZED
 }
+
 model Curriculum {
- id String @id @default(uuid()) @db.Uuid
- code String @unique @db.VarChar(64)
- educationSystemCode String @map("education_system_code") @db.VarChar(64)
- subjectCode String @map("subject_code") @db.VarChar(64)
- displayName String @map("display_name") @db.VarChar(200)
- lifecycle CurriculumLifecycle @default(ACTIVE)
- createdAt DateTime @default(now()) @map("created_at")
- updatedAt DateTime @updatedAt @map("updated_at")
- versions CurriculumVersion[]
- @@map("curricula")
+  id                  String              @id @default(uuid()) @db.Uuid
+  code                String              @unique @db.VarChar(64)
+  educationSystemCode String              @map("education_system_code") @db.VarChar(64)
+  subjectCode         String              @map("subject_code") @db.VarChar(64)
+  displayName         String              @map("display_name") @db.VarChar(200)
+  lifecycle           CurriculumLifecycle @default(ACTIVE)
+  createdAt           DateTime            @default(now()) @map("created_at")
+  updatedAt           DateTime            @updatedAt @map("updated_at")
+  versions            CurriculumVersion[]
+
+  @@map("curricula")
 }
+
 model CurriculumVersion {
-  id String @id @default(uuid()) @db.Uuid
-  curriculumId String @map("curriculum_id") @db.Uuid
-  versionNumber Int @map("version_number")
-  humanLabel String? @map("human_label") @db.VarChar(200)
-  status CurriculumVersionStatus @default(DRAFT)
-  publishedAt DateTime? @map("published_at")
-  deprecatedAt DateTime? @map("deprecated_at")
-  createdAt DateTime @default(now()) @map("created_at")
-  curriculum Curriculum @relation(fields: [curriculumId], references: [id])
-  nodes CurriculumNode[]
-  revisions AssessmentRevision[]
+  id                 String                            @id @default(uuid()) @db.Uuid
+  curriculumId       String                            @map("curriculum_id") @db.Uuid
+  versionNumber      Int                               @map("version_number")
+  humanLabel         String?                           @map("human_label") @db.VarChar(200)
+  status             CurriculumVersionStatus           @default(DRAFT)
+  publishedAt        DateTime?                         @map("published_at")
+  deprecatedAt       DateTime?                         @map("deprecated_at")
+  createdAt          DateTime                          @default(now()) @map("created_at")
+  curriculum         Curriculum                        @relation(fields: [curriculumId], references: [id])
+  nodes              CurriculumNode[]
+  revisions          AssessmentRevision[]
+  knowledgeItemLinks KnowledgeItemCurriculumNodeLink[]
+  sourceVersionLinks SourceVersionCurriculumNodeLink[]
+
   @@unique([curriculumId, versionNumber])
   @@map("curriculum_versions")
 }
+
 model CurriculumNode {
-  id String @id @default(uuid()) @db.Uuid
-  versionId String @map("version_id") @db.Uuid
-  parentId String? @map("parent_id") @db.Uuid
-  type CurriculumNodeType
-  code String
-  label String
-  description String? @db.VarChar(2000)
-  sortOrder Int @map("sort_order")
-  version CurriculumVersion @relation(fields: [versionId], references: [id])
-  parent CurriculumNode? @relation("Tree", fields: [parentId], references: [id])
-  children CurriculumNode[] @relation("Tree")
-  difficulties CurriculumSkillDifficulty[]
-  links AssessmentRevisionNodeLink[]
+  id                 String                            @id @default(uuid()) @db.Uuid
+  versionId          String                            @map("version_id") @db.Uuid
+  parentId           String?                           @map("parent_id") @db.Uuid
+  type               CurriculumNodeType
+  code               String
+  label              String
+  description        String?                           @db.VarChar(2000)
+  sortOrder          Int                               @map("sort_order")
+  version            CurriculumVersion                 @relation(fields: [versionId], references: [id])
+  parent             CurriculumNode?                   @relation("Tree", fields: [parentId], references: [id])
+  children           CurriculumNode[]                  @relation("Tree")
+  difficulties       CurriculumSkillDifficulty[]
+  links              AssessmentRevisionNodeLink[]
+  knowledgeItemLinks KnowledgeItemCurriculumNodeLink[]
+  sourceVersionLinks SourceVersionCurriculumNodeLink[]
+
   @@map("curriculum_nodes")
 }
+
+model KnowledgeSource {
+  id              String                 @id @default(uuid()) @db.Uuid
+  organizationId  String?                @map("organization_id") @db.Uuid
+  visibility      SourceVisibility
+  title           String                 @db.VarChar(200)
+  origin          String                 @db.VarChar(120)
+  metadata        Json                   @default("{}")
+  createdAt       DateTime               @default(now()) @map("created_at")
+  updatedAt       DateTime               @updatedAt @map("updated_at")
+  organization    Organization?          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  versions        SourceVersion[]
+  lifecycleEvents SourceLifecycleEvent[]
+
+  @@index([organizationId, visibility])
+  @@map("knowledge_sources")
+}
+
+model SourceVersion {
+  id                 String                            @id @default(uuid()) @db.Uuid
+  sourceId           String                            @map("source_id") @db.Uuid
+  versionNumber      Int                               @map("version_number")
+  contentHash        String                            @map("content_hash") @db.Char(64)
+  contentReference   String                            @map("content_reference") @db.VarChar(1000)
+  contentMimeType    String                            @map("content_mime_type") @db.VarChar(120)
+  metadata           Json                              @default("{}")
+  requestFingerprint String                            @map("request_fingerprint") @db.Char(64)
+  idempotencyKey     String                            @map("idempotency_key") @db.VarChar(255)
+  lifecycle          SourceLifecycleStatus             @default(DRAFT)
+  createdAt          DateTime                          @default(now()) @map("created_at")
+  updatedAt          DateTime                          @updatedAt @map("updated_at")
+  source             KnowledgeSource                   @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  reviews            PedagogicalReview[]
+  permissions        UsagePermission[]
+  lifecycleEvents    SourceLifecycleEvent[]
+  ingestionRuns      IngestionRun[]
+  knowledgeItems     KnowledgeItem[]
+  curriculumLinks    SourceVersionCurriculumNodeLink[]
+
+  @@unique([sourceId, contentHash])
+  @@unique([sourceId, idempotencyKey])
+  @@index([contentHash, lifecycle])
+  @@map("source_versions")
+}
+
+model PedagogicalReview {
+  id               String         @id @default(uuid()) @db.Uuid
+  sourceVersionId  String         @map("source_version_id") @db.Uuid
+  reviewerUserId   String         @map("reviewer_user_id") @db.Uuid
+  decision         ReviewDecision
+  reason           String         @db.VarChar(1000)
+  evidenceMetadata Json           @default("{}") @map("evidence_metadata")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  sourceVersion    SourceVersion  @relation(fields: [sourceVersionId], references: [id], onDelete: Restrict)
+  reviewer         User           @relation(fields: [reviewerUserId], references: [id], onDelete: Restrict)
+
+  @@index([sourceVersionId, createdAt])
+  @@map("pedagogical_reviews")
+}
+
+model UsagePermission {
+  id                String                  @id @default(uuid()) @db.Uuid
+  sourceVersionId   String                  @map("source_version_id") @db.Uuid
+  reviewerUserId    String                  @map("reviewer_user_id") @db.Uuid
+  decision          UsagePermissionDecision
+  evidenceReference String                  @map("evidence_reference") @db.VarChar(1000)
+  scope             String                  @db.VarChar(200)
+  validUntil        DateTime?               @map("valid_until")
+  createdAt         DateTime                @default(now()) @map("created_at")
+  sourceVersion     SourceVersion           @relation(fields: [sourceVersionId], references: [id], onDelete: Restrict)
+  reviewer          User                    @relation(fields: [reviewerUserId], references: [id], onDelete: Restrict)
+
+  @@index([sourceVersionId, createdAt])
+  @@map("usage_permissions")
+}
+
+model SourceLifecycleEvent {
+  id              String                 @id @default(uuid()) @db.Uuid
+  sourceId        String?                @map("source_id") @db.Uuid
+  sourceVersionId String?                @map("source_version_id") @db.Uuid
+  organizationId  String?                @map("organization_id") @db.Uuid
+  actorUserId     String?                @map("actor_user_id") @db.Uuid
+  fromStatus      SourceLifecycleStatus? @map("from_status")
+  toStatus        SourceLifecycleStatus  @map("to_status")
+  reason          String                 @db.VarChar(1000)
+  safeMetadata    Json                   @default("{}") @map("safe_metadata")
+  createdAt       DateTime               @default(now()) @map("created_at")
+  source          KnowledgeSource?       @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  sourceVersion   SourceVersion?         @relation(fields: [sourceVersionId], references: [id], onDelete: Restrict)
+  organization    Organization?          @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  actor           User?                  @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([sourceVersionId, createdAt])
+  @@map("source_lifecycle_events")
+}
+
+model IngestionRun {
+  id              String             @id @default(uuid()) @db.Uuid
+  sourceVersionId String             @map("source_version_id") @db.Uuid
+  contentHash     String             @map("content_hash") @db.Char(64)
+  pipelineVersion String             @map("pipeline_version") @db.VarChar(80)
+  parserVersion   String             @map("parser_version") @db.VarChar(80)
+  status          IngestionRunStatus @default(PENDING)
+  attempts        Int                @default(0)
+  failureClass    String?            @map("failure_class") @db.VarChar(120)
+  startedAt       DateTime?          @map("started_at")
+  completedAt     DateTime?          @map("completed_at")
+  createdAt       DateTime           @default(now()) @map("created_at")
+  updatedAt       DateTime           @updatedAt @map("updated_at")
+  sourceVersion   SourceVersion      @relation(fields: [sourceVersionId], references: [id], onDelete: Restrict)
+  knowledgeItems  KnowledgeItem[]
+
+  @@unique([contentHash, pipelineVersion])
+  @@map("ingestion_runs")
+}
+
+model KnowledgeItem {
+  id              String                            @id @default(uuid()) @db.Uuid
+  sourceVersionId String                            @map("source_version_id") @db.Uuid
+  ingestionRunId  String                            @map("ingestion_run_id") @db.Uuid
+  organizationId  String?                           @map("organization_id") @db.Uuid
+  visibility      SourceVisibility
+  locator         String                            @db.VarChar(500)
+  normalizedText  String                            @map("normalized_text") @db.VarChar(30000)
+  textHash        String                            @map("text_hash") @db.Char(64)
+  metadata        Json                              @default("{}")
+  pipelineVersion String                            @map("pipeline_version") @db.VarChar(80)
+  parserVersion   String                            @map("parser_version") @db.VarChar(80)
+  status          KnowledgeItemStatus               @default(ACTIVE)
+  searchVector    Unsupported("tsvector")?
+  createdAt       DateTime                          @default(now()) @map("created_at")
+  updatedAt       DateTime                          @updatedAt @map("updated_at")
+  sourceVersion   SourceVersion                     @relation(fields: [sourceVersionId], references: [id], onDelete: Restrict)
+  ingestionRun    IngestionRun                      @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
+  curriculumLinks KnowledgeItemCurriculumNodeLink[]
+
+  @@unique([sourceVersionId, locator, textHash])
+  @@index([organizationId, visibility, status])
+  @@map("knowledge_items")
+}
+
+model SourceVersionCurriculumNodeLink {
+  id                  String            @id @default(uuid()) @db.Uuid
+  sourceVersionId     String            @map("source_version_id") @db.Uuid
+  curriculumVersionId String            @map("curriculum_version_id") @db.Uuid
+  curriculumNodeId    String            @map("curriculum_node_id") @db.Uuid
+  sourceVersion       SourceVersion     @relation(fields: [sourceVersionId], references: [id], onDelete: Restrict)
+  curriculumVersion   CurriculumVersion @relation(fields: [curriculumVersionId], references: [id], onDelete: Restrict)
+  curriculumNode      CurriculumNode    @relation(fields: [curriculumNodeId], references: [id], onDelete: Restrict)
+
+  @@unique([sourceVersionId, curriculumNodeId])
+  @@map("source_version_curriculum_node_links")
+}
+
+model KnowledgeItemCurriculumNodeLink {
+  id                  String            @id @default(uuid()) @db.Uuid
+  knowledgeItemId     String            @map("knowledge_item_id") @db.Uuid
+  curriculumVersionId String            @map("curriculum_version_id") @db.Uuid
+  curriculumNodeId    String            @map("curriculum_node_id") @db.Uuid
+  knowledgeItem       KnowledgeItem     @relation(fields: [knowledgeItemId], references: [id], onDelete: Restrict)
+  curriculumVersion   CurriculumVersion @relation(fields: [curriculumVersionId], references: [id], onDelete: Restrict)
+  curriculumNode      CurriculumNode    @relation(fields: [curriculumNodeId], references: [id], onDelete: Restrict)
+
+  @@unique([knowledgeItemId, curriculumNodeId])
+  @@index([curriculumVersionId, curriculumNodeId])
+  @@map("knowledge_item_curriculum_node_links")
+}
+
 model CurriculumSkillDifficulty {
-  id String @id @default(uuid()) @db.Uuid
-  nodeId String @map("node_id") @db.Uuid
-  band DifficultyBand
-  node CurriculumNode @relation(fields: [nodeId], references: [id])
+  id     String         @id @default(uuid()) @db.Uuid
+  nodeId String         @map("node_id") @db.Uuid
+  band   DifficultyBand
+  node   CurriculumNode @relation(fields: [nodeId], references: [id])
+
   @@map("curriculum_skill_difficulties")
 }
+
 model Assessment {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @map("organization_id") @db.Uuid
-  type AssessmentType
-  title String
-  createdByUserId String? @map("created_by_user_id") @db.Uuid
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-  organization Organization @relation(fields: [organizationId], references: [id])
-  revisions AssessmentRevision[]
+  id              String               @id @default(uuid()) @db.Uuid
+  organizationId  String               @map("organization_id") @db.Uuid
+  type            AssessmentType
+  title           String
+  createdByUserId String?              @map("created_by_user_id") @db.Uuid
+  createdAt       DateTime             @default(now()) @map("created_at")
+  updatedAt       DateTime             @updatedAt @map("updated_at")
+  organization    Organization         @relation(fields: [organizationId], references: [id])
+  revisions       AssessmentRevision[]
+
   @@map("assessments")
 }
+
 model AssessmentRevision {
-  id String @id @default(uuid()) @db.Uuid
-  assessmentId String @map("assessment_id") @db.Uuid
-  revisionNumber Int @map("revision_number")
-  idempotencyKey String @map("idempotency_key")
-  requestFingerprint String @map("request_fingerprint") @db.Char(64)
-  state AssessmentRevisionState @default(BUILDING)
-  curriculumVersionId String @map("curriculum_version_id") @db.Uuid
-  scoringMode ScoringMode @map("scoring_mode")
-  totalScoreUnits Int? @map("total_score_units")
-  createdAt DateTime @default(now()) @map("created_at")
-  assessment Assessment @relation(fields: [assessmentId], references: [id])
-  curriculumVersion CurriculumVersion @relation(fields: [curriculumVersionId], references: [id])
-  sections AssessmentSection[]
-  nodeLinks AssessmentRevisionNodeLink[]
+  id                  String                       @id @default(uuid()) @db.Uuid
+  assessmentId        String                       @map("assessment_id") @db.Uuid
+  revisionNumber      Int                          @map("revision_number")
+  idempotencyKey      String                       @map("idempotency_key")
+  requestFingerprint  String                       @map("request_fingerprint") @db.Char(64)
+  state               AssessmentRevisionState      @default(BUILDING)
+  curriculumVersionId String                       @map("curriculum_version_id") @db.Uuid
+  scoringMode         ScoringMode                  @map("scoring_mode")
+  totalScoreUnits     Int?                         @map("total_score_units")
+  createdAt           DateTime                     @default(now()) @map("created_at")
+  assessment          Assessment                   @relation(fields: [assessmentId], references: [id])
+  curriculumVersion   CurriculumVersion            @relation(fields: [curriculumVersionId], references: [id])
+  sections            AssessmentSection[]
+  nodeLinks           AssessmentRevisionNodeLink[]
+
   @@unique([assessmentId, revisionNumber])
   @@unique([assessmentId, idempotencyKey])
   @@map("assessment_revisions")
 }
+
 model AssessmentRevisionNodeLink {
-  id String @id @default(uuid()) @db.Uuid
-  revisionId String @map("revision_id") @db.Uuid
-  curriculumNodeId String @map("curriculum_node_id") @db.Uuid
-  revision AssessmentRevision @relation(fields: [revisionId], references: [id])
-  node CurriculumNode @relation(fields: [curriculumNodeId], references: [id])
+  id               String             @id @default(uuid()) @db.Uuid
+  revisionId       String             @map("revision_id") @db.Uuid
+  curriculumNodeId String             @map("curriculum_node_id") @db.Uuid
+  revision         AssessmentRevision @relation(fields: [revisionId], references: [id])
+  node             CurriculumNode     @relation(fields: [curriculumNodeId], references: [id])
+
   @@map("assessment_revision_node_links")
 }
+
 model AssessmentSection {
-  id String @id @default(uuid()) @db.Uuid
-  revisionId String @map("revision_id") @db.Uuid
-  key String
-  title String
-  instructions String? @db.VarChar(5000)
-  order Int
-  scoreUnits Int? @map("score_units")
-  revision AssessmentRevision @relation(fields: [revisionId], references: [id])
-  questions AssessmentQuestion[]
+  id           String               @id @default(uuid()) @db.Uuid
+  revisionId   String               @map("revision_id") @db.Uuid
+  key          String
+  title        String
+  instructions String?              @db.VarChar(5000)
+  order        Int
+  scoreUnits   Int?                 @map("score_units")
+  revision     AssessmentRevision   @relation(fields: [revisionId], references: [id])
+  questions    AssessmentQuestion[]
+
   @@map("assessment_sections")
 }
+
 model AssessmentQuestion {
-  id String @id @default(uuid()) @db.Uuid
-  sectionId String @map("section_id") @db.Uuid
-  key String
-  type String
-  prompt String
-  instructions String? @db.VarChar(5000)
-  difficulty DifficultyBand?
-  order Int
-  scoreUnits Int? @map("score_units")
-  section AssessmentSection @relation(fields: [sectionId], references: [id])
+  id           String                  @id @default(uuid()) @db.Uuid
+  sectionId    String                  @map("section_id") @db.Uuid
+  key          String
+  type         String
+  prompt       String
+  instructions String?                 @db.VarChar(5000)
+  difficulty   DifficultyBand?
+  order        Int
+  scoreUnits   Int?                    @map("score_units")
+  section      AssessmentSection       @relation(fields: [sectionId], references: [id])
   subQuestions AssessmentSubQuestion[]
-  answers Answer[]
-  rubrics RubricCriterion[]
+  answers      Answer[]
+  rubrics      RubricCriterion[]
+
   @@map("assessment_questions")
 }
+
 model AssessmentSubQuestion {
-  id String @id @default(uuid()) @db.Uuid
-  questionId String @map("question_id") @db.Uuid
-  key String
-  prompt String
-  order Int
-  scoreUnits Int? @map("score_units")
-  question AssessmentQuestion @relation(fields: [questionId], references: [id])
-  answers Answer[]
-  rubrics RubricCriterion[]
+  id         String             @id @default(uuid()) @db.Uuid
+  questionId String             @map("question_id") @db.Uuid
+  key        String
+  prompt     String
+  order      Int
+  scoreUnits Int?               @map("score_units")
+  question   AssessmentQuestion @relation(fields: [questionId], references: [id])
+  answers    Answer[]
+  rubrics    RubricCriterion[]
+
   @@map("assessment_sub_questions")
 }
+
 model Answer {
-  id String @id @default(uuid()) @db.Uuid
-  questionId String? @map("question_id") @db.Uuid
-  subQuestionId String? @map("sub_question_id") @db.Uuid
-  answerData Json @map("answer_data")
-  key String @db.VarChar(100)
-  order Int
-  text String @db.VarChar(10000)
-  explanation String? @db.VarChar(10000)
-  question AssessmentQuestion? @relation(fields: [questionId], references: [id])
-  subQuestion AssessmentSubQuestion? @relation(fields: [subQuestionId], references: [id])
+  id            String                 @id @default(uuid()) @db.Uuid
+  questionId    String?                @map("question_id") @db.Uuid
+  subQuestionId String?                @map("sub_question_id") @db.Uuid
+  answerData    Json                   @map("answer_data")
+  key           String                 @db.VarChar(100)
+  order         Int
+  text          String                 @db.VarChar(10000)
+  explanation   String?                @db.VarChar(10000)
+  question      AssessmentQuestion?    @relation(fields: [questionId], references: [id])
+  subQuestion   AssessmentSubQuestion? @relation(fields: [subQuestionId], references: [id])
+
   @@map("answers")
 }
+
 model RubricCriterion {
-  id String @id @default(uuid()) @db.Uuid
-  questionId String? @map("question_id") @db.Uuid
-  subQuestionId String? @map("sub_question_id") @db.Uuid
-  key String
-  description String
-  order Int
-  scoreUnits Int? @map("score_units")
-  question AssessmentQuestion? @relation(fields: [questionId], references: [id])
-  subQuestion AssessmentSubQuestion? @relation(fields: [subQuestionId], references: [id])
+  id            String                 @id @default(uuid()) @db.Uuid
+  questionId    String?                @map("question_id") @db.Uuid
+  subQuestionId String?                @map("sub_question_id") @db.Uuid
+  key           String
+  description   String
+  order         Int
+  scoreUnits    Int?                   @map("score_units")
+  question      AssessmentQuestion?    @relation(fields: [questionId], references: [id])
+  subQuestion   AssessmentSubQuestion? @relation(fields: [subQuestionId], references: [id])
+
   @@map("rubric_criteria")
 }
