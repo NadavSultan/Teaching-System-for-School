@@ -298,6 +298,7 @@ model SourceVersion {
   ingestionRuns      IngestionRun[]
   knowledgeItems     KnowledgeItem[]
   curriculumLinks    SourceVersionCurriculumNodeLink[]
+  content            SourceVersionContent?
 
   @@unique([sourceId, contentHash])
   @@unique([sourceId, idempotencyKey])
@@ -372,8 +373,18 @@ model IngestionRun {
   sourceVersion   SourceVersion      @relation(fields: [sourceVersionId], references: [id], onDelete: Restrict)
   knowledgeItems  KnowledgeItem[]
 
-  @@unique([contentHash, pipelineVersion])
+  @@unique([sourceVersionId, contentHash, pipelineVersion])
   @@map("ingestion_runs")
+}
+
+model SourceVersionContent {
+  sourceVersionId String        @id @map("source_version_id") @db.Uuid
+  contentHash     String        @map("content_hash") @db.Char(64)
+  content         String        @db.VarChar(1000000)
+  createdAt       DateTime      @default(now()) @map("created_at")
+  sourceVersion   SourceVersion @relation(fields: [sourceVersionId], references: [id], onDelete: Restrict)
+
+  @@map("source_version_contents")
 }
 
 model KnowledgeItem {

@@ -14,6 +14,10 @@ import {
   importCurriculumDraft,
   publishCurriculumVersion,
   IdempotencyConflictError,
+  getKnowledgeSource,
+  getSourceVersion,
+  getKnowledgeItem,
+  getIngestionStatus,
 } from './index.js';
 
 describe('Phase 30 source registry and controlled knowledge', () => {
@@ -236,5 +240,159 @@ describe('Phase 30 source registry and controlled knowledge', () => {
       contentReference: 'fixture://phase30-v2',
     });
     expect(version2.id).not.toBe(version.id);
+
+    const otherSource = await createKnowledgeSource(otherContext, {
+      version: '1.0.0',
+      title: 'Other same bytes',
+      visibility: 'ORGANIZATION_PRIVATE',
+      origin: 'test-fixture',
+    });
+    const otherVersion = await registerSourceVersion(otherContext, {
+      ...registration,
+      sourceId: otherSource.id,
+      idempotencyKey: 'other-v1',
+    });
+    const otherRun = await requestIngestion(otherContext, {
+      version: '1.0.0',
+      sourceVersionId: otherVersion.id,
+      pipelineVersion: 'plain-v1',
+    });
+    expect(otherRun.id).not.toBe(pending.id);
+    expect((await getIngestionStatus(otherContext, otherRun.id))?.sourceVersionId).toBe(
+      otherVersion.id,
+    );
+    expect(await getKnowledgeSource(context, source.id)).toMatchObject({
+      id: source.id,
+      visibility: 'ORGANIZATION_PRIVATE',
+    });
+    expect(await getSourceVersion(otherContext, version.id)).toBeNull();
+    expect(await getKnowledgeItem(otherContext, firstItem!.id)).toBeNull();
+
+    await expect(
+      prisma.sourceVersionContent.update({
+        where: { sourceVersionId: version.id },
+        data: { content: 'tampered' },
+      }),
+    ).rejects.toThrow('immutable');
+    await expect(
+      prisma.sourceVersionContent.delete({ where: { sourceVersionId: version.id } }),
+    ).rejects.toThrow('immutable');
+    await expect(
+      prisma.sourceVersion.update({
+        where: { id: version.id },
+        data: { metadata: { changed: true } },
+      }),
+    ).rejects.toThrow('immutable');
+    const review = await prisma.pedagogicalReview.findFirstOrThrow({
+      where: { sourceVersionId: version.id },
+    });
+    const permission = await prisma.usagePermission.findFirstOrThrow({
+      where: { sourceVersionId: version.id },
+    });
+    const lifecycle = await prisma.sourceLifecycleEvent.findFirstOrThrow({
+      where: { sourceVersionId: version.id },
+    });
+    await expect(
+      prisma.pedagogicalReview.update({ where: { id: review.id }, data: { reason: 'tampered' } }),
+    ).rejects.toThrow('append-only');
+    await expect(prisma.pedagogicalReview.delete({ where: { id: review.id } })).rejects.toThrow(
+      'append-only',
+    );
+    await expect(
+      prisma.usagePermission.update({ where: { id: permission.id }, data: { scope: 'tampered' } }),
+    ).rejects.toThrow('append-only');
+    await expect(prisma.usagePermission.delete({ where: { id: permission.id } })).rejects.toThrow(
+      'append-only',
+    );
+    await expect(
+      prisma.sourceLifecycleEvent.update({
+        where: { id: lifecycle.id },
+        data: { reason: 'tampered' },
+      }),
+    ).rejects.toThrow('append-only');
+    await expect(
+      prisma.sourceLifecycleEvent.delete({ where: { id: lifecycle.id } }),
+    ).rejects.toThrow('append-only');
+    await expect(prisma.knowledgeItem.delete({ where: { id: firstItem!.id } })).rejects.toThrow(
+      'immutable',
+    );
+    const link = await prisma.knowledgeItemCurriculumNodeLink.findFirstOrThrow({
+      where: { knowledgeItemId: firstItem!.id },
+    });
+    await expect(
+      prisma.knowledgeItemCurriculumNodeLink.delete({ where: { id: link.id } }),
+    ).rejects.toThrow('append-only');
+    await expect(
+      prisma.knowledgeItemCurriculumNodeLink.update({
+        where: { id: link.id },
+        data: { curriculumNodeId: skill.id },
+      }),
+    ).rejects.toThrow('append-only');
+    const sourceLink = await prisma.sourceVersionCurriculumNodeLink.findFirstOrThrow({
+      where: { sourceVersionId: version.id },
+    });
+    await expect(
+      prisma.sourceVersionCurriculumNodeLink.update({
+        where: { id: sourceLink.id },
+        data: { curriculumNodeId: skill.id },
+      }),
+    ).rejects.toThrow('append-only');
+    await expect(
+      prisma.sourceVersionCurriculumNodeLink.delete({ where: { id: sourceLink.id } }),
+    ).rejects.toThrow('append-only');
+
+    await prisma.user.update({ where: { id: workspace.user.id }, data: { platformAdmin: true } });
+    const shared = await createKnowledgeSource(context, {
+      version: '1.0.0',
+      title: 'Shared',
+      visibility: 'PLATFORM_SHARED',
+      origin: 'test-fixture',
+    });
+    const sharedRegistration = {
+      ...registration,
+      sourceId: shared.id,
+      idempotencyKey: 'shared-v1',
+      content: 'תוכן משותף',
+    };
+    const sharedVersion = await registerSourceVersion(context, sharedRegistration);
+    await expect(
+      recordPedagogicalReview(otherContext, {
+        version: '1.0.0',
+        sourceVersionId: sharedVersion.id,
+        decision: 'APPROVED',
+        reason: 'tenant cannot administer',
+      }),
+    ).rejects.toThrow('Resource not found or unavailable');
+    await expect(
+      recordUsagePermission(otherContext, {
+        version: '1.0.0',
+        sourceVersionId: sharedVersion.id,
+        decision: 'ALLOWED',
+        evidenceReference: 'x',
+        scope: 'AI_GENERATION',
+      }),
+    ).rejects.toThrow('Resource not found or unavailable');
+    await expect(
+      requestIngestion(otherContext, {
+        version: '1.0.0',
+        sourceVersionId: sharedVersion.id,
+        pipelineVersion: 'plain-v1',
+      }),
+    ).rejects.toThrow('Resource not found or unavailable');
+    await expect(
+      setSourceLifecycle(otherContext, sharedVersion.id, 'SUSPENDED', 'tenant cannot administer'),
+    ).rejects.toThrow('Resource not found or unavailable');
+    await prisma.user.update({
+      where: { id: workspace.user.id },
+      data: { platformAdmin: false, status: 'INACTIVE' },
+    });
+    await expect(
+      createKnowledgeSource(context, {
+        version: '1.0.0',
+        title: 'Inactive',
+        visibility: 'ORGANIZATION_PRIVATE',
+        origin: 'x',
+      }),
+    ).rejects.toThrow('Resource not found or unavailable');
   });
 });

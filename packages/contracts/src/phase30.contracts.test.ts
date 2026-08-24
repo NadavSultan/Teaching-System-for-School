@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  eligibleKnowledgeItemSchema,
   ingestionRequestSchema,
   retrievalRequestSchema,
   sourceCreationSchema,
@@ -58,6 +59,24 @@ describe('Phase 30 contracts', () => {
         curriculumVersionId: crypto.randomUUID(),
         curriculumNodeIds: [],
         limit: 51,
+      }),
+    ).toThrow();
+  });
+  it('rejects unknown persisted response fields at the mapping boundary', () => {
+    expect(() =>
+      eligibleKnowledgeItemSchema.parse({
+        version: '1.0.0',
+        id: crypto.randomUUID(),
+        sourceVersionId: crypto.randomUUID(),
+        locator: 'p:1',
+        textHash: 'a'.repeat(64),
+        metadata: {},
+        score: 0,
+        rank: 1,
+        curriculumVersionId: crypto.randomUUID(),
+        curriculumNodeId: crypto.randomUUID(),
+        visibility: 'PLATFORM_SHARED',
+        leakedText: 'no',
       }),
     ).toThrow();
   });
