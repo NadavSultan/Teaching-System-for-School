@@ -3,8 +3,21 @@ import { CONTRACT_VERSION } from '@teach/contracts';
 import {
   createKnowledgeSource,
   createPersonalWorkspace,
+  getIngestionStatus,
+  getKnowledgeItem,
   getKnowledgeSource,
+  getSourceVersion,
+  importCurriculumDraft,
   prisma,
+  publishCurriculumVersion,
+  recordPedagogicalReview,
+  recordUsagePermission,
+  registerSourceVersion,
+  requestIngestion,
+  resolvePlatformAccessContext,
+  retrieveEligibleKnowledge,
+  runIngestion,
+  setSourceLifecycle,
 } from './index.js';
 
 function context(
@@ -153,7 +166,14 @@ describe('Phase 30 persisted authorization matrix', () => {
       workspaceName: 'Curator',
     });
     await prisma.user.update({ where: { id: curator.user.id }, data: { platformAdmin: true } });
-    const platform = context(curator);
+    const platform = await resolvePlatformAccessContext({
+      version: CONTRACT_VERSION,
+      userId: curator.user.id,
+      email: curator.user.normalizedEmail,
+      provider: 'development',
+      providerSubject: `dev:${curator.user.id}`,
+      platformAdmin: false,
+    });
     const shared = await createKnowledgeSource(platform, {
       version: '1.0.0',
       title: 'platform shared',
@@ -205,27 +225,23 @@ describe('Phase 30 persisted authorization matrix', () => {
       ),
     ).rejects.toThrow('Resource not found or unavailable');
 
-    const platformOnly = await createPersonalWorkspace({
-      email: `p30-platform-only-${Date.now()}@example.test`,
-      workspaceName: 'Platform only',
-    });
-    const school = await prisma.organization.create({
-      data: { name: 'Platform-only school', workspaceType: 'SCHOOL' },
-    });
-    await prisma.membership.create({
+    const platformOnly = await prisma.user.create({
       data: {
-        userId: platformOnly.user.id,
-        organizationId: school.id,
-        role: 'PLATFORM_ADMIN',
-        status: 'INACTIVE',
+        normalizedEmail: `p30-platform-only-${Date.now()}@example.test`,
+        platformAdmin: true,
       },
     });
-    await prisma.user.update({
-      where: { id: platformOnly.user.id },
-      data: { platformAdmin: true },
+    expect(await prisma.membership.count({ where: { userId: platformOnly.id } })).toBe(0);
+    const platformOnlyContext = await resolvePlatformAccessContext({
+      version: CONTRACT_VERSION,
+      userId: platformOnly.id,
+      email: platformOnly.normalizedEmail,
+      provider: 'development',
+      providerSubject: `dev:${platformOnly.id}`,
+      platformAdmin: false,
     });
     expect(
-      await createKnowledgeSource(context(platformOnly, 'PLATFORM_ADMIN', school.id, 'SCHOOL'), {
+      await createKnowledgeSource(platformOnlyContext, {
         version: '1.0.0',
         title: 'platform-only curation',
         visibility: 'PLATFORM_SHARED',
@@ -233,12 +249,138 @@ describe('Phase 30 persisted authorization matrix', () => {
       }),
     ).toMatchObject({ organizationId: null });
 
+    const curriculum = await importCurriculumDraft({
+      version: '1.0.0',
+      code: `P30_PLATFORM_${Date.now()}`,
+      educationSystemCode: 'IL',
+      subjectCode: 'HE',
+      displayName: 'Platform',
+      versionNumber: 1,
+      nodes: [
+        {
+          type: 'GRADE',
+          code: 'G7',
+          label: 'ז',
+          sortOrder: 1,
+          children: [
+            {
+              type: 'DOMAIN',
+              code: 'D1',
+              label: 'ד',
+              sortOrder: 1,
+              children: [
+                {
+                  type: 'TOPIC',
+                  code: 'T1',
+                  label: 'נ',
+                  sortOrder: 1,
+                  children: [
+                    {
+                      type: 'SUBTOPIC',
+                      code: 'ST1',
+                      label: 'ת',
+                      sortOrder: 1,
+                      children: [
+                        {
+                          type: 'SKILL',
+                          code: 'S1',
+                          label: 'מיומנות',
+                          sortOrder: 1,
+                          difficulties: ['LOW'],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    await publishCurriculumVersion(curriculum.version.id, platformOnly.id);
+    const node = await prisma.curriculumNode.findFirstOrThrow({
+      where: { versionId: curriculum.version.id, code: 'S1' },
+    });
+    const platformOnlySource = await createKnowledgeSource(platformOnlyContext, {
+      version: '1.0.0',
+      title: 'platform-only full flow',
+      visibility: 'PLATFORM_SHARED',
+      origin: 'matrix',
+    });
+    const registration = {
+      version: '1.0.0' as const,
+      sourceId: platformOnlySource.id,
+      idempotencyKey: 'platform-only-v1',
+      content: 'platform only text',
+      contentReference: 'fixture://platform-only',
+      contentMimeType: 'text/plain',
+      metadata: {},
+      curriculumVersionId: curriculum.version.id,
+      curriculumNodeIds: [node.id],
+    };
+    const platformOnlyVersion = await registerSourceVersion(platformOnlyContext, registration);
+    expect(await registerSourceVersion(platformOnlyContext, registration)).toEqual(
+      platformOnlyVersion,
+    );
+    await recordPedagogicalReview(platformOnlyContext, {
+      version: '1.0.0',
+      sourceVersionId: platformOnlyVersion.id,
+      decision: 'APPROVED',
+      reason: 'platform-only',
+    });
+    await recordUsagePermission(platformOnlyContext, {
+      version: '1.0.0',
+      sourceVersionId: platformOnlyVersion.id,
+      decision: 'ALLOWED',
+      evidenceReference: 'platform-only',
+      scope: 'RETRIEVAL',
+    });
+    const platformOnlyRun = await requestIngestion(platformOnlyContext, {
+      version: '1.0.0',
+      sourceVersionId: platformOnlyVersion.id,
+      pipelineVersion: 'plain-v1',
+    });
+    await runIngestion(platformOnlyRun.id);
+    await setSourceLifecycle(
+      platformOnlyContext,
+      platformOnlyVersion.id,
+      'ACTIVE',
+      'platform-only',
+    );
+    expect(await getSourceVersion(platformOnlyContext, platformOnlyVersion.id)).toMatchObject({
+      lifecycle: 'ACTIVE',
+    });
+    expect(await getIngestionStatus(platformOnlyContext, platformOnlyRun.id)).toMatchObject({
+      status: 'SUCCEEDED',
+    });
+    const platformOnlyItem = await prisma.knowledgeItem.findFirstOrThrow({
+      where: { sourceVersionId: platformOnlyVersion.id },
+    });
+    expect(await getKnowledgeItem(platformOnlyContext, platformOnlyItem.id)).toMatchObject({
+      sourceVersionId: platformOnlyVersion.id,
+    });
+    expect(
+      (
+        await retrieveEligibleKnowledge(tenantContext, {
+          version: '1.0.0',
+          query: 'platform only',
+          organizationId: tenantContext.organizationId,
+          curriculumVersionId: curriculum.version.id,
+          curriculumNodeIds: [node.id],
+          limit: 10,
+        })
+      ).items,
+    ).toHaveLength(1);
+
     const privateSource = await createKnowledgeSource(tenantContext, {
       version: '1.0.0',
       title: 'tenant private',
       visibility: 'ORGANIZATION_PRIVATE',
       origin: 'matrix',
     });
-    expect(await getKnowledgeSource(platform, privateSource.id)).toBeNull();
+    await expect(getKnowledgeSource(platform, privateSource.id)).rejects.toThrow(
+      'Resource not found or unavailable',
+    );
   });
 });

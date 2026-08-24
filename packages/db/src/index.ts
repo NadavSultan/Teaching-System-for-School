@@ -27,6 +27,23 @@ import {
 
 export const prisma = new PrismaClient();
 
+export type PlatformAccessContext = {
+  kind: 'PLATFORM';
+  principal: AccessContext['principal'];
+};
+
+export async function resolvePlatformAccessContext(
+  principal: AccessContext['principal'],
+  client: PrismaClient = prisma,
+): Promise<PlatformAccessContext> {
+  const user = await client.user.findUnique({
+    where: { id: principal.userId },
+    select: { id: true, status: true, platformAdmin: true },
+  });
+  if (!user || user.status !== 'ACTIVE' || !user.platformAdmin) throw new AccessDeniedError();
+  return { kind: 'PLATFORM', principal };
+}
+
 /** Resolves the only trusted tenant context accepted by Assessment operations. */
 export async function resolveAccessContext(
   principal: AccessContext['principal'],
@@ -406,7 +423,7 @@ export async function createAssessment(
     await tx.auditEvent.create({
       data: {
         actorUserId: context.principal.userId,
-        organizationId: context.organizationId,
+        organizationId: isPlatformContext(context) ? null : context.organizationId,
         eventType: 'assessment.created',
         targetType: 'assessment',
         targetId: assessment.id,
@@ -504,7 +521,7 @@ export async function createAssessmentRevision(
     });
     if (existing) {
       if (existing.requestFingerprint !== fingerprint) throw new IdempotencyConflictError();
-      return existing;
+      return { ...existing };
     }
     const curriculum = await tx.curriculumVersion.findFirst({
       where: { id: parsed.curriculumVersionId, status: 'PUBLISHED' },
@@ -653,7 +670,7 @@ async function assertSourceContext(
 }
 
 async function requirePlatformCuration(
-  context: AccessContext,
+  context: PlatformAccessContext,
   client: PrismaClient,
 ): Promise<void> {
   const user = await client.user.findUnique({
@@ -663,12 +680,45 @@ async function requirePlatformCuration(
   if (!user || user.status !== 'ACTIVE' || !user.platformAdmin) throw new AccessDeniedError();
 }
 
-async function authorizeSourceMutation(
-  context: AccessContext,
+function isPlatformContext(
+  context: AccessContext | PlatformAccessContext,
+): context is PlatformAccessContext {
+  return 'kind' in context && context.kind === 'PLATFORM';
+}
+
+async function requirePlatformContext(
+  context: AccessContext | PlatformAccessContext,
+  client: PrismaClient,
+): Promise<PlatformAccessContext> {
+  if (!isPlatformContext(context)) throw new AccessDeniedError();
+  return resolvePlatformAccessContext(context.principal, client);
+}
+
+async function sourceReadAllowed(
+  context: AccessContext | PlatformAccessContext,
   source: { visibility: string; organizationId: string | null },
   client: PrismaClient,
 ): Promise<void> {
-  if (source.visibility === 'PLATFORM_SHARED') return requirePlatformCuration(context, client);
+  if (source.visibility === 'PLATFORM_SHARED') {
+    if (isPlatformContext(context)) await requirePlatformCuration(context, client);
+    else await assertSourceContext(context, context.organizationId, client, false);
+    return;
+  }
+  if (isPlatformContext(context) || source.organizationId !== context.organizationId)
+    throw new AccessDeniedError();
+  await assertSourceContext(context, source.organizationId ?? '', client, false);
+}
+
+async function authorizeSourceMutation(
+  context: AccessContext | PlatformAccessContext,
+  source: { visibility: string; organizationId: string | null },
+  client: PrismaClient,
+): Promise<void> {
+  if (source.visibility === 'PLATFORM_SHARED') {
+    await requirePlatformContext(context, client);
+    return;
+  }
+  if (isPlatformContext(context)) throw new AccessDeniedError();
   return assertSourceContext(context, source.organizationId ?? '', client, true);
 }
 
@@ -677,7 +727,7 @@ function mapSourceSummary(source: {
   title: string;
   visibility: 'PLATFORM_SHARED' | 'ORGANIZATION_PRIVATE';
   organizationId: string | null;
-  versions?: Array<{ lifecycle: any; lifecycleEvents?: Array<{ toStatus: any }> }>;
+  versions?: Array<{ lifecycleEvents?: Array<{ toStatus: any }> }>;
 }) {
   return sourceSummarySchema.parse({
     version: '1.0.0',
@@ -685,24 +735,44 @@ function mapSourceSummary(source: {
     title: source.title,
     visibility: source.visibility,
     organizationId: source.organizationId,
-    lifecycle:
-      source.versions?.[0]?.lifecycleEvents?.[0]?.toStatus ??
-      source.versions?.[0]?.lifecycle ??
-      'DRAFT',
+    lifecycle: source.versions?.[0]?.lifecycleEvents?.[0]?.toStatus ?? 'DRAFT',
+  });
+}
+
+function mapSourceVersionSummary(version: {
+  id: string;
+  sourceId: string;
+  versionNumber: number;
+  contentHash: string;
+  lifecycleEvents: Array<{ toStatus: any }>;
+}) {
+  return sourceVersionSummarySchema.parse({
+    version: '1.0.0',
+    id: version.id,
+    sourceId: version.sourceId,
+    versionNumber: version.versionNumber,
+    contentHash: version.contentHash,
+    lifecycle: version.lifecycleEvents[0]?.toStatus,
   });
 }
 
 export async function createKnowledgeSource(
-  context: AccessContext,
+  context: AccessContext | PlatformAccessContext,
   input: unknown,
   client: PrismaClient = prisma,
 ) {
   const parsed = sourceCreationSchema.parse(input);
-  if (parsed.visibility === 'PLATFORM_SHARED') await requirePlatformCuration(context, client);
-  else await assertSourceContext(context, context.organizationId, client, true);
+  if (parsed.visibility === 'PLATFORM_SHARED') await requirePlatformContext(context, client);
+  else {
+    if (isPlatformContext(context)) throw new AccessDeniedError();
+    await assertSourceContext(context, context.organizationId, client, true);
+  }
   const source = await client.knowledgeSource.create({
     data: {
-      organizationId: parsed.visibility === 'ORGANIZATION_PRIVATE' ? context.organizationId : null,
+      organizationId:
+        parsed.visibility === 'ORGANIZATION_PRIVATE' && !isPlatformContext(context)
+          ? context.organizationId
+          : null,
       visibility: parsed.visibility,
       title: parsed.title,
       origin: parsed.origin,
@@ -712,7 +782,7 @@ export async function createKnowledgeSource(
   await client.auditEvent.create({
     data: {
       actorUserId: context.principal.userId,
-      organizationId: context.organizationId,
+      organizationId: isPlatformContext(context) ? null : context.organizationId,
       eventType: 'source.created',
       targetType: 'knowledge_source',
       targetId: source.id,
@@ -723,7 +793,7 @@ export async function createKnowledgeSource(
 }
 
 export async function registerSourceVersion(
-  context: AccessContext,
+  context: AccessContext | PlatformAccessContext,
   input: unknown,
   client: PrismaClient = prisma,
 ) {
@@ -731,10 +801,14 @@ export async function registerSourceVersion(
   const source = await client.knowledgeSource.findFirst({
     where: {
       id: parsed.sourceId,
-      OR: [
-        { organizationId: context.organizationId },
-        { visibility: 'PLATFORM_SHARED', organizationId: null },
-      ],
+      ...(isPlatformContext(context)
+        ? { visibility: 'PLATFORM_SHARED', organizationId: null }
+        : {
+            OR: [
+              { organizationId: context.organizationId },
+              { visibility: 'PLATFORM_SHARED', organizationId: null },
+            ],
+          }),
     },
   });
   if (!source) throw new AccessDeniedError();
@@ -753,7 +827,11 @@ export async function registerSourceVersion(
     });
     if (existing) {
       if (existing.requestFingerprint !== fingerprint) throw new IdempotencyConflictError();
-      return existing;
+      const existingWithEvidence = await tx.sourceVersion.findUniqueOrThrow({
+        where: { id: existing.id },
+        include: { lifecycleEvents: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1 } },
+      });
+      return mapSourceVersionSummary(existingWithEvidence);
     }
     const curriculum = await tx.curriculumVersion.findFirst({
       where: { id: parsed.curriculumVersionId, status: 'PUBLISHED' },
@@ -802,40 +880,42 @@ export async function registerSourceVersion(
     await tx.auditEvent.create({
       data: {
         actorUserId: context.principal.userId,
-        organizationId: context.organizationId,
+        organizationId: isPlatformContext(context) ? null : context.organizationId,
         eventType: 'source.version.registered',
         targetType: 'source_version',
         targetId: version.id,
         metadata: { versionNumber: version.versionNumber, contentHash },
       },
     });
-    return sourceVersionSummarySchema.parse({
-      version: '1.0.0',
-      id: version.id,
-      sourceId: version.sourceId,
-      versionNumber: version.versionNumber,
-      contentHash: version.contentHash,
-      lifecycle: version.lifecycle,
+    const withEvidence = await tx.sourceVersion.findUniqueOrThrow({
+      where: { id: version.id },
+      include: { lifecycleEvents: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1 } },
     });
+    return mapSourceVersionSummary(withEvidence);
   });
 }
 
+async function findSourceVersionForContext(
+  context: AccessContext | PlatformAccessContext,
+  sourceVersionId: string,
+  client: PrismaClient,
+) {
+  const version = await client.sourceVersion.findUnique({
+    where: { id: sourceVersionId },
+    include: { source: true },
+  });
+  if (!version) throw new AccessDeniedError();
+  await sourceReadAllowed(context, version.source, client);
+  return version;
+}
+
 export async function recordPedagogicalReview(
-  context: AccessContext,
+  context: AccessContext | PlatformAccessContext,
   input: unknown,
   client: PrismaClient = prisma,
 ) {
   const parsed = pedagogicalReviewDecisionSchema.parse(input);
-  const version = await client.sourceVersion.findUnique({
-    where: { id: parsed.sourceVersionId },
-    include: { source: true },
-  });
-  if (
-    !version ||
-    (version.source.organizationId !== context.organizationId &&
-      version.source.visibility !== 'PLATFORM_SHARED')
-  )
-    throw new AccessDeniedError();
+  const version = await findSourceVersionForContext(context, parsed.sourceVersionId, client);
   await authorizeSourceMutation(context, version.source, client);
   const row = await client.pedagogicalReview.create({
     data: {
@@ -849,32 +929,29 @@ export async function recordPedagogicalReview(
   await client.auditEvent.create({
     data: {
       actorUserId: context.principal.userId,
-      organizationId: context.organizationId,
+      organizationId: isPlatformContext(context) ? null : context.organizationId,
       eventType: 'source.review.recorded',
       targetType: 'source_version',
       targetId: version.id,
       metadata: { decision: row.decision },
     },
   });
-  return row;
+  return pedagogicalReviewDecisionSchema.parse({
+    version: '1.0.0',
+    sourceVersionId: row.sourceVersionId,
+    decision: row.decision,
+    reason: row.reason,
+    evidenceMetadata: row.evidenceMetadata,
+  });
 }
 
 export async function recordUsagePermission(
-  context: AccessContext,
+  context: AccessContext | PlatformAccessContext,
   input: unknown,
   client: PrismaClient = prisma,
 ) {
   const parsed = usagePermissionDecisionContractSchema.parse(input);
-  const version = await client.sourceVersion.findUnique({
-    where: { id: parsed.sourceVersionId },
-    include: { source: true },
-  });
-  if (
-    !version ||
-    (version.source.organizationId !== context.organizationId &&
-      version.source.visibility !== 'PLATFORM_SHARED')
-  )
-    throw new AccessDeniedError();
+  const version = await findSourceVersionForContext(context, parsed.sourceVersionId, client);
   await authorizeSourceMutation(context, version.source, client);
   const row = await client.usagePermission.create({
     data: {
@@ -889,87 +966,73 @@ export async function recordUsagePermission(
   await client.auditEvent.create({
     data: {
       actorUserId: context.principal.userId,
-      organizationId: context.organizationId,
+      organizationId: isPlatformContext(context) ? null : context.organizationId,
       eventType: 'source.permission.recorded',
       targetType: 'source_version',
       targetId: version.id,
       metadata: { decision: row.decision, scope: row.scope },
     },
   });
-  return row;
+  return usagePermissionDecisionContractSchema.parse({
+    version: '1.0.0',
+    sourceVersionId: row.sourceVersionId,
+    decision: row.decision,
+    evidenceReference: row.evidenceReference,
+    scope: row.scope,
+    validUntil: row.validUntil?.toISOString() ?? null,
+  });
 }
 
 export async function setSourceLifecycle(
-  context: AccessContext,
+  context: AccessContext | PlatformAccessContext,
   sourceVersionId: string,
   toStatus: 'ACTIVE' | 'SUSPENDED' | 'DEPRECATED' | 'FAILED' | 'NEEDS_RE_REVIEW',
   reason: string,
   client: PrismaClient = prisma,
 ) {
-  const version = await client.sourceVersion.findUnique({
-    where: { id: sourceVersionId },
-    include: { source: true },
-  });
-  if (
-    !version ||
-    (version.source.organizationId !== context.organizationId &&
-      version.source.visibility !== 'PLATFORM_SHARED')
-  )
-    throw new AccessDeniedError();
+  const version = await findSourceVersionForContext(context, sourceVersionId, client);
   await authorizeSourceMutation(context, version.source, client);
   if (reason.length < 1 || reason.length > 1000) throw new Error('InvalidLifecycleReason');
   return client.$transaction(async (tx) => {
-    const locked = await tx.sourceVersion.findUniqueOrThrow({ where: { id: version.id } });
+    const lockedRows = await tx.$queryRaw<
+      Array<{ id: string; sourceId: string; versionNumber: number; contentHash: string }>
+    >`SELECT id, source_id AS "sourceId", version_number AS "versionNumber", content_hash AS "contentHash" FROM source_versions WHERE id = ${sourceVersionId}::uuid FOR UPDATE`;
+    const locked = lockedRows[0];
+    if (!locked) throw new AccessDeniedError();
     const latest = await tx.sourceLifecycleEvent.findFirst({
-      where: { sourceVersionId: version.id },
+      where: { sourceVersionId },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
-    if (!latest || latest.toStatus !== locked.lifecycle)
-      throw new Error('Lifecycle evidence is inconsistent');
+    if (!latest) throw new Error('Lifecycle evidence is inconsistent');
     await tx.sourceLifecycleEvent.create({
       data: {
-        sourceVersionId: version.id,
-        sourceId: version.sourceId,
+        sourceVersionId,
+        sourceId: locked.sourceId,
         organizationId: version.source.organizationId,
         actorUserId: context.principal.userId,
-        fromStatus: version.lifecycle,
+        fromStatus: latest.toStatus,
         toStatus,
         reason,
         safeMetadata: {},
       },
     });
-    await tx.$executeRawUnsafe(`SET LOCAL phase30.lifecycle_transition = '1'`);
-    const updated = await tx.sourceVersion.update({
-      where: { id: version.id },
-      data: { lifecycle: toStatus },
-    });
-    return sourceVersionSummarySchema.parse({
-      version: '1.0.0',
-      id: updated.id,
-      sourceId: updated.sourceId,
-      versionNumber: updated.versionNumber,
-      contentHash: updated.contentHash,
-      lifecycle: updated.lifecycle,
+    return mapSourceVersionSummary({
+      id: locked.id,
+      sourceId: locked.sourceId,
+      versionNumber: locked.versionNumber,
+      contentHash: locked.contentHash,
+      lifecycleEvents: [{ toStatus }],
     });
   });
 }
 
 export async function requestIngestion(
-  context: AccessContext,
+  context: AccessContext | PlatformAccessContext,
   input: unknown,
   client: PrismaClient = prisma,
 ) {
   const parsed = ingestionRequestSchema.parse(input);
-  const version = await client.sourceVersion.findUnique({
-    where: { id: parsed.sourceVersionId },
-    include: { source: true },
-  });
-  if (
-    !version ||
-    (version.source.organizationId !== context.organizationId &&
-      version.source.visibility !== 'PLATFORM_SHARED')
-  )
-    throw new AccessDeniedError();
+  const version = await findSourceVersionForContext(context, parsed.sourceVersionId, client);
   await authorizeSourceMutation(context, version.source, client);
   const run = await client.ingestionRun.upsert({
     where: {
@@ -1095,46 +1158,45 @@ export async function retrieveEligibleKnowledge(
   const parsed = retrievalRequestSchema.parse(input);
   await assertSourceContext(context, parsed.organizationId, client);
   const query = parsed.query.trim();
-  const eligibleVersions = await client.$queryRaw<
-    Array<{ id: string }>
-  >`SELECT sv.id FROM source_versions sv JOIN knowledge_sources ks ON ks.id = sv.source_id JOIN LATERAL (SELECT to_status FROM source_lifecycle_events WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) sl ON true JOIN LATERAL (SELECT decision FROM pedagogical_reviews WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) pr ON true JOIN LATERAL (SELECT decision, valid_until FROM usage_permissions WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) up ON true WHERE sl.to_status = 'ACTIVE' AND pr.decision = 'APPROVED' AND up.decision = 'ALLOWED' AND (up.valid_until IS NULL OR up.valid_until > NOW()) AND (ks.visibility = 'PLATFORM_SHARED' OR ks.organization_id = ${context.organizationId}::uuid)`;
-  const eligibleVersionIds = new Set(eligibleVersions.map((row) => row.id));
   const rows = await client.$queryRaw<
     Array<any>
-  >`SELECT ki.id, ki.source_version_id AS "sourceVersionId", ki.locator, ki.text_hash AS "textHash", ki.metadata, ki.visibility, link.curriculum_version_id AS "curriculumVersionId", link.curriculum_node_id AS "curriculumNodeId", ts_rank(ki.search_vector, plainto_tsquery('simple', ${query})) AS score FROM knowledge_items ki JOIN knowledge_item_curriculum_node_links link ON link.knowledge_item_id = ki.id JOIN source_versions sv ON sv.id = ki.source_version_id JOIN knowledge_sources ks ON ks.id = sv.source_id JOIN LATERAL (SELECT decision FROM pedagogical_reviews WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) pr ON true JOIN LATERAL (SELECT decision, valid_until FROM usage_permissions WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) up ON true JOIN curriculum_versions cv ON cv.id = link.curriculum_version_id WHERE ki.status = 'ACTIVE' AND sv.lifecycle = 'ACTIVE' AND pr.decision = 'APPROVED' AND up.decision = 'ALLOWED' AND (up.valid_until IS NULL OR up.valid_until > NOW()) AND cv.status = 'PUBLISHED' AND link.curriculum_version_id = ${parsed.curriculumVersionId}::uuid AND link.curriculum_node_id = ANY(${parsed.curriculumNodeIds}::uuid[]) AND (ks.visibility = 'PLATFORM_SHARED' OR ks.organization_id = ${context.organizationId}::uuid) AND (${query} = '' OR ki.search_vector @@ plainto_tsquery('simple', ${query})) ORDER BY score DESC, ki.id ASC LIMIT ${parsed.limit}`;
-  const items = rows
-    .filter((row) => eligibleVersionIds.has(row.sourceVersionId))
-    .map((row, index) =>
-      eligibleKnowledgeItemSchema.parse({
-        version: '1.0.0',
-        id: row.id,
-        sourceVersionId: row.sourceVersionId,
-        locator: row.locator,
-        textHash: row.textHash,
-        metadata: row.metadata ?? {},
-        score: Number(row.score),
-        rank: index + 1,
-        curriculumVersionId: row.curriculumVersionId,
-        curriculumNodeId: row.curriculumNodeId,
-        visibility: row.visibility,
-      }),
-    );
+  >`SELECT ki.id, ki.source_version_id AS "sourceVersionId", ki.locator, ki.text_hash AS "textHash", ki.metadata, ki.visibility, link.curriculum_version_id AS "curriculumVersionId", link.curriculum_node_id AS "curriculumNodeId", ts_rank(ki.search_vector, plainto_tsquery('simple', ${query})) AS score FROM knowledge_items ki JOIN knowledge_item_curriculum_node_links link ON link.knowledge_item_id = ki.id JOIN source_versions sv ON sv.id = ki.source_version_id JOIN knowledge_sources ks ON ks.id = sv.source_id JOIN LATERAL (SELECT to_status FROM source_lifecycle_events WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) sl ON true JOIN LATERAL (SELECT decision FROM pedagogical_reviews WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) pr ON true JOIN LATERAL (SELECT decision, valid_until FROM usage_permissions WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) up ON true JOIN curriculum_versions cv ON cv.id = link.curriculum_version_id WHERE ki.status = 'ACTIVE' AND sl.to_status = 'ACTIVE' AND pr.decision = 'APPROVED' AND up.decision = 'ALLOWED' AND (up.valid_until IS NULL OR up.valid_until > NOW()) AND cv.status = 'PUBLISHED' AND link.curriculum_version_id = ${parsed.curriculumVersionId}::uuid AND link.curriculum_node_id = ANY(${parsed.curriculumNodeIds}::uuid[]) AND (ks.visibility = 'PLATFORM_SHARED' OR ks.organization_id = ${context.organizationId}::uuid) AND (${query} = '' OR ki.search_vector @@ plainto_tsquery('simple', ${query})) ORDER BY score DESC, ki.id ASC LIMIT ${parsed.limit}`;
+  const items = rows.map((row, index) =>
+    eligibleKnowledgeItemSchema.parse({
+      version: '1.0.0',
+      id: row.id,
+      sourceVersionId: row.sourceVersionId,
+      locator: row.locator,
+      textHash: row.textHash,
+      metadata: row.metadata ?? {},
+      score: Number(row.score),
+      rank: index + 1,
+      curriculumVersionId: row.curriculumVersionId,
+      curriculumNodeId: row.curriculumNodeId,
+      visibility: row.visibility,
+    }),
+  );
   return retrievalResultSchema.parse({ version: '1.0.0', items });
 }
 
 export async function getKnowledgeSource(
-  context: AccessContext,
+  context: AccessContext | PlatformAccessContext,
   sourceId: string,
   client: PrismaClient = prisma,
 ) {
-  await assertSourceContext(context, context.organizationId, client);
+  if (isPlatformContext(context)) await requirePlatformCuration(context, client);
+  else await assertSourceContext(context, context.organizationId, client);
   const source = await client.knowledgeSource.findFirst({
     where: {
       id: sourceId,
-      OR: [
-        { organizationId: context.organizationId },
-        { visibility: 'PLATFORM_SHARED', organizationId: null },
-      ],
+      ...(isPlatformContext(context)
+        ? { visibility: 'PLATFORM_SHARED', organizationId: null }
+        : {
+            OR: [
+              { organizationId: context.organizationId },
+              { visibility: 'PLATFORM_SHARED', organizationId: null },
+            ],
+          }),
     },
     include: {
       versions: {
@@ -1148,49 +1210,52 @@ export async function getKnowledgeSource(
 }
 
 export async function getSourceVersion(
-  context: AccessContext,
+  context: AccessContext | PlatformAccessContext,
   sourceVersionId: string,
   client: PrismaClient = prisma,
 ) {
-  await assertSourceContext(context, context.organizationId, client);
+  if (isPlatformContext(context)) await requirePlatformCuration(context, client);
+  else await assertSourceContext(context, context.organizationId, client);
   const version = await client.sourceVersion.findFirst({
     where: {
       id: sourceVersionId,
       source: {
-        OR: [
-          { organizationId: context.organizationId },
-          { visibility: 'PLATFORM_SHARED', organizationId: null },
-        ],
+        ...(isPlatformContext(context)
+          ? { visibility: 'PLATFORM_SHARED', organizationId: null }
+          : {
+              OR: [
+                { organizationId: context.organizationId },
+                { visibility: 'PLATFORM_SHARED', organizationId: null },
+              ],
+            }),
       },
     },
     include: { lifecycleEvents: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1 } },
   });
   if (!version) return null;
-  return sourceVersionSummarySchema.parse({
-    version: '1.0.0',
-    id: version.id,
-    sourceId: version.sourceId,
-    versionNumber: version.versionNumber,
-    contentHash: version.contentHash,
-    lifecycle: version.lifecycleEvents[0]?.toStatus ?? version.lifecycle,
-  });
+  return mapSourceVersionSummary(version);
 }
 
 export async function getKnowledgeItem(
-  context: AccessContext,
+  context: AccessContext | PlatformAccessContext,
   itemId: string,
   client: PrismaClient = prisma,
 ) {
-  await assertSourceContext(context, context.organizationId, client);
+  if (isPlatformContext(context)) await requirePlatformCuration(context, client);
+  else await assertSourceContext(context, context.organizationId, client);
   const item = await client.knowledgeItem.findFirst({
     where: {
       id: itemId,
       sourceVersion: {
         source: {
-          OR: [
-            { organizationId: context.organizationId },
-            { visibility: 'PLATFORM_SHARED', organizationId: null },
-          ],
+          ...(isPlatformContext(context)
+            ? { visibility: 'PLATFORM_SHARED', organizationId: null }
+            : {
+                OR: [
+                  { organizationId: context.organizationId },
+                  { visibility: 'PLATFORM_SHARED', organizationId: null },
+                ],
+              }),
         },
       },
     },
@@ -1217,20 +1282,25 @@ export async function getKnowledgeItem(
 }
 
 export async function getIngestionStatus(
-  context: AccessContext,
+  context: AccessContext | PlatformAccessContext,
   ingestionRunId: string,
   client: PrismaClient = prisma,
 ) {
-  await assertSourceContext(context, context.organizationId, client);
+  if (isPlatformContext(context)) await requirePlatformCuration(context, client);
+  else await assertSourceContext(context, context.organizationId, client);
   const run = await client.ingestionRun.findFirst({
     where: {
       id: ingestionRunId,
       sourceVersion: {
         source: {
-          OR: [
-            { organizationId: context.organizationId },
-            { visibility: 'PLATFORM_SHARED', organizationId: null },
-          ],
+          ...(isPlatformContext(context)
+            ? { visibility: 'PLATFORM_SHARED', organizationId: null }
+            : {
+                OR: [
+                  { organizationId: context.organizationId },
+                  { visibility: 'PLATFORM_SHARED', organizationId: null },
+                ],
+              }),
         },
       },
     },

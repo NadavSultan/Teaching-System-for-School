@@ -17,6 +17,7 @@
     "test": "vitest run --exclude '**/*.integration.test.ts'",
     "test-integration": "vitest run --config vitest.integration.config.ts",
     "test-integration:local": "node scripts/with-test-postgres.mjs",
+    "test-integration:upgrade": "node scripts/phase30-upgrade-test.mjs",
     "test:architecture": "vitest run tests/architecture.test.ts",
     "contracts:generate": "pnpm --filter @teach/contracts build && node packages/contracts/scripts/generate-schemas.mjs",
     "contracts:check": "pnpm --filter @teach/contracts build && node packages/contracts/scripts/generate-schemas.mjs --check && vitest run packages/contracts/src",

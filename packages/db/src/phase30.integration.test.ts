@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { CONTRACT_VERSION } from '@teach/contracts';
 import {
   createPersonalWorkspace,
@@ -18,6 +19,7 @@ import {
   getSourceVersion,
   getKnowledgeItem,
   getIngestionStatus,
+  resolvePlatformAccessContext,
 } from './index.js';
 
 describe('Phase 30 source registry and controlled knowledge', () => {
@@ -127,6 +129,12 @@ describe('Phase 30 source registry and controlled knowledge', () => {
       curriculumNodeIds: [skill.id],
     };
     const version = await registerSourceVersion(context, registration);
+    const initialLifecycleEvents = await prisma.sourceLifecycleEvent.findMany({
+      where: { sourceVersionId: version.id },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    });
+    expect(initialLifecycleEvents).toHaveLength(1);
+    expect(initialLifecycleEvents[0]).toMatchObject({ fromStatus: null, toStatus: 'DRAFT' });
     await expect(registerSourceVersion(otherContext, registration)).rejects.toThrow(
       'Resource not found or unavailable',
     );
@@ -350,7 +358,7 @@ describe('Phase 30 source registry and controlled knowledge', () => {
     ).rejects.toThrow('immutable');
     await expect(
       prisma.sourceVersion.update({ where: { id: version.id }, data: { lifecycle: 'ACTIVE' } }),
-    ).rejects.toThrow('controlled evidence');
+    ).rejects.toThrow('source lifecycle is controlled');
     await expect(
       prisma.knowledgeItem.update({
         where: { id: firstItem!.id },
@@ -373,6 +381,31 @@ describe('Phase 30 source registry and controlled knowledge', () => {
         })
       ).items,
     ).toHaveLength(0);
+    for (const status of ['DEPRECATED', 'FAILED', 'NEEDS_RE_REVIEW'] as const) {
+      await setSourceLifecycle(context, version.id, status, `eligibility ${status}`);
+      expect(
+        (
+          await retrieveEligibleKnowledge(context, {
+            version: '1.0.0',
+            query: 'שלום',
+            organizationId: context.organizationId,
+            curriculumVersionId: curriculum.version.id,
+            curriculumNodeIds: [skill.id],
+            limit: 10,
+          })
+        ).items,
+      ).toHaveLength(0);
+    }
+    const lifecycleHistory = await prisma.sourceLifecycleEvent.findMany({
+      where: { sourceVersionId: version.id },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+    expect(lifecycleHistory.at(-1)?.toStatus).toBe('NEEDS_RE_REVIEW');
+    expect(
+      lifecycleHistory.every(
+        (event, index) => index === 0 || event.fromStatus === lifecycleHistory[index - 1]?.toStatus,
+      ),
+    ).toBe(true);
     const version2 = await registerSourceVersion(context, {
       ...registration,
       idempotencyKey: 'v2',
@@ -380,6 +413,21 @@ describe('Phase 30 source registry and controlled knowledge', () => {
       contentReference: 'fixture://phase30-v2',
     });
     expect(version2.id).not.toBe(version.id);
+    await Promise.all([
+      setSourceLifecycle(context, version2.id, 'ACTIVE', 'concurrent activate'),
+      setSourceLifecycle(context, version2.id, 'SUSPENDED', 'concurrent suspend'),
+    ]);
+    const concurrentHistory = await prisma.sourceLifecycleEvent.findMany({
+      where: { sourceVersionId: version2.id },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+    expect(concurrentHistory).toHaveLength(3);
+    expect(
+      concurrentHistory.every(
+        (event, index) =>
+          index === 0 || event.fromStatus === concurrentHistory[index - 1]?.toStatus,
+      ),
+    ).toBe(true);
 
     const otherSource = await createKnowledgeSource(otherContext, {
       version: '1.0.0',
@@ -479,6 +527,28 @@ describe('Phase 30 source registry and controlled knowledge', () => {
         data: { curriculumNodeId: skill.id },
       }),
     ).rejects.toThrow('append-only');
+    const retrievalSource = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+    expect(retrievalSource).toContain('ki.search_vector @@ plainto_tsquery');
+    expect(retrievalSource).toContain('source_lifecycle_events');
+    expect(retrievalSource).not.toContain('sv.lifecycle');
+    expect(retrievalSource).not.toContain("to_tsvector('simple'");
+    const finalMigration = readFileSync(
+      new URL(
+        '../prisma/migrations/20260824003200_phase30_final_remediation/migration.sql',
+        import.meta.url,
+      ),
+      'utf8',
+    );
+    const previousMigration = readFileSync(
+      new URL(
+        '../prisma/migrations/20260824003100_phase30_remediation/migration.sql',
+        import.meta.url,
+      ),
+      'utf8',
+    );
+    expect(`${retrievalSource}\n${finalMigration}\n${previousMigration}`).not.toContain(
+      'phase30.' + 'lifecycle_transition',
+    );
     const sourceLink = await prisma.sourceVersionCurriculumNodeLink.findFirstOrThrow({
       where: { sourceVersionId: version.id },
     });
@@ -493,7 +563,9 @@ describe('Phase 30 source registry and controlled knowledge', () => {
     ).rejects.toThrow('append-only');
 
     await prisma.user.update({ where: { id: workspace.user.id }, data: { platformAdmin: true } });
-    const shared = await createKnowledgeSource(context, {
+    const platformContext = await resolvePlatformAccessContext(context.principal);
+    expect('organizationId' in platformContext).toBe(false);
+    const shared = await createKnowledgeSource(platformContext, {
       version: '1.0.0',
       title: 'Shared',
       visibility: 'PLATFORM_SHARED',
@@ -505,7 +577,47 @@ describe('Phase 30 source registry and controlled knowledge', () => {
       idempotencyKey: 'shared-v1',
       content: 'תוכן משותף',
     };
-    const sharedVersion = await registerSourceVersion(context, sharedRegistration);
+    const sharedVersion = await registerSourceVersion(platformContext, sharedRegistration);
+    const sharedAudit = await prisma.auditEvent.findMany({
+      where: { targetId: { in: [shared.id, sharedVersion.id] } },
+    });
+    expect(sharedAudit.length).toBeGreaterThanOrEqual(2);
+    expect(sharedAudit.every((event) => event.organizationId === null)).toBe(true);
+    await recordPedagogicalReview(platformContext, {
+      version: '1.0.0',
+      sourceVersionId: sharedVersion.id,
+      decision: 'APPROVED',
+      reason: 'platform review',
+    });
+    await recordUsagePermission(platformContext, {
+      version: '1.0.0',
+      sourceVersionId: sharedVersion.id,
+      decision: 'ALLOWED',
+      evidenceReference: 'platform permission',
+      scope: 'RETRIEVAL',
+    });
+    const sharedRun = await requestIngestion(platformContext, {
+      version: '1.0.0',
+      sourceVersionId: sharedVersion.id,
+      pipelineVersion: 'plain-v1',
+    });
+    await runIngestion(sharedRun.id);
+    await setSourceLifecycle(platformContext, sharedVersion.id, 'ACTIVE', 'platform activation');
+    const sharedLifecycle = await prisma.sourceLifecycleEvent.findMany({
+      where: { sourceVersionId: sharedVersion.id },
+    });
+    const sharedOutbox = await prisma.outboxEvent.findMany({
+      where: { payload: { path: ['ingestionRunId'], equals: sharedRun.id } },
+    });
+    expect(sharedLifecycle.every((event) => event.organizationId === null)).toBe(true);
+    expect(sharedOutbox.every((event) => event.organizationId === null)).toBe(true);
+    expect(await getSourceVersion(platformContext, sharedVersion.id)).toMatchObject({
+      lifecycle: 'ACTIVE',
+    });
+    expect(await getIngestionStatus(platformContext, sharedRun.id)).toMatchObject({
+      status: 'SUCCEEDED',
+    });
+    expect(await getKnowledgeSource(otherContext, shared.id)).toMatchObject({ id: shared.id });
     await expect(
       recordPedagogicalReview(otherContext, {
         version: '1.0.0',

@@ -21,16 +21,3 @@ DROP TRIGGER IF EXISTS knowledge_item_provenance_immutable ON knowledge_items;
 CREATE TRIGGER knowledge_item_provenance_immutable BEFORE UPDATE OR DELETE ON knowledge_items FOR EACH ROW EXECUTE FUNCTION phase30_remediation_item_guard();
 CREATE TRIGGER source_version_curriculum_append_only BEFORE UPDATE OR DELETE ON source_version_curriculum_node_links FOR EACH ROW EXECUTE FUNCTION phase30_remediation_append_only();
 CREATE TRIGGER knowledge_item_curriculum_append_only BEFORE UPDATE OR DELETE ON knowledge_item_curriculum_node_links FOR EACH ROW EXECUTE FUNCTION phase30_remediation_append_only();
-CREATE OR REPLACE FUNCTION phase30_controlled_lifecycle_update() RETURNS trigger AS $$ BEGIN
-  IF current_setting('phase30.lifecycle_transition', true) IS DISTINCT FROM '1' THEN RAISE EXCEPTION 'source lifecycle is controlled evidence'; END IF;
-  RETURN NEW;
-END; $$ LANGUAGE plpgsql;
-CREATE TRIGGER source_version_lifecycle_controlled BEFORE UPDATE OF lifecycle ON source_versions FOR EACH ROW EXECUTE FUNCTION phase30_controlled_lifecycle_update();
-CREATE OR REPLACE FUNCTION phase30_lifecycle_evidence_match() RETURNS trigger AS $$ DECLARE latest "SourceLifecycleStatus"; BEGIN
-  SELECT to_status INTO latest FROM source_lifecycle_events WHERE source_version_id=NEW.id ORDER BY created_at DESC, id DESC LIMIT 1;
-  IF latest IS DISTINCT FROM NEW.lifecycle THEN RAISE EXCEPTION 'source lifecycle requires matching append-only evidence'; END IF;
-  RETURN NULL;
-END; $$ LANGUAGE plpgsql;
-CREATE CONSTRAINT TRIGGER source_version_lifecycle_evidence AFTER UPDATE OF lifecycle ON source_versions DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION phase30_lifecycle_evidence_match();
-CREATE OR REPLACE FUNCTION phase30_item_status_immutable() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'knowledge item status is immutable; source lifecycle controls eligibility'; END; $$ LANGUAGE plpgsql;
-CREATE TRIGGER knowledge_item_status_immutable BEFORE UPDATE OF status ON knowledge_items FOR EACH ROW EXECUTE FUNCTION phase30_item_status_immutable();
