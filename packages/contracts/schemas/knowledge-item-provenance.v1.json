@@ -1,0 +1,97 @@
+{
+  "$ref": "#/definitions/KnowledgeItemProvenanceV1",
+  "definitions": {
+    "KnowledgeItemProvenanceV1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sourceVersionId": {
+          "$ref": "#/definitions/KnowledgeItemProvenanceV1/properties/id"
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "textHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          }
+        },
+        "pipelineVersion": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "parserVersion": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "visibility": {
+          "type": "string",
+          "enum": [
+            "PLATFORM_SHARED",
+            "ORGANIZATION_PRIVATE"
+          ]
+        },
+        "curriculumLineage": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "curriculumVersionId": {
+                "$ref": "#/definitions/KnowledgeItemProvenanceV1/properties/id"
+              },
+              "curriculumNodeId": {
+                "$ref": "#/definitions/KnowledgeItemProvenanceV1/properties/id"
+              }
+            },
+            "required": [
+              "curriculumVersionId",
+              "curriculumNodeId"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 1000
+        }
+      },
+      "required": [
+        "version",
+        "id",
+        "sourceVersionId",
+        "locator",
+        "textHash",
+        "metadata",
+        "pipelineVersion",
+        "parserVersion",
+        "visibility",
+        "curriculumLineage"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

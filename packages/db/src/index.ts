@@ -22,6 +22,7 @@ import {
   retrievalResultSchema,
   sourceSummarySchema,
   sourceVersionSummarySchema,
+  knowledgeItemProvenanceSchema,
 } from '@teach/contracts';
 
 export const prisma = new PrismaClient();
@@ -676,7 +677,7 @@ function mapSourceSummary(source: {
   title: string;
   visibility: 'PLATFORM_SHARED' | 'ORGANIZATION_PRIVATE';
   organizationId: string | null;
-  versions?: Array<{ lifecycle: any }>;
+  versions?: Array<{ lifecycle: any; lifecycleEvents?: Array<{ toStatus: any }> }>;
 }) {
   return sourceSummarySchema.parse({
     version: '1.0.0',
@@ -684,7 +685,10 @@ function mapSourceSummary(source: {
     title: source.title,
     visibility: source.visibility,
     organizationId: source.organizationId,
-    lifecycle: source.versions?.[0]?.lifecycle ?? 'DRAFT',
+    lifecycle:
+      source.versions?.[0]?.lifecycleEvents?.[0]?.toStatus ??
+      source.versions?.[0]?.lifecycle ??
+      'DRAFT',
   });
 }
 
@@ -782,6 +786,18 @@ export async function registerSourceVersion(
     });
     await tx.sourceVersionContent.create({
       data: { sourceVersionId: version.id, contentHash, content: parsed.content },
+    });
+    await tx.sourceLifecycleEvent.create({
+      data: {
+        sourceVersionId: version.id,
+        sourceId: version.sourceId,
+        organizationId: source.organizationId,
+        actorUserId: context.principal.userId,
+        fromStatus: null,
+        toStatus: 'DRAFT',
+        reason: 'Source version registered',
+        safeMetadata: {},
+      },
     });
     await tx.auditEvent.create({
       data: {
@@ -903,10 +919,13 @@ export async function setSourceLifecycle(
   await authorizeSourceMutation(context, version.source, client);
   if (reason.length < 1 || reason.length > 1000) throw new Error('InvalidLifecycleReason');
   return client.$transaction(async (tx) => {
-    const updated = await tx.sourceVersion.update({
-      where: { id: version.id },
-      data: { lifecycle: toStatus },
+    const locked = await tx.sourceVersion.findUniqueOrThrow({ where: { id: version.id } });
+    const latest = await tx.sourceLifecycleEvent.findFirst({
+      where: { sourceVersionId: version.id },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
+    if (!latest || latest.toStatus !== locked.lifecycle)
+      throw new Error('Lifecycle evidence is inconsistent');
     await tx.sourceLifecycleEvent.create({
       data: {
         sourceVersionId: version.id,
@@ -919,7 +938,19 @@ export async function setSourceLifecycle(
         safeMetadata: {},
       },
     });
-    return updated;
+    await tx.$executeRawUnsafe(`SET LOCAL phase30.lifecycle_transition = '1'`);
+    const updated = await tx.sourceVersion.update({
+      where: { id: version.id },
+      data: { lifecycle: toStatus },
+    });
+    return sourceVersionSummarySchema.parse({
+      version: '1.0.0',
+      id: updated.id,
+      sourceId: updated.sourceId,
+      versionNumber: updated.versionNumber,
+      contentHash: updated.contentHash,
+      lifecycle: updated.lifecycle,
+    });
   });
 }
 
@@ -1066,11 +1097,11 @@ export async function retrieveEligibleKnowledge(
   const query = parsed.query.trim();
   const eligibleVersions = await client.$queryRaw<
     Array<{ id: string }>
-  >`SELECT sv.id FROM source_versions sv JOIN knowledge_sources ks ON ks.id = sv.source_id JOIN LATERAL (SELECT decision FROM pedagogical_reviews WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) pr ON true JOIN LATERAL (SELECT decision, valid_until FROM usage_permissions WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) up ON true WHERE sv.lifecycle = 'ACTIVE' AND pr.decision = 'APPROVED' AND up.decision = 'ALLOWED' AND (up.valid_until IS NULL OR up.valid_until > NOW()) AND (ks.visibility = 'PLATFORM_SHARED' OR ks.organization_id = ${context.organizationId}::uuid)`;
+  >`SELECT sv.id FROM source_versions sv JOIN knowledge_sources ks ON ks.id = sv.source_id JOIN LATERAL (SELECT to_status FROM source_lifecycle_events WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) sl ON true JOIN LATERAL (SELECT decision FROM pedagogical_reviews WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) pr ON true JOIN LATERAL (SELECT decision, valid_until FROM usage_permissions WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) up ON true WHERE sl.to_status = 'ACTIVE' AND pr.decision = 'APPROVED' AND up.decision = 'ALLOWED' AND (up.valid_until IS NULL OR up.valid_until > NOW()) AND (ks.visibility = 'PLATFORM_SHARED' OR ks.organization_id = ${context.organizationId}::uuid)`;
   const eligibleVersionIds = new Set(eligibleVersions.map((row) => row.id));
   const rows = await client.$queryRaw<
     Array<any>
-  >`SELECT ki.id, ki.source_version_id AS "sourceVersionId", ki.locator, ki.text_hash AS "textHash", ki.metadata, ki.visibility, link.curriculum_version_id AS "curriculumVersionId", link.curriculum_node_id AS "curriculumNodeId", ts_rank(to_tsvector('simple', ki.normalized_text), plainto_tsquery('simple', ${query})) AS score FROM knowledge_items ki JOIN knowledge_item_curriculum_node_links link ON link.knowledge_item_id = ki.id JOIN source_versions sv ON sv.id = ki.source_version_id JOIN knowledge_sources ks ON ks.id = sv.source_id JOIN LATERAL (SELECT decision FROM pedagogical_reviews WHERE source_version_id = sv.id ORDER BY created_at DESC LIMIT 1) pr ON true JOIN LATERAL (SELECT decision, valid_until FROM usage_permissions WHERE source_version_id = sv.id ORDER BY created_at DESC LIMIT 1) up ON true JOIN curriculum_versions cv ON cv.id = link.curriculum_version_id WHERE ki.status = 'ACTIVE' AND sv.lifecycle = 'ACTIVE' AND pr.decision = 'APPROVED' AND up.decision = 'ALLOWED' AND (up.valid_until IS NULL OR up.valid_until > NOW()) AND cv.status = 'PUBLISHED' AND link.curriculum_version_id = ${parsed.curriculumVersionId}::uuid AND link.curriculum_node_id = ANY(${parsed.curriculumNodeIds}::uuid[]) AND (ks.visibility = 'PLATFORM_SHARED' OR ks.organization_id = ${context.organizationId}::uuid) AND (${query} = '' OR to_tsvector('simple', ki.normalized_text) @@ plainto_tsquery('simple', ${query})) ORDER BY score DESC, ki.id ASC LIMIT ${parsed.limit}`;
+  >`SELECT ki.id, ki.source_version_id AS "sourceVersionId", ki.locator, ki.text_hash AS "textHash", ki.metadata, ki.visibility, link.curriculum_version_id AS "curriculumVersionId", link.curriculum_node_id AS "curriculumNodeId", ts_rank(ki.search_vector, plainto_tsquery('simple', ${query})) AS score FROM knowledge_items ki JOIN knowledge_item_curriculum_node_links link ON link.knowledge_item_id = ki.id JOIN source_versions sv ON sv.id = ki.source_version_id JOIN knowledge_sources ks ON ks.id = sv.source_id JOIN LATERAL (SELECT decision FROM pedagogical_reviews WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) pr ON true JOIN LATERAL (SELECT decision, valid_until FROM usage_permissions WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) up ON true JOIN curriculum_versions cv ON cv.id = link.curriculum_version_id WHERE ki.status = 'ACTIVE' AND sv.lifecycle = 'ACTIVE' AND pr.decision = 'APPROVED' AND up.decision = 'ALLOWED' AND (up.valid_until IS NULL OR up.valid_until > NOW()) AND cv.status = 'PUBLISHED' AND link.curriculum_version_id = ${parsed.curriculumVersionId}::uuid AND link.curriculum_node_id = ANY(${parsed.curriculumNodeIds}::uuid[]) AND (ks.visibility = 'PLATFORM_SHARED' OR ks.organization_id = ${context.organizationId}::uuid) AND (${query} = '' OR ki.search_vector @@ plainto_tsquery('simple', ${query})) ORDER BY score DESC, ki.id ASC LIMIT ${parsed.limit}`;
   const items = rows
     .filter((row) => eligibleVersionIds.has(row.sourceVersionId))
     .map((row, index) =>
@@ -1105,7 +1136,13 @@ export async function getKnowledgeSource(
         { visibility: 'PLATFORM_SHARED', organizationId: null },
       ],
     },
-    include: { versions: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1 } },
+    include: {
+      versions: {
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: 1,
+        include: { lifecycleEvents: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1 } },
+      },
+    },
   });
   return source ? mapSourceSummary(source) : null;
 }
@@ -1126,6 +1163,7 @@ export async function getSourceVersion(
         ],
       },
     },
+    include: { lifecycleEvents: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1 } },
   });
   if (!version) return null;
   return sourceVersionSummarySchema.parse({
@@ -1134,7 +1172,7 @@ export async function getSourceVersion(
     sourceId: version.sourceId,
     versionNumber: version.versionNumber,
     contentHash: version.contentHash,
-    lifecycle: version.lifecycle,
+    lifecycle: version.lifecycleEvents[0]?.toStatus ?? version.lifecycle,
   });
 }
 
@@ -1159,18 +1197,22 @@ export async function getKnowledgeItem(
     include: { curriculumLinks: true },
   });
   if (!item || !item.curriculumLinks[0]) return null;
-  return eligibleKnowledgeItemSchema.parse({
+  return knowledgeItemProvenanceSchema.parse({
     version: '1.0.0',
     id: item.id,
     sourceVersionId: item.sourceVersionId,
     locator: item.locator,
     textHash: item.textHash,
     metadata: item.metadata,
-    score: 0,
-    rank: 1,
-    curriculumVersionId: item.curriculumLinks[0].curriculumVersionId,
-    curriculumNodeId: item.curriculumLinks[0].curriculumNodeId,
+    pipelineVersion: item.pipelineVersion,
+    parserVersion: item.parserVersion,
     visibility: item.visibility,
+    curriculumLineage: item.curriculumLinks
+      .sort((a, b) => a.curriculumNodeId.localeCompare(b.curriculumNodeId))
+      .map((link) => ({
+        curriculumVersionId: link.curriculumVersionId,
+        curriculumNodeId: link.curriculumNodeId,
+      })),
   });
 }
 

@@ -25,6 +25,7 @@ import {
   ingestionRequestSchema,
   ingestionStatusSchema,
   eligibleKnowledgeItemSchema,
+  knowledgeItemProvenanceSchema,
   retrievalRequestSchema,
   retrievalResultSchema,
 } from '../dist/index.js';
@@ -69,6 +70,7 @@ const schemas = [
   ['ingestion-request.v1.json', ingestionRequestSchema, 'IngestionRequestV1'],
   ['ingestion-status.v1.json', ingestionStatusSchema, 'IngestionStatusV1'],
   ['eligible-knowledge-item.v1.json', eligibleKnowledgeItemSchema, 'EligibleKnowledgeItemV1'],
+  ['knowledge-item-provenance.v1.json', knowledgeItemProvenanceSchema, 'KnowledgeItemProvenanceV1'],
   ['retrieval-request.v1.json', retrievalRequestSchema, 'RetrievalRequestV1'],
   ['retrieval-result.v1.json', retrievalResultSchema, 'RetrievalResultV1'],
 ];

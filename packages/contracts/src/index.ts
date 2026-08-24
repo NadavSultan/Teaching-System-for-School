@@ -335,3 +335,20 @@ export const retrievalResultSchema = z
     items: z.array(eligibleKnowledgeItemSchema).max(50),
   })
   .strict();
+export const knowledgeItemProvenanceSchema = z
+  .object({
+    version: z.literal(SOURCE_SCHEMA_VERSION),
+    id: uuidSchema,
+    sourceVersionId: uuidSchema,
+    locator: z.string().min(1).max(500),
+    textHash: z.string().regex(/^[a-f0-9]{64}$/),
+    metadata: boundedMetadataSchema,
+    pipelineVersion: z.string().max(80),
+    parserVersion: z.string().max(80),
+    visibility: sourceVisibilitySchema,
+    curriculumLineage: z
+      .array(z.object({ curriculumVersionId: uuidSchema, curriculumNodeId: uuidSchema }).strict())
+      .min(1)
+      .max(1000),
+  })
+  .strict();

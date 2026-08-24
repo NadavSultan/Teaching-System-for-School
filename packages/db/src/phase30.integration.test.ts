@@ -208,6 +208,140 @@ describe('Phase 30 source registry and controlled knowledge', () => {
     });
     const firstItem = result.items[0];
     expect(firstItem).toBeDefined();
+    const queryPlan = await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe('SET LOCAL enable_seqscan = off');
+      return tx.$queryRaw<
+        Array<{ 'QUERY PLAN': unknown }>
+      >`EXPLAIN (FORMAT JSON) SELECT id FROM knowledge_items WHERE search_vector @@ plainto_tsquery('simple', ${'שלום'})`;
+    });
+    expect(JSON.stringify(queryPlan)).toContain('knowledge_items_search_idx');
+    const tieTime = new Date('2099-01-01T00:00:00.000Z');
+    await prisma.pedagogicalReview.create({
+      data: {
+        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        sourceVersionId: version.id,
+        reviewerUserId: workspace.user.id,
+        decision: 'REJECTED',
+        reason: 'tie reject',
+        evidenceMetadata: {},
+        createdAt: tieTime,
+      },
+    });
+    await prisma.pedagogicalReview.create({
+      data: {
+        id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        sourceVersionId: version.id,
+        reviewerUserId: workspace.user.id,
+        decision: 'APPROVED',
+        reason: 'tie approve',
+        evidenceMetadata: {},
+        createdAt: tieTime,
+      },
+    });
+    expect(
+      (
+        await retrieveEligibleKnowledge(context, {
+          version: '1.0.0',
+          query: 'שלום',
+          organizationId: context.organizationId,
+          curriculumVersionId: curriculum.version.id,
+          curriculumNodeIds: [skill.id],
+          limit: 10,
+        })
+      ).items,
+    ).toHaveLength(1);
+    await prisma.pedagogicalReview.create({
+      data: {
+        id: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        sourceVersionId: version.id,
+        reviewerUserId: workspace.user.id,
+        decision: 'REJECTED',
+        reason: 'latest tie reject',
+        evidenceMetadata: {},
+        createdAt: tieTime,
+      },
+    });
+    expect(
+      (
+        await retrieveEligibleKnowledge(context, {
+          version: '1.0.0',
+          query: 'שלום',
+          organizationId: context.organizationId,
+          curriculumVersionId: curriculum.version.id,
+          curriculumNodeIds: [skill.id],
+          limit: 10,
+        })
+      ).items,
+    ).toHaveLength(0);
+    await prisma.pedagogicalReview.create({
+      data: {
+        id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        sourceVersionId: version.id,
+        reviewerUserId: workspace.user.id,
+        decision: 'APPROVED',
+        reason: 'restore for permission tie',
+        evidenceMetadata: {},
+        createdAt: new Date('2100-01-01T00:00:00.000Z'),
+      },
+    });
+    const permissionTieTime = new Date('2100-01-01T00:00:00.000Z');
+    await prisma.usagePermission.create({
+      data: {
+        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab',
+        sourceVersionId: version.id,
+        reviewerUserId: workspace.user.id,
+        decision: 'DENIED',
+        evidenceReference: 'tie-deny',
+        scope: 'AI_GENERATION',
+        createdAt: permissionTieTime,
+      },
+    });
+    await prisma.usagePermission.create({
+      data: {
+        id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbc',
+        sourceVersionId: version.id,
+        reviewerUserId: workspace.user.id,
+        decision: 'ALLOWED',
+        evidenceReference: 'tie-allow',
+        scope: 'AI_GENERATION',
+        createdAt: permissionTieTime,
+      },
+    });
+    expect(
+      (
+        await retrieveEligibleKnowledge(context, {
+          version: '1.0.0',
+          query: 'שלום',
+          organizationId: context.organizationId,
+          curriculumVersionId: curriculum.version.id,
+          curriculumNodeIds: [skill.id],
+          limit: 10,
+        })
+      ).items,
+    ).toHaveLength(1);
+    await prisma.usagePermission.create({
+      data: {
+        id: 'ffffffff-ffff-4fff-8fff-fffffffffff0',
+        sourceVersionId: version.id,
+        reviewerUserId: workspace.user.id,
+        decision: 'DENIED',
+        evidenceReference: 'latest-tie-deny',
+        scope: 'AI_GENERATION',
+        createdAt: permissionTieTime,
+      },
+    });
+    expect(
+      (
+        await retrieveEligibleKnowledge(context, {
+          version: '1.0.0',
+          query: 'שלום',
+          organizationId: context.organizationId,
+          curriculumVersionId: curriculum.version.id,
+          curriculumNodeIds: [skill.id],
+          limit: 10,
+        })
+      ).items,
+    ).toHaveLength(0);
     await expect(
       prisma.sourceVersion.update({
         where: { id: version.id },
@@ -215,10 +349,16 @@ describe('Phase 30 source registry and controlled knowledge', () => {
       }),
     ).rejects.toThrow('immutable');
     await expect(
+      prisma.sourceVersion.update({ where: { id: version.id }, data: { lifecycle: 'ACTIVE' } }),
+    ).rejects.toThrow('controlled evidence');
+    await expect(
       prisma.knowledgeItem.update({
         where: { id: firstItem!.id },
         data: { normalizedText: 'tampered' },
       }),
+    ).rejects.toThrow('immutable');
+    await expect(
+      prisma.knowledgeItem.update({ where: { id: firstItem!.id }, data: { status: 'SUSPENDED' } }),
     ).rejects.toThrow('immutable');
     await setSourceLifecycle(context, version.id, 'SUSPENDED', 'Rights review');
     expect(
@@ -319,6 +459,17 @@ describe('Phase 30 source registry and controlled knowledge', () => {
     const link = await prisma.knowledgeItemCurriculumNodeLink.findFirstOrThrow({
       where: { knowledgeItemId: firstItem!.id },
     });
+    const grade = await prisma.curriculumNode.findFirstOrThrow({
+      where: { versionId: curriculum.version.id, code: 'G7' },
+    });
+    await prisma.knowledgeItemCurriculumNodeLink.create({
+      data: {
+        knowledgeItemId: firstItem!.id,
+        curriculumVersionId: curriculum.version.id,
+        curriculumNodeId: grade.id,
+      },
+    });
+    expect((await getKnowledgeItem(context, firstItem!.id))?.curriculumLineage).toHaveLength(2);
     await expect(
       prisma.knowledgeItemCurriculumNodeLink.delete({ where: { id: link.id } }),
     ).rejects.toThrow('append-only');
