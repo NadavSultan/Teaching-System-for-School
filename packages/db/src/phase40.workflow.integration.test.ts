@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { CONTRACT_VERSION } from '@teach/contracts';
-import { DeterministicFakeModelGateway } from '@teach/ai';
+import { DeterministicFakeModelGateway, type ModelGateway } from '@teach/ai';
 import {
   createAssessment,
   createKnowledgeSource,
@@ -168,5 +168,62 @@ describe('Phase 40 complete draft and regeneration workflow', () => {
         },
       }),
     ).toBeGreaterThan(0);
+
+    const lateGateway: ModelGateway = {
+      execute: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 2_100));
+        return {
+          provider: 'late-test',
+          model: 'late-test',
+          requestId: 'late-test',
+          output: { version: '1.0.0', sections: [] },
+          usage: {
+            inputTokens: 1,
+            outputTokens: 1,
+            totalTokens: 2,
+            costMicros: 0,
+            finishReason: 'stop',
+          },
+          finishReason: 'stop',
+        };
+      },
+    };
+    const timeoutRun = await requestDraftGeneration(context, {
+      ...request,
+      idempotencyKey: 'draft-timeout',
+    });
+    const timeoutResult = await processGenerationRun(timeoutRun.id, prisma, lateGateway);
+    expect(timeoutResult?.state).toBe('FAILED');
+    expect(timeoutResult?.failureCode).toBe('TIMEOUT');
+    expect(timeoutResult?.attempts).toBe(3);
+    expect(timeoutResult?.outputRevisionId).toBeNull();
+
+    const budgetGateway: ModelGateway = {
+      execute: async () => ({
+        provider: 'budget-test',
+        model: 'budget-test',
+        requestId: 'budget-test',
+        output: { version: '1.0.0', sections: [] },
+        usage: {
+          inputTokens: 1,
+          outputTokens: 2_001,
+          totalTokens: 2_002,
+          costMicros: 1,
+          finishReason: 'length',
+        },
+        finishReason: 'length',
+      }),
+    };
+    const budgetRun = await requestDraftGeneration(context, {
+      ...request,
+      idempotencyKey: 'draft-budget',
+    });
+    const budgetResult = await processGenerationRun(budgetRun.id, prisma, budgetGateway);
+    expect(budgetResult?.state).toBe('FAILED');
+    expect(budgetResult?.failureCode).toBe('BUDGET_EXCEEDED');
+    expect(budgetResult?.outputRevisionId).toBeNull();
+    expect(await prisma.generationUsage.count({ where: { generationRunId: budgetRun.id } })).toBe(
+      1,
+    );
   });
 });

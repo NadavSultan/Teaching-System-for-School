@@ -153,7 +153,11 @@ describe('Phase 40 direct database adversarial matrix', () => {
         });
         await prisma.generationRun.update({
           where: { id },
-          data: { state: 'FAILED', failureCode: 'PERMANENT_PROVIDER_ERROR' },
+          data: {
+            state: 'FAILED',
+            failureCode: 'PERMANENT_PROVIDER_ERROR',
+            processedAt: new Date(),
+          },
         });
         return prisma.generationRun.update({ where: { id }, data: { state: 'PENDING' } });
       },

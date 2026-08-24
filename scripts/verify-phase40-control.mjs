@@ -4,6 +4,7 @@ import { execSync } from 'node:child_process';
 
 const required = [
   'packages/db/prisma/migrations/20260824004000_phase40_generation_engine/migration.sql',
+  'packages/db/prisma/migrations/20260824004200_phase40_final_review_closure/migration.sql',
   'packages/contracts/schemas/draft-generation-request.v1.json',
   'packages/contracts/schemas/question-regeneration-request.v1.json',
   'packages/db/src/generation.ts',
@@ -35,9 +36,10 @@ const migrations = readdirSync('packages/db/prisma/migrations').filter((name) =>
   /^\d+_/.test(name),
 );
 if (
-  migrations.length !== 9 ||
+  migrations.length !== 10 ||
   migrations.filter((name) => name.startsWith('20260824004000_')).length !== 1 ||
-  migrations.filter((name) => name.startsWith('20260824004100_')).length !== 1
+  migrations.filter((name) => name.startsWith('20260824004100_')).length !== 1 ||
+  migrations.filter((name) => name.startsWith('20260824004200_')).length !== 1
 )
   throw new Error(`expected nine migrations, got ${migrations.length}`);
 const schema = readFileSync('packages/db/prisma/schema.prisma', 'utf8');
@@ -68,8 +70,13 @@ const matrixSource = readFileSync('packages/db/src/phase40-matrices.test.ts', 'u
 if (
   matrixSource.includes('toBeTypeOf') ||
   matrixSource.includes('caseId') ||
-  !matrixSource.includes('execute') ||
-  !matrixSource.includes('canTransitionGenerationRun')
+  matrixSource.includes('Array.from({ length') ||
+  matrixSource.includes("safeParse('CONTEXT_EMPTY')") ||
+  matrixSource.includes("safeParse('CONTEXT_INVALIDATED')") ||
+  matrixSource.includes('JSON.stringify') ||
+  matrixSource.includes("canTransitionGenerationRun('PROCESSING', 'FAILED')") ||
+  !matrixSource.includes('it.each') ||
+  !matrixSource.includes('phase40MatrixManifest')
 )
   throw new Error('matrix runtime behavior is not registered');
 const upgrade = readFileSync('scripts/phase40-upgrade-test.mjs', 'utf8');
@@ -108,4 +115,4 @@ if (Object.values(manifest).reduce((a, b) => a + b, 0) !== 173)
 execSync('git branch --show-current', { stdio: 'inherit' });
 console.log('PHASE40_CONTROL=PASS');
 console.log('MATRIX_CASES=173');
-console.log('MIGRATION_COUNT=9');
+console.log('MIGRATION_COUNT=10');

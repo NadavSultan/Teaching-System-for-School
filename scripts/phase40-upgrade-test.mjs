@@ -46,10 +46,14 @@ try {
   await pg.createDatabase('teaching_upgrade');
   const sourcePrisma = resolve('packages/db/prisma');
   cpSync(sourcePrisma, prismaCopy, { recursive: true });
-  rmSync(join(prismaCopy, 'migrations', '20260824004100_phase40_review_remediation'), {
-    recursive: true,
-    force: true,
-  });
+  for (const migration of readdirSync(join(prismaCopy, 'migrations')).filter((name) =>
+    [
+      '20260824004000_phase40_generation_engine',
+      '20260824004100_phase40_review_remediation',
+      '20260824004200_phase40_final_review_closure',
+    ].includes(name),
+  ))
+    rmSync(join(prismaCopy, 'migrations', migration), { recursive: true, force: true });
   runDeploy(join(prismaCopy, 'schema.prisma'));
   const client = pg.getPgClient('teaching_upgrade');
   await client.connect();
@@ -83,8 +87,31 @@ try {
   if (legacy.rowCount !== 1) throw new Error('Phase 30 seed was not preserved');
   await client.end();
   cpSync(
+    join(sourcePrisma, 'migrations', '20260824004000_phase40_generation_engine'),
+    join(prismaCopy, 'migrations', '20260824004000_phase40_generation_engine'),
+    { recursive: true },
+  );
+  runDeploy(join(prismaCopy, 'schema.prisma'));
+  const phase40Seed = pg.getPgClient('teaching_upgrade');
+  await phase40Seed.connect();
+  await phase40Seed.query(
+    `INSERT INTO generation_runs (id, organization_id, requesting_user_id, assessment_id, operation, idempotency_key, request_fingerprint, frozen_specification, curriculum_version_id, prompt_template_version, prompt_template_hash, model_configuration_version, model_configuration_hash, response_schema_version, response_schema_hash) VALUES ('99999999-9999-4999-8999-999999999999', '11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', '66666666-6666-4666-8666-666666666666', 'DRAFT', 'upgrade-run', repeat('c', 64), '{"version":"1.0.0","operation":"DRAFT"}', '55555555-5555-4555-8555-555555555555', 'draft-v1', repeat('d', 64), 'fake-v1', repeat('e', 64), '1.0.0', repeat('f', 64))`,
+  );
+  await phase40Seed.query(
+    `UPDATE generation_runs SET state='PROCESSING', attempts=1 WHERE id='99999999-9999-4999-8999-999999999999'`,
+  );
+  await phase40Seed.query(
+    `INSERT INTO generation_usages (generation_run_id, attempt, provider, model, request_id, input_tokens, output_tokens, total_tokens, cost_micros, finish_reason) VALUES ('99999999-9999-4999-8999-999999999999', 1, 'fake', 'fake', 'upgrade-request', 1, 1, 2, 0, 'stop')`,
+  );
+  await phase40Seed.end();
+  cpSync(
     join(sourcePrisma, 'migrations', '20260824004100_phase40_review_remediation'),
     join(prismaCopy, 'migrations', '20260824004100_phase40_review_remediation'),
+    { recursive: true },
+  );
+  cpSync(
+    join(sourcePrisma, 'migrations', '20260824004200_phase40_final_review_closure'),
+    join(prismaCopy, 'migrations', '20260824004200_phase40_final_review_closure'),
     { recursive: true },
   );
   runDeploy(join(prismaCopy, 'schema.prisma'));
@@ -104,6 +131,18 @@ try {
       `SELECT 1 FROM pg_trigger WHERE tgname = 'question_source_identity' AND NOT tgisinternal`,
     ),
     verify.query(`SELECT 1 FROM source_versions WHERE id = '88888888-8888-4888-8888-888888888888'`),
+    verify.query(
+      `SELECT 1 FROM generation_runs WHERE id = '99999999-9999-4999-8999-999999999999' AND state = 'PROCESSING' AND attempts = 1`,
+    ),
+    verify.query(
+      `SELECT 1 FROM generation_usages WHERE generation_run_id = '99999999-9999-4999-8999-999999999999' AND total_tokens = input_tokens + output_tokens`,
+    ),
+    verify.query(
+      `SELECT 1 FROM pg_constraint WHERE conname = 'generation_context_items_lineage_ck'`,
+    ),
+    verify.query(
+      `SELECT 1 FROM pg_trigger WHERE tgname = 'phase40_review_source_lock' AND NOT tgisinternal`,
+    ),
   ]);
   await verify.end();
   if (checks.some((check) => check.rowCount !== 1))
@@ -112,14 +151,17 @@ try {
     /^\d+_/.test(name),
   );
   if (
-    migrations.length !== 9 ||
+    migrations.length !== 10 ||
     !existsSync(
       'packages/db/prisma/migrations/20260824004100_phase40_review_remediation/migration.sql',
+    ) ||
+    !existsSync(
+      'packages/db/prisma/migrations/20260824004200_phase40_final_review_closure/migration.sql',
     )
   )
     throw new Error('final migration count mismatch');
   console.log('PHASE30_TO_PHASE40_UPGRADE=PASS');
-  console.log('UPGRADE_04000_TO_04100=PASS');
+  console.log('UPGRADE_03300_TO_04000_TO_04100_TO_04200=PASS');
   console.log('DATA_PRESERVATION_AND_TRIGGER_ASSERTIONS=PASS');
 } finally {
   if (process.platform === 'win32' && pg.process?.pid)

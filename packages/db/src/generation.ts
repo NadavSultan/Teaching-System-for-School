@@ -447,6 +447,31 @@ export async function selectGenerationContext(
     );
 }
 
+async function loadPersistedGenerationContext(runId: string, client: PrismaClient) {
+  const rows = await client.generationContextItem.findMany({
+    where: { generationRunId: runId },
+    orderBy: { selectedOrder: 'asc' },
+    include: { knowledgeItem: true },
+  });
+  if (!rows.length) return null;
+  return rows.map((row) =>
+    generationContextItemSchema.parse({
+      knowledgeItemId: row.knowledgeItemId,
+      sourceVersionId: row.sourceVersionId,
+      locator: row.locator,
+      textHash: row.textHash,
+      curriculumVersionId: row.curriculumVersionId,
+      curriculumNodeId: row.curriculumNodeId,
+      rank: row.rank,
+      score: row.score,
+      text: row.knowledgeItem.normalizedText,
+      characterCount: row.characterCount,
+      estimatedTokens: row.estimatedTokens,
+      lineage: row.lineage,
+    }),
+  );
+}
+
 async function contextStillEligible(
   runId: string,
   items: Array<{ knowledgeItemId: string }>,
@@ -455,7 +480,13 @@ async function contextStillEligible(
   if (!items.length) return false;
   const run = await client.generationRun.findUniqueOrThrow({ where: { id: runId } });
   const specification = frozenGenerationSpecificationSchema.parse(run.frozenSpecification);
-  await client.$queryRaw`SELECT source_version_id FROM knowledge_items WHERE id = ANY(${items.map((item) => item.knowledgeItemId)}::uuid[]) FOR UPDATE`;
+  await client.$queryRaw`
+    SELECT sv.id
+    FROM source_versions sv
+    WHERE sv.id IN (SELECT DISTINCT ki.source_version_id FROM knowledge_items ki WHERE ki.id = ANY(${items.map((item) => item.knowledgeItemId)}::uuid[]))
+    ORDER BY sv.id
+    FOR UPDATE
+  `;
   const rows = await client.$queryRaw<Array<{ id: string }>>`
     SELECT ki.id FROM knowledge_items ki
     JOIN source_versions sv ON sv.id = ki.source_version_id
@@ -681,8 +712,10 @@ async function persistRegeneratedRevision(
   tx: GenerationTx,
   run: any,
   output: any,
-  selectedIds: Set<string>,
+  selected: Array<ContextRow>,
 ) {
+  const selectedIds = new Set(selected.map((item) => item.knowledgeItemId));
+  const selectedLineage = new Map(selected.map((item) => [item.knowledgeItemId, item.lineage]));
   const assessment = await tx.assessment.findUniqueOrThrow({ where: { id: run.assessmentId } });
   await tx.$queryRaw`SELECT id FROM assessments WHERE id = ${assessment.id}::uuid FOR UPDATE`;
   const base = await tx.assessmentRevision.findFirstOrThrow({
@@ -857,9 +890,9 @@ async function persistRegeneratedRevision(
       where: { id: itemId },
       include: { curriculumLinks: true },
     });
-    const lineage = item.curriculumLinks.find(
-      (link: any) => link.curriculumVersionId === run.curriculumVersionId,
-    );
+    const lineage = selectedLineage
+      .get(item.id)
+      ?.find((link) => link.curriculumVersionId === run.curriculumVersionId);
     if (!lineage) throw new Error('OUTPUT_INVALID');
     await tx.questionSourceLink.create({
       data: {
@@ -905,6 +938,12 @@ export async function processGenerationRun(
     if (!run || ['SUCCEEDED', 'INSUFFICIENT_CONTEXT', 'FAILED'].includes(run.state)) return run;
     if (run.state === 'PROCESSING' && run.leaseExpiresAt && run.leaseExpiresAt > new Date())
       throw new Error('GENERATION_LEASE_ACTIVE');
+    if (run.state === 'PROCESSING') {
+      await tx.generationRun.update({
+        where: { id: runId },
+        data: { state: 'PENDING', leaseExpiresAt: null },
+      });
+    }
     return tx.generationRun.update({
       where: { id: runId },
       data: {
@@ -929,7 +968,9 @@ export async function processGenerationRun(
     });
     return mapRun(failed);
   }
-  const selected = await selectGenerationContext(runId, client);
+  const selected =
+    (await loadPersistedGenerationContext(runId, client)) ??
+    (await selectGenerationContext(runId, client));
   const totalChars = selected.reduce((sum, item) => sum + item.characterCount, 0);
   const totalTokens = selected.reduce((sum, item) => sum + item.estimatedTokens, 0);
   if (
@@ -948,23 +989,24 @@ export async function processGenerationRun(
     });
     return mapRun(failed);
   }
-  await client.generationContextItem.createMany({
-    data: selected.map((item, index) => ({
-      generationRunId: runId,
-      selectedOrder: index,
-      knowledgeItemId: item.knowledgeItemId,
-      sourceVersionId: item.sourceVersionId,
-      locator: item.locator,
-      textHash: item.textHash,
-      curriculumVersionId: item.curriculumVersionId,
-      curriculumNodeId: item.curriculumNodeId,
-      rank: item.rank,
-      score: item.score,
-      characterCount: item.characterCount,
-      estimatedTokens: item.estimatedTokens,
-      lineage: item.lineage,
-    })),
-  });
+  if (!(await loadPersistedGenerationContext(runId, client)))
+    await client.generationContextItem.createMany({
+      data: selected.map((item, index) => ({
+        generationRunId: runId,
+        selectedOrder: index,
+        knowledgeItemId: item.knowledgeItemId,
+        sourceVersionId: item.sourceVersionId,
+        locator: item.locator,
+        textHash: item.textHash,
+        curriculumVersionId: item.curriculumVersionId,
+        curriculumNodeId: item.curriculumNodeId,
+        rank: item.rank,
+        score: item.score,
+        characterCount: item.characterCount,
+        estimatedTokens: item.estimatedTokens,
+        lineage: item.lineage,
+      })),
+    });
   let attempt = locked.attempts;
   const run = await client.generationRun.findUniqueOrThrow({ where: { id: runId } });
   const specification = frozenGenerationSpecificationSchema.parse(run.frozenSpecification);
@@ -1067,7 +1109,7 @@ export async function processGenerationRun(
         const succeeded = await client.$transaction(async (tx) => {
           if (!(await contextStillEligible(runId, selected, tx)))
             throw new Error('CONTEXT_INVALIDATED');
-          revisionId = await persistRegeneratedRevision(tx, run, output, selectedIds);
+          revisionId = await persistRegeneratedRevision(tx, run, output, selected);
           const result = await tx.generationRun.update({
             where: { id: runId },
             data: {
