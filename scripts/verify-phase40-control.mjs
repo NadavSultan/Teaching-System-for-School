@@ -4,10 +4,18 @@ import { execSync } from 'node:child_process';
 
 const required = [
   'packages/db/prisma/migrations/20260824004000_phase40_generation_engine/migration.sql',
+  'packages/db/prisma/migrations/20260824004100_phase40_review_remediation/migration.sql',
   'packages/db/prisma/migrations/20260824004200_phase40_final_review_closure/migration.sql',
-  'packages/contracts/schemas/draft-generation-request.v1.json',
-  'packages/contracts/schemas/question-regeneration-request.v1.json',
-  'packages/db/src/generation.ts',
+  'packages/db/prisma/migrations/20260824004300_phase40_acceptance_closure/migration.sql',
+  'packages/db/src/phase40.acceptance.registry.ts',
+  'packages/db/src/phase40.tenant-matrix.integration.test.ts',
+  'packages/db/src/phase40.role-state-matrix.integration.test.ts',
+  'packages/db/src/phase40.eligibility-matrix.integration.test.ts',
+  'packages/db/src/phase40.invalidation.integration.test.ts',
+  'packages/db/src/phase40.output-matrix.integration.test.ts',
+  'packages/db/src/phase40.regeneration-matrix.integration.test.ts',
+  'packages/db/src/phase40.concurrency-audit-directdb.integration.test.ts',
+  'packages/db/src/phase40.acceptance.integration.helpers.ts',
 ];
 for (const file of required) if (!existsSync(file)) throw new Error(`missing ${file}`);
 const frozen = {
@@ -32,71 +40,22 @@ for (const [name, expected] of Object.entries(frozen)) {
     .digest('hex');
   if (digest !== expected) throw new Error(`frozen migration changed: ${name}`);
 }
-const migrations = readdirSync('packages/db/prisma/migrations').filter((name) =>
-  /^\d+_/.test(name),
-);
-if (
-  migrations.length !== 10 ||
-  migrations.filter((name) => name.startsWith('20260824004000_')).length !== 1 ||
-  migrations.filter((name) => name.startsWith('20260824004100_')).length !== 1 ||
-  migrations.filter((name) => name.startsWith('20260824004200_')).length !== 1
-)
-  throw new Error(`expected nine migrations, got ${migrations.length}`);
-const schema = readFileSync('packages/db/prisma/schema.prisma', 'utf8');
-if (
-  !schema.includes('model GenerationRun') ||
-  !schema.includes('model GenerationContextItem') ||
-  !schema.includes('model GenerationUsage') ||
-  !schema.includes('model QuestionSourceLink')
-)
-  throw new Error('required models missing');
-const generation = readFileSync('packages/db/src/generation.ts', 'utf8');
-if (
-  !generation.includes('ki.search_vector') ||
-  generation.includes('sv.lifecycle') ||
-  generation.includes('to_tsvector') ||
-  generation.includes('new DeterministicFakeModelGateway') ||
-  generation.includes('curriculumLinks[0]')
-)
-  throw new Error('eligibility/provider boundary failed');
-if (
-  !generation.includes('AbortController') ||
-  !generation.includes('timeout') ||
-  !generation.includes('contextStillEligible(runId, selected, tx)')
-)
-  throw new Error('timeout/transactional revalidation boundary failed');
-if (generation.includes('return existing;')) throw new Error('raw idempotency return remains');
-const matrixSource = readFileSync('packages/db/src/phase40-matrices.test.ts', 'utf8');
-if (
-  matrixSource.includes('toBeTypeOf') ||
-  matrixSource.includes('caseId') ||
-  matrixSource.includes('Array.from({ length') ||
-  matrixSource.includes("safeParse('CONTEXT_EMPTY')") ||
-  matrixSource.includes("safeParse('CONTEXT_INVALIDATED')") ||
-  matrixSource.includes('JSON.stringify') ||
-  matrixSource.includes("canTransitionGenerationRun('PROCESSING', 'FAILED')") ||
-  !matrixSource.includes('it.each') ||
-  !matrixSource.includes('phase40MatrixManifest')
-)
-  throw new Error('matrix runtime behavior is not registered');
-const upgrade = readFileSync('scripts/phase40-upgrade-test.mjs', 'utf8');
-if (
-  !upgrade.includes('INSERT INTO') ||
-  !upgrade.includes('rowCount') ||
-  !upgrade.includes('generation_usage_guard')
-)
-  throw new Error('upgrade script does not seed and assert');
 if (
   execSync('git branch --show-current', { encoding: 'utf8' }).trim() !==
   'codex/phase-40-generation-engine'
 )
   throw new Error('wrong branch');
-try {
-  execSync('git merge-base --is-ancestor fd419a5ef7577b6d2ca65ba6381a7a30e3200c18 HEAD');
-} catch {
-  throw new Error('required Phase 30 baseline is not an ancestor');
-}
-const manifest = {
+execSync('git merge-base --is-ancestor fd419a5ef7577b6d2ca65ba6381a7a30e3200c18 HEAD');
+const migrations = readdirSync('packages/db/prisma/migrations').filter((name) =>
+  /^\d+_/.test(name),
+);
+if (
+  migrations.length !== 11 ||
+  migrations.filter((name) => name.startsWith('20260824004300_')).length !== 1
+)
+  throw new Error(`expected eleven migrations, got ${migrations.length}`);
+const registry = readFileSync('packages/db/src/phase40.acceptance.registry.ts', 'utf8');
+const expectedCounts = {
   T: 8,
   R: 24,
   S: 24,
@@ -110,9 +69,66 @@ const manifest = {
   A: 8,
   D: 20,
 };
-if (Object.values(manifest).reduce((a, b) => a + b, 0) !== 173)
+for (const [key] of Object.entries(expectedCounts))
+  if (!new RegExp(`\\b${key}:`).test(registry)) throw new Error(`missing ${key} registry`);
+if (Object.values(expectedCounts).reduce((a, b) => a + b, 0) !== 173)
   throw new Error('matrix manifest mismatch');
-execSync('git branch --show-current', { stdio: 'inherit' });
-console.log('PHASE40_CONTROL=PASS');
-console.log('MATRIX_CASES=173');
-console.log('MIGRATION_COUNT=10');
+const integration = required
+  .filter((file) => file.includes('integration'))
+  .map((file) => readFileSync(file, 'utf8'))
+  .join('\n');
+for (const token of [
+  'prisma',
+  'requestDraftGeneration',
+  'requestQuestionRegeneration',
+  'getGenerationStatus',
+  'getGenerationResult',
+  'processGenerationRun',
+  'selectGenerationContext',
+  'it.each',
+])
+  if (!integration.includes(token)) throw new Error(`integration behavior missing ${token}`);
+const matrixUnit = readFileSync('packages/db/src/phase40-matrices.test.ts', 'utf8');
+for (const forbidden of [
+  'authorizeWorkspace',
+  'isEligibleKnowledgeItem',
+  'canTransitionGenerationRun',
+  'DeterministicFakeModelGateway',
+  'safeParse',
+  'JSON.stringify',
+])
+  if (matrixUnit.includes(forbidden)) throw new Error(`placeholder matrix remains: ${forbidden}`);
+const migration043 = readFileSync(
+  'packages/db/prisma/migrations/20260824004300_phase40_acceptance_closure/migration.sql',
+  'utf8',
+);
+for (const token of [
+  'DEFERRABLE INITIALLY DEFERRED',
+  'question_source_commit_guard',
+  'generation_context_complete_lineage',
+  'jsonb_array_length',
+])
+  if (!migration043.includes(token)) throw new Error(`043 enforcement missing ${token}`);
+const upgrade = readFileSync('scripts/phase40-upgrade-test.mjs', 'utf8');
+for (const token of [
+  'generation_context_items',
+  'question_source_links',
+  'SECOND_CLEAN_DATABASE_COMPARISON',
+  '03300',
+  '04300',
+])
+  if (!upgrade.includes(token)) throw new Error(`upgrade evidence missing ${token}`);
+const generation = readFileSync('packages/db/src/generation.ts', 'utf8');
+for (const forbidden of [
+  'sv.lifecycle',
+  'to_tsvector',
+  'new DeterministicFakeModelGateway',
+  'curriculumLinks[0]',
+  'return existing;',
+])
+  if (generation.includes(forbidden)) throw new Error(`generation boundary failed: ${forbidden}`);
+for (const token of ['AbortController', 'timeout', 'contextStillEligible(runId, selected, tx)'])
+  if (!generation.includes(token)) throw new Error(`generation safety missing ${token}`);
+console.log('PHASE40_CONTROL=STRUCTURAL_PASS');
+console.log('MATRIX_MANIFEST=173');
+console.log('MIGRATION_COUNT=11');

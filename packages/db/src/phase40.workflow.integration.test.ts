@@ -225,5 +225,9 @@ describe('Phase 40 complete draft and regeneration workflow', () => {
     expect(await prisma.generationUsage.count({ where: { generationRunId: budgetRun.id } })).toBe(
       1,
     );
+    await prisma.outboxEvent.updateMany({
+      where: { eventType: 'generation.requested', status: 'PENDING' },
+      data: { status: 'PUBLISHED', publishedAt: new Date() },
+    });
   });
 });

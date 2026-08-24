@@ -8,6 +8,11 @@ describe('single-worker outbox', () => {
     const event = await prisma.outboxEvent.create({
       data: { eventType: 'phase10.noop', payload: {}, idempotencyKey: `worker-${Date.now()}` },
     });
+    await prisma.outboxEvent.updateMany({
+      where: { status: 'PENDING', id: { not: event.id } },
+      data: { availableAt: new Date(Date.now() + 60_000) },
+    });
+    await prisma.outboxEvent.update({ where: { id: event.id }, data: { availableAt: new Date() } });
     const worker = new OutboxWorker(() => undefined);
     expect(await worker.pollOnce()).toBe(true);
     expect((await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } })).status).toBe(
@@ -25,6 +30,11 @@ describe('single-worker outbox', () => {
         idempotencyKey: `failure-${Date.now()}`,
       },
     });
+    await prisma.outboxEvent.updateMany({
+      where: { status: 'PENDING', id: { not: event.id } },
+      data: { availableAt: new Date(Date.now() + 60_000) },
+    });
+    await prisma.outboxEvent.update({ where: { id: event.id }, data: { availableAt: new Date() } });
     const failing = new OutboxWorker(
       () => undefined,
       async () => {
@@ -56,6 +66,11 @@ describe('single-worker outbox', () => {
     const event = await prisma.outboxEvent.create({
       data: { eventType: 'phase10.lease', payload: {}, idempotencyKey: `lease-${Date.now()}` },
     });
+    await prisma.outboxEvent.updateMany({
+      where: { status: 'PENDING', id: { not: event.id } },
+      data: { availableAt: new Date(Date.now() + 60_000) },
+    });
+    await prisma.outboxEvent.update({ where: { id: event.id }, data: { availableAt: new Date() } });
     expect((await claimOutbox(prisma, 60_000))?.id).toBe(event.id);
     expect(await claimOutbox()).toBeNull();
     await prisma.outboxEvent.update({

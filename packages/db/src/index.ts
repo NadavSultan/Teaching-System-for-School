@@ -1295,7 +1295,7 @@ export async function getKnowledgeItem(
     },
     include: { curriculumLinks: true },
   });
-  if (!item || !item.curriculumLinks[0]) return null;
+  if (!item || item.curriculumLinks.length === 0) return null;
   return knowledgeItemProvenanceSchema.parse({
     version: '1.0.0',
     id: item.id,
