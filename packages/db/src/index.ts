@@ -1,6 +1,12 @@
 import { PrismaClient, type Prisma } from '@prisma/client';
 import { normalizeEmail } from '@teach/domain';
-import { AccessDeniedError, authorizeWorkspace, type AccessContext } from '@teach/domain';
+import {
+  AccessDeniedError,
+  authorizeWorkspace,
+  canTransitionSourceLifecycle,
+  type AccessContext,
+  type SourceLifecycleStatus,
+} from '@teach/domain';
 import { createHash } from 'node:crypto';
 import {
   assessmentCreationSchema,
@@ -756,6 +762,23 @@ function mapSourceVersionSummary(version: {
   });
 }
 
+function mapIngestionStatus(run: {
+  id: string;
+  sourceVersionId: string;
+  status: 'PENDING' | 'PROCESSING' | 'SUCCEEDED' | 'FAILED';
+  attempts: number;
+  failureClass: string | null;
+}) {
+  return ingestionStatusSchema.parse({
+    version: '1.0.0',
+    id: run.id,
+    sourceVersionId: run.sourceVersionId,
+    status: run.status,
+    attempts: run.attempts,
+    failureClass: run.failureClass,
+  });
+}
+
 export async function createKnowledgeSource(
   context: AccessContext | PlatformAccessContext,
   input: unknown,
@@ -820,6 +843,10 @@ export async function registerSourceVersion(
     .update(JSON.stringify({ ...parsed, content: undefined, contentHash }))
     .digest('hex');
   return client.$transaction(async (tx) => {
+    const lockedSource = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM knowledge_sources WHERE id = ${source.id}::uuid FOR UPDATE
+    `;
+    if (!lockedSource[0]) throw new AccessDeniedError();
     const existing = await tx.sourceVersion.findUnique({
       where: {
         sourceId_idempotencyKey: { sourceId: source.id, idempotencyKey: parsed.idempotencyKey },
@@ -1004,6 +1031,8 @@ export async function setSourceLifecycle(
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
     if (!latest) throw new Error('Lifecycle evidence is inconsistent');
+    if (!canTransitionSourceLifecycle(latest.toStatus as SourceLifecycleStatus, toStatus))
+      throw new Error('Source lifecycle transition is not allowed');
     await tx.sourceLifecycleEvent.create({
       data: {
         sourceVersionId,
@@ -1060,14 +1089,7 @@ export async function requestIngestion(
       idempotencyKey: `ingest:${run.id}`,
     },
   });
-  return ingestionStatusSchema.parse({
-    version: '1.0.0',
-    id: run.id,
-    sourceVersionId: run.sourceVersionId,
-    status: run.status,
-    attempts: run.attempts,
-    failureClass: run.failureClass,
-  });
+  return mapIngestionStatus(run);
 }
 
 export async function runIngestion(ingestionRunId: string, client: PrismaClient = prisma) {
@@ -1075,7 +1097,7 @@ export async function runIngestion(ingestionRunId: string, client: PrismaClient 
     where: { id: ingestionRunId },
     include: { sourceVersion: { include: { source: true, curriculumLinks: true, content: true } } },
   });
-  if (run.status === 'SUCCEEDED') return run;
+  if (run.status === 'SUCCEEDED') return mapIngestionStatus(run);
   const updated = await client.ingestionRun.update({
     where: { id: run.id },
     data: {
@@ -1136,7 +1158,7 @@ export async function runIngestion(ingestionRunId: string, client: PrismaClient 
         data: { status: 'SUCCEEDED', completedAt: new Date() },
       });
     });
-    return result;
+    return mapIngestionStatus(result);
   } catch (error) {
     await client.ingestionRun.update({
       where: { id: updated.id },
@@ -1160,7 +1182,7 @@ export async function retrieveEligibleKnowledge(
   const query = parsed.query.trim();
   const rows = await client.$queryRaw<
     Array<any>
-  >`SELECT ki.id, ki.source_version_id AS "sourceVersionId", ki.locator, ki.text_hash AS "textHash", ki.metadata, ki.visibility, link.curriculum_version_id AS "curriculumVersionId", link.curriculum_node_id AS "curriculumNodeId", ts_rank(ki.search_vector, plainto_tsquery('simple', ${query})) AS score FROM knowledge_items ki JOIN knowledge_item_curriculum_node_links link ON link.knowledge_item_id = ki.id JOIN source_versions sv ON sv.id = ki.source_version_id JOIN knowledge_sources ks ON ks.id = sv.source_id JOIN LATERAL (SELECT to_status FROM source_lifecycle_events WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) sl ON true JOIN LATERAL (SELECT decision FROM pedagogical_reviews WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) pr ON true JOIN LATERAL (SELECT decision, valid_until FROM usage_permissions WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) up ON true JOIN curriculum_versions cv ON cv.id = link.curriculum_version_id WHERE ki.status = 'ACTIVE' AND sl.to_status = 'ACTIVE' AND pr.decision = 'APPROVED' AND up.decision = 'ALLOWED' AND (up.valid_until IS NULL OR up.valid_until > NOW()) AND cv.status = 'PUBLISHED' AND link.curriculum_version_id = ${parsed.curriculumVersionId}::uuid AND link.curriculum_node_id = ANY(${parsed.curriculumNodeIds}::uuid[]) AND (ks.visibility = 'PLATFORM_SHARED' OR ks.organization_id = ${context.organizationId}::uuid) AND (${query} = '' OR ki.search_vector @@ plainto_tsquery('simple', ${query})) ORDER BY score DESC, ki.id ASC LIMIT ${parsed.limit}`;
+  >`SELECT ki.id, ki.source_version_id AS "sourceVersionId", ki.locator, ki.text_hash AS "textHash", ki.metadata, ki.visibility, link.curriculum_version_id AS "curriculumVersionId", link.curriculum_node_id AS "curriculumNodeId", ts_rank(ki.search_vector, plainto_tsquery('simple', ${query})) AS score FROM knowledge_items ki JOIN knowledge_item_curriculum_node_links link ON link.knowledge_item_id = ki.id JOIN source_versions sv ON sv.id = ki.source_version_id JOIN knowledge_sources ks ON ks.id = sv.source_id JOIN LATERAL (SELECT to_status FROM source_lifecycle_events WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) sl ON true JOIN LATERAL (SELECT decision FROM pedagogical_reviews WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) pr ON true JOIN LATERAL (SELECT decision, valid_until FROM usage_permissions WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) up ON true JOIN curriculum_versions cv ON cv.id = link.curriculum_version_id WHERE ki.status = 'ACTIVE' AND sl.to_status = 'ACTIVE' AND pr.decision = 'APPROVED' AND up.decision = 'ALLOWED' AND (up.valid_until IS NULL OR up.valid_until > NOW()) AND cv.status = 'PUBLISHED' AND link.curriculum_version_id = ${parsed.curriculumVersionId}::uuid AND link.curriculum_node_id = ANY(${parsed.curriculumNodeIds}::uuid[]) AND (ks.visibility = 'PLATFORM_SHARED' OR ks.organization_id = ${context.organizationId}::uuid) AND (${query} = '' OR ki.search_vector @@ plainto_tsquery('simple', ${query})) ORDER BY score DESC, ki.id ASC, link.curriculum_version_id ASC, link.curriculum_node_id ASC LIMIT ${parsed.limit}`;
   const items = rows.map((row, index) =>
     eligibleKnowledgeItemSchema.parse({
       version: '1.0.0',
@@ -1184,8 +1206,12 @@ export async function getKnowledgeSource(
   sourceId: string,
   client: PrismaClient = prisma,
 ) {
-  if (isPlatformContext(context)) await requirePlatformCuration(context, client);
-  else await assertSourceContext(context, context.organizationId, client);
+  try {
+    if (isPlatformContext(context)) await requirePlatformCuration(context, client);
+    else await assertSourceContext(context, context.organizationId, client);
+  } catch {
+    return null;
+  }
   const source = await client.knowledgeSource.findFirst({
     where: {
       id: sourceId,
@@ -1214,8 +1240,12 @@ export async function getSourceVersion(
   sourceVersionId: string,
   client: PrismaClient = prisma,
 ) {
-  if (isPlatformContext(context)) await requirePlatformCuration(context, client);
-  else await assertSourceContext(context, context.organizationId, client);
+  try {
+    if (isPlatformContext(context)) await requirePlatformCuration(context, client);
+    else await assertSourceContext(context, context.organizationId, client);
+  } catch {
+    return null;
+  }
   const version = await client.sourceVersion.findFirst({
     where: {
       id: sourceVersionId,
@@ -1241,8 +1271,12 @@ export async function getKnowledgeItem(
   itemId: string,
   client: PrismaClient = prisma,
 ) {
-  if (isPlatformContext(context)) await requirePlatformCuration(context, client);
-  else await assertSourceContext(context, context.organizationId, client);
+  try {
+    if (isPlatformContext(context)) await requirePlatformCuration(context, client);
+    else await assertSourceContext(context, context.organizationId, client);
+  } catch {
+    return null;
+  }
   const item = await client.knowledgeItem.findFirst({
     where: {
       id: itemId,
@@ -1273,7 +1307,11 @@ export async function getKnowledgeItem(
     parserVersion: item.parserVersion,
     visibility: item.visibility,
     curriculumLineage: item.curriculumLinks
-      .sort((a, b) => a.curriculumNodeId.localeCompare(b.curriculumNodeId))
+      .sort(
+        (a, b) =>
+          a.curriculumVersionId.localeCompare(b.curriculumVersionId) ||
+          a.curriculumNodeId.localeCompare(b.curriculumNodeId),
+      )
       .map((link) => ({
         curriculumVersionId: link.curriculumVersionId,
         curriculumNodeId: link.curriculumNodeId,
@@ -1286,8 +1324,12 @@ export async function getIngestionStatus(
   ingestionRunId: string,
   client: PrismaClient = prisma,
 ) {
-  if (isPlatformContext(context)) await requirePlatformCuration(context, client);
-  else await assertSourceContext(context, context.organizationId, client);
+  try {
+    if (isPlatformContext(context)) await requirePlatformCuration(context, client);
+    else await assertSourceContext(context, context.organizationId, client);
+  } catch {
+    return null;
+  }
   const run = await client.ingestionRun.findFirst({
     where: {
       id: ingestionRunId,
@@ -1305,14 +1347,5 @@ export async function getIngestionStatus(
       },
     },
   });
-  return run
-    ? ingestionStatusSchema.parse({
-        version: '1.0.0',
-        id: run.id,
-        sourceVersionId: run.sourceVersionId,
-        status: run.status,
-        attempts: run.attempts,
-        failureClass: run.failureClass,
-      })
-    : null;
+  return run ? mapIngestionStatus(run) : null;
 }

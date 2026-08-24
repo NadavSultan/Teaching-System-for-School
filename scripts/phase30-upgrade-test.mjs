@@ -34,6 +34,7 @@ const pnpmCli = process.env.npm_execpath;
 if (!pnpmCli) throw new Error('This harness must be started through pnpm.');
 const databaseUrl =
   'postgresql://phase30:phase30_local_only@127.0.0.1:55433/teaching_upgrade?schema=public';
+let completed = false;
 const run = (schema) =>
   new Promise((resolveRun, reject) => {
     const child = spawn(
@@ -55,6 +56,10 @@ try {
   const sourcePrisma = resolve('packages/db/prisma');
   cpSync(sourcePrisma, prismaCopy, { recursive: true });
   rmSync(join(prismaCopy, 'migrations', '20260824003200_phase30_final_remediation'), {
+    recursive: true,
+    force: true,
+  });
+  rmSync(join(prismaCopy, 'migrations', '20260824003300_phase30_review_closure'), {
     recursive: true,
     force: true,
   });
@@ -89,11 +94,57 @@ try {
     throw new Error('lifecycle backfill evidence failed');
   await verify.end();
   console.log('UPGRADE_03100_TO_03200=PASS');
+  cpSync(
+    join(sourcePrisma, 'migrations', '20260824003300_phase30_review_closure'),
+    join(prismaCopy, 'migrations', '20260824003300_phase30_review_closure'),
+    { recursive: true },
+  );
+  await run(join(prismaCopy, 'schema.prisma'));
+  const closureVerify = pg.getPgClient('teaching_upgrade');
+  await closureVerify.connect();
+  const uniqueConstraint = await closureVerify.query(
+    `SELECT 1 FROM pg_constraint WHERE conrelid = 'source_versions'::regclass AND conname = 'source_versions_source_id_version_number_key'`,
+  );
+  const identityTrigger = await closureVerify.query(
+    `SELECT 1 FROM pg_trigger WHERE tgrelid = 'knowledge_sources'::regclass AND tgname = 'knowledge_source_identity_immutable' AND NOT tgisinternal`,
+  );
+  const chainTrigger = await closureVerify.query(
+    `SELECT 1 FROM pg_trigger WHERE tgrelid = 'source_lifecycle_events'::regclass AND tgname = 'source_lifecycle_chain_insert' AND NOT tgisinternal`,
+  );
+  if (
+    uniqueConstraint.rowCount !== 1 ||
+    identityTrigger.rowCount !== 1 ||
+    chainTrigger.rowCount !== 1
+  )
+    throw new Error('review-closure constraints or triggers missing');
+  let rejectedForgedLifecycle = false;
+  try {
+    await closureVerify.query(
+      `INSERT INTO source_lifecycle_events (id, source_version_id, source_id, organization_id, from_status, to_status, reason) VALUES ('33333333-3333-4333-8333-333333333333', '22222222-2222-4222-8222-222222222222', '11111111-1111-4111-8111-111111111111', NULL, NULL, 'ACTIVE', 'forged')`,
+    );
+  } catch {
+    rejectedForgedLifecycle = true;
+  }
+  await closureVerify.end();
+  if (!rejectedForgedLifecycle) throw new Error('forged lifecycle insert was accepted');
+  console.log('UPGRADE_03200_TO_03300=PASS');
+  completed = true;
 } finally {
   if (process.platform === 'win32' && pg.process?.pid) {
-    spawnSync('taskkill', ['/pid', String(pg.process.pid), '/f', '/t'], { stdio: 'ignore' });
+    const killResult = spawnSync('taskkill', ['/pid', String(pg.process.pid), '/f', '/t'], {
+      stdio: 'ignore',
+      timeout: 10_000,
+    });
+    if (killResult.error) {
+      try {
+        process.kill(pg.process.pid);
+      } catch {
+        // The embedded server may already have exited after the timeout.
+      }
+    }
   } else {
     await pg.stop();
   }
   rmSync(prismaCopy, { recursive: true, force: true });
+  if (completed) process.exit(0);
 }

@@ -9,6 +9,7 @@ if (!process.env.DATABASE_URL) {
 export default defineConfig({
   test: {
     environment: 'node',
+    fileParallelism: false,
     include: ['**/*.integration.test.ts'],
     testTimeout: 30_000,
     hookTimeout: 30_000,

@@ -302,6 +302,7 @@ model SourceVersion {
 
   @@unique([sourceId, contentHash])
   @@unique([sourceId, idempotencyKey])
+  @@unique([sourceId, versionNumber])
   @@index([contentHash, lifecycle])
   @@map("source_versions")
 }

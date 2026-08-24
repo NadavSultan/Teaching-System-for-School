@@ -2,6 +2,37 @@ import type { AuthenticatedPrincipal } from '@teach/contracts';
 
 export type MembershipRole = 'TEACHER' | 'COORDINATOR' | 'SCHOOL_ADMIN' | 'PLATFORM_ADMIN';
 export type WorkspaceType = 'PERSONAL' | 'SCHOOL';
+export type SourceLifecycleStatus =
+  | 'DRAFT'
+  | 'ACTIVE'
+  | 'SUSPENDED'
+  | 'DEPRECATED'
+  | 'FAILED'
+  | 'NEEDS_RE_REVIEW';
+
+const sourceLifecycleTransitions: Readonly<
+  Record<SourceLifecycleStatus, readonly SourceLifecycleStatus[]>
+> = {
+  DRAFT: ['ACTIVE', 'SUSPENDED', 'DEPRECATED', 'FAILED', 'NEEDS_RE_REVIEW'],
+  ACTIVE: ['SUSPENDED', 'DEPRECATED', 'FAILED', 'NEEDS_RE_REVIEW'],
+  SUSPENDED: ['ACTIVE', 'DEPRECATED', 'FAILED', 'NEEDS_RE_REVIEW'],
+  NEEDS_RE_REVIEW: ['ACTIVE', 'SUSPENDED', 'DEPRECATED', 'FAILED'],
+  FAILED: ['NEEDS_RE_REVIEW', 'DEPRECATED'],
+  DEPRECATED: [],
+};
+
+export function canTransitionSourceLifecycle(
+  fromStatus: SourceLifecycleStatus,
+  toStatus: SourceLifecycleStatus,
+): boolean {
+  return sourceLifecycleTransitions[fromStatus].includes(toStatus);
+}
+
+export function sourceLifecycleTransitionsFor(
+  fromStatus: SourceLifecycleStatus,
+): readonly SourceLifecycleStatus[] {
+  return sourceLifecycleTransitions[fromStatus];
+}
 export type WorkspaceOperation =
   | 'READ_WORKSPACE_CONTEXT'
   | 'RENAME_WORKSPACE'

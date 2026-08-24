@@ -23,7 +23,10 @@ import {
 } from './index.js';
 
 describe('Phase 30 source registry and controlled knowledge', () => {
-  afterAll(() => prisma.$disconnect());
+  afterAll(async () => {
+    await prisma.outboxEvent.deleteMany();
+    await prisma.$disconnect();
+  });
   it('keeps review and permission independent, ingests idempotently, and retrieves exact eligible provenance', async () => {
     const workspace = await createPersonalWorkspace({
       email: `phase30-${Date.now()}@example.test`,
@@ -104,6 +107,12 @@ describe('Phase 30 source registry and controlled knowledge', () => {
       visibility: 'ORGANIZATION_PRIVATE',
       origin: 'test-fixture',
     });
+    await expect(
+      prisma.knowledgeSource.update({
+        where: { id: source.id },
+        data: { visibility: 'PLATFORM_SHARED', organizationId: null },
+      }),
+    ).rejects.toThrow('immutable');
     const otherWorkspace = await createPersonalWorkspace({
       email: `phase30-other-${Date.now()}@example.test`,
       workspaceName: 'Other',
@@ -118,6 +127,12 @@ describe('Phase 30 source registry and controlled knowledge', () => {
       organizationId: otherWorkspace.organization.id,
       role: 'TEACHER' as const,
     };
+    await expect(
+      prisma.knowledgeSource.update({
+        where: { id: source.id },
+        data: { organizationId: otherContext.organizationId },
+      }),
+    ).rejects.toThrow('immutable');
     const registration = {
       version: '1.0.0',
       sourceId: source.id,
@@ -135,6 +150,49 @@ describe('Phase 30 source registry and controlled knowledge', () => {
     });
     expect(initialLifecycleEvents).toHaveLength(1);
     expect(initialLifecycleEvents[0]).toMatchObject({ fromStatus: null, toStatus: 'DRAFT' });
+    const lifecycleEvidenceBase = {
+      sourceVersionId: version.id,
+      sourceId: source.id,
+      organizationId: context.organizationId,
+      actorUserId: context.principal.userId,
+      reason: 'direct evidence test',
+      safeMetadata: {},
+    };
+    await expect(
+      prisma.sourceLifecycleEvent.create({
+        data: { ...lifecycleEvidenceBase, fromStatus: null, toStatus: 'ACTIVE' },
+      }),
+    ).rejects.toThrow('stale');
+    await expect(
+      prisma.sourceLifecycleEvent.create({
+        data: { ...lifecycleEvidenceBase, fromStatus: 'ACTIVE', toStatus: 'SUSPENDED' },
+      }),
+    ).rejects.toThrow('stale');
+    await expect(
+      prisma.sourceLifecycleEvent.create({
+        data: { ...lifecycleEvidenceBase, fromStatus: 'DRAFT', toStatus: 'DRAFT' },
+      }),
+    ).rejects.toThrow('not allowed');
+    await expect(
+      prisma.sourceLifecycleEvent.create({
+        data: {
+          ...lifecycleEvidenceBase,
+          sourceId: '33333333-3333-4333-8333-333333333333',
+          fromStatus: 'DRAFT',
+          toStatus: 'ACTIVE',
+        },
+      }),
+    ).rejects.toThrow('source identity');
+    await expect(
+      prisma.sourceLifecycleEvent.create({
+        data: {
+          ...lifecycleEvidenceBase,
+          organizationId: null,
+          fromStatus: 'DRAFT',
+          toStatus: 'ACTIVE',
+        },
+      }),
+    ).rejects.toThrow('organization identity');
     await expect(registerSourceVersion(otherContext, registration)).rejects.toThrow(
       'Resource not found or unavailable',
     );
@@ -381,7 +439,7 @@ describe('Phase 30 source registry and controlled knowledge', () => {
         })
       ).items,
     ).toHaveLength(0);
-    for (const status of ['DEPRECATED', 'FAILED', 'NEEDS_RE_REVIEW'] as const) {
+    for (const status of ['NEEDS_RE_REVIEW', 'FAILED', 'DEPRECATED'] as const) {
       await setSourceLifecycle(context, version.id, status, `eligibility ${status}`);
       expect(
         (
@@ -400,7 +458,7 @@ describe('Phase 30 source registry and controlled knowledge', () => {
       where: { sourceVersionId: version.id },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
-    expect(lifecycleHistory.at(-1)?.toStatus).toBe('NEEDS_RE_REVIEW');
+    expect(lifecycleHistory.at(-1)?.toStatus).toBe('DEPRECATED');
     expect(
       lifecycleHistory.every(
         (event, index) => index === 0 || event.fromStatus === lifecycleHistory[index - 1]?.toStatus,
@@ -571,6 +629,12 @@ describe('Phase 30 source registry and controlled knowledge', () => {
       visibility: 'PLATFORM_SHARED',
       origin: 'test-fixture',
     });
+    await expect(
+      prisma.knowledgeSource.update({
+        where: { id: shared.id },
+        data: { visibility: 'ORGANIZATION_PRIVATE', organizationId: context.organizationId },
+      }),
+    ).rejects.toThrow('immutable');
     const sharedRegistration = {
       ...registration,
       sourceId: shared.id,

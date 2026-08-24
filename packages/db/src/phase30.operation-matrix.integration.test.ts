@@ -209,7 +209,10 @@ describe('Phase 30 complete bidirectional tenant operation matrix', () => {
   beforeAll(async () => {
     fixture = await createCompleteFixture();
   });
-  afterAll(() => prisma.$disconnect());
+  afterAll(async () => {
+    await prisma.outboxEvent.deleteMany();
+    await prisma.$disconnect();
+  });
 
   const operations = [
     [

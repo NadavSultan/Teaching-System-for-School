@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { isEligibleKnowledgeItem, normalizeSourceText, parsePlainTextSource } from './index.js';
+import {
+  canTransitionSourceLifecycle,
+  isEligibleKnowledgeItem,
+  normalizeSourceText,
+  parsePlainTextSource,
+} from './index.js';
 
 describe('Phase 30 eligibility and deterministic parsing', () => {
   const base = {
@@ -37,5 +42,28 @@ describe('Phase 30 eligibility and deterministic parsing', () => {
       { locator: 'paragraph:2', text: 'זהו קטע שני' },
     ]);
     expect(normalizeSourceText('א\r\nב')).toBe('א\nב');
+  });
+  it('enforces the complete source lifecycle transition matrix', () => {
+    const statuses = [
+      'DRAFT',
+      'ACTIVE',
+      'SUSPENDED',
+      'DEPRECATED',
+      'FAILED',
+      'NEEDS_RE_REVIEW',
+    ] as const;
+    const allowed: Record<(typeof statuses)[number], readonly (typeof statuses)[number][]> = {
+      DRAFT: ['ACTIVE', 'SUSPENDED', 'DEPRECATED', 'FAILED', 'NEEDS_RE_REVIEW'],
+      ACTIVE: ['SUSPENDED', 'DEPRECATED', 'FAILED', 'NEEDS_RE_REVIEW'],
+      SUSPENDED: ['ACTIVE', 'DEPRECATED', 'FAILED', 'NEEDS_RE_REVIEW'],
+      NEEDS_RE_REVIEW: ['ACTIVE', 'SUSPENDED', 'DEPRECATED', 'FAILED'],
+      FAILED: ['NEEDS_RE_REVIEW', 'DEPRECATED'],
+      DEPRECATED: [],
+    };
+    for (const from of statuses) {
+      for (const to of statuses) {
+        expect(canTransitionSourceLifecycle(from, to)).toBe(allowed[from].includes(to));
+      }
+    }
   });
 });

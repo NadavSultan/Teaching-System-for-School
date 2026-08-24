@@ -58,13 +58,74 @@ async function schoolContext(role: 'TEACHER' | 'COORDINATOR' | 'SCHOOL_ADMIN') {
   return { actor, context: context(actor, role, organization.id, 'SCHOOL') };
 }
 
+async function publishedSkill(actorUserId: string) {
+  const curriculum = await importCurriculumDraft({
+    version: '1.0.0',
+    code: `P30_ROLE_${Date.now()}`,
+    educationSystemCode: 'IL',
+    subjectCode: 'HE',
+    displayName: 'Role matrix',
+    versionNumber: 1,
+    nodes: [
+      {
+        type: 'GRADE',
+        code: 'G7',
+        label: 'ז',
+        sortOrder: 1,
+        children: [
+          {
+            type: 'DOMAIN',
+            code: 'D1',
+            label: 'ד',
+            sortOrder: 1,
+            children: [
+              {
+                type: 'TOPIC',
+                code: 'T1',
+                label: 'נ',
+                sortOrder: 1,
+                children: [
+                  {
+                    type: 'SUBTOPIC',
+                    code: 'ST1',
+                    label: 'ת',
+                    sortOrder: 1,
+                    children: [
+                      {
+                        type: 'SKILL',
+                        code: 'S1',
+                        label: 'מיומנות',
+                        sortOrder: 1,
+                        difficulties: ['LOW'],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  await publishCurriculumVersion(curriculum.version.id, actorUserId);
+  const node = await prisma.curriculumNode.findFirstOrThrow({
+    where: { versionId: curriculum.version.id, code: 'S1' },
+  });
+  return { versionId: curriculum.version.id, nodeId: node.id };
+}
+
 describe('Phase 30 persisted authorization matrix', () => {
-  afterAll(() => prisma.$disconnect());
+  afterAll(async () => {
+    await prisma.outboxEvent.deleteMany();
+    await prisma.$disconnect();
+  });
 
   it.each(['TEACHER', 'COORDINATOR', 'SCHOOL_ADMIN'] as const)(
     'allows active %s membership to administer organization-private sources in its own organization',
     async (role) => {
       const { context: tenant } = await schoolContext(role);
+      const curriculum = await publishedSkill(tenant.principal.userId);
       const source = await createKnowledgeSource(tenant, {
         version: '1.0.0',
         title: `private-${role}`,
@@ -72,6 +133,76 @@ describe('Phase 30 persisted authorization matrix', () => {
         origin: 'matrix',
       });
       expect(source.visibility).toBe('ORGANIZATION_PRIVATE');
+      const registration = {
+        version: '1.0.0' as const,
+        sourceId: source.id,
+        idempotencyKey: `role-${role}`,
+        content: `role ${role} expected text`,
+        contentReference: `fixture://role-${role}`,
+        contentMimeType: 'text/plain',
+        metadata: {},
+        curriculumVersionId: curriculum.versionId,
+        curriculumNodeIds: [curriculum.nodeId],
+      };
+      const version = await registerSourceVersion(tenant, registration);
+      expect(await registerSourceVersion(tenant, registration)).toEqual(version);
+      expect(await getKnowledgeSource(tenant, source.id)).toMatchObject({ id: source.id });
+      expect(await getSourceVersion(tenant, version.id)).toMatchObject({
+        id: version.id,
+        lifecycle: 'DRAFT',
+      });
+      await recordPedagogicalReview(tenant, {
+        version: '1.0.0',
+        sourceVersionId: version.id,
+        decision: 'APPROVED',
+        reason: 'role matrix',
+      });
+      await recordUsagePermission(tenant, {
+        version: '1.0.0',
+        sourceVersionId: version.id,
+        decision: 'ALLOWED',
+        evidenceReference: 'role matrix',
+        scope: 'RETRIEVAL',
+      });
+      const run = await requestIngestion(tenant, {
+        version: '1.0.0',
+        sourceVersionId: version.id,
+        pipelineVersion: 'plain-v1',
+      });
+      await runIngestion(run.id);
+      await setSourceLifecycle(tenant, version.id, 'ACTIVE', 'role matrix active');
+      expect(await getIngestionStatus(tenant, run.id)).toMatchObject({ status: 'SUCCEEDED' });
+      const item = await prisma.knowledgeItem.findFirstOrThrow({
+        where: { sourceVersionId: version.id },
+      });
+      expect(await getKnowledgeItem(tenant, item.id)).toMatchObject({
+        sourceVersionId: version.id,
+      });
+      expect(
+        (
+          await retrieveEligibleKnowledge(tenant, {
+            version: '1.0.0',
+            query: 'expected',
+            organizationId: tenant.organizationId,
+            curriculumVersionId: curriculum.versionId,
+            curriculumNodeIds: [curriculum.nodeId],
+            limit: 10,
+          })
+        ).items,
+      ).toHaveLength(1);
+      await setSourceLifecycle(tenant, version.id, 'SUSPENDED', 'role matrix suspended');
+      expect(
+        (
+          await retrieveEligibleKnowledge(tenant, {
+            version: '1.0.0',
+            query: 'expected',
+            organizationId: tenant.organizationId,
+            curriculumVersionId: curriculum.versionId,
+            curriculumNodeIds: [curriculum.nodeId],
+            limit: 10,
+          })
+        ).items,
+      ).toHaveLength(0);
     },
   );
 
@@ -373,14 +504,164 @@ describe('Phase 30 persisted authorization matrix', () => {
       ).items,
     ).toHaveLength(1);
 
+    for (const role of ['TEACHER', 'COORDINATOR', 'SCHOOL_ADMIN'] as const) {
+      const { context: tenantRole } = await schoolContext(role);
+      await expect(
+        createKnowledgeSource(tenantRole, {
+          version: '1.0.0',
+          title: 'tenant shared denied',
+          visibility: 'PLATFORM_SHARED',
+          origin: 'matrix',
+        }),
+      ).rejects.toThrow('Resource not found or unavailable');
+      await expect(registerSourceVersion(tenantRole, registration)).rejects.toThrow(
+        'Resource not found or unavailable',
+      );
+      await expect(
+        recordPedagogicalReview(tenantRole, {
+          version: '1.0.0',
+          sourceVersionId: platformOnlyVersion.id,
+          decision: 'REJECTED',
+          reason: 'tenant denied',
+        }),
+      ).rejects.toThrow('Resource not found or unavailable');
+      await expect(
+        recordUsagePermission(tenantRole, {
+          version: '1.0.0',
+          sourceVersionId: platformOnlyVersion.id,
+          decision: 'DENIED',
+          evidenceReference: 'tenant denied',
+          scope: 'RETRIEVAL',
+        }),
+      ).rejects.toThrow('Resource not found or unavailable');
+      await expect(
+        requestIngestion(tenantRole, {
+          version: '1.0.0',
+          sourceVersionId: platformOnlyVersion.id,
+          pipelineVersion: 'plain-v1',
+        }),
+      ).rejects.toThrow('Resource not found or unavailable');
+      await expect(
+        setSourceLifecycle(tenantRole, platformOnlyVersion.id, 'SUSPENDED', 'tenant denied'),
+      ).rejects.toThrow('Resource not found or unavailable');
+      expect(await getKnowledgeSource(tenantRole, platformOnlySource.id)).toMatchObject({
+        id: platformOnlySource.id,
+      });
+      expect(await getSourceVersion(tenantRole, platformOnlyVersion.id)).toMatchObject({
+        id: platformOnlyVersion.id,
+      });
+      expect(await getKnowledgeItem(tenantRole, platformOnlyItem.id)).toMatchObject({
+        sourceVersionId: platformOnlyVersion.id,
+      });
+      expect(await getIngestionStatus(tenantRole, platformOnlyRun.id)).toMatchObject({
+        status: 'SUCCEEDED',
+      });
+      expect(
+        (
+          await retrieveEligibleKnowledge(tenantRole, {
+            version: '1.0.0',
+            query: 'platform only',
+            organizationId: tenantRole.organizationId,
+            curriculumVersionId: curriculum.version.id,
+            curriculumNodeIds: [node.id],
+            limit: 10,
+          })
+        ).items,
+      ).toHaveLength(1);
+    }
+
     const privateSource = await createKnowledgeSource(tenantContext, {
       version: '1.0.0',
       title: 'tenant private',
       visibility: 'ORGANIZATION_PRIVATE',
       origin: 'matrix',
     });
-    await expect(getKnowledgeSource(platform, privateSource.id)).rejects.toThrow(
-      'Resource not found or unavailable',
-    );
+    const privateVersion = await registerSourceVersion(tenantContext, {
+      version: '1.0.0',
+      sourceId: privateSource.id,
+      idempotencyKey: 'private-platform-denial',
+      content: 'private',
+      contentReference: 'fixture://private-platform',
+      contentMimeType: 'text/plain',
+      metadata: {},
+      curriculumVersionId: curriculum.version.id,
+      curriculumNodeIds: [node.id],
+    });
+    await recordPedagogicalReview(tenantContext, {
+      version: '1.0.0',
+      sourceVersionId: privateVersion.id,
+      decision: 'APPROVED',
+      reason: 'private fixture',
+    });
+    await recordUsagePermission(tenantContext, {
+      version: '1.0.0',
+      sourceVersionId: privateVersion.id,
+      decision: 'ALLOWED',
+      evidenceReference: 'private fixture',
+      scope: 'RETRIEVAL',
+    });
+    const privateRun = await requestIngestion(tenantContext, {
+      version: '1.0.0',
+      sourceVersionId: privateVersion.id,
+      pipelineVersion: 'plain-v1',
+    });
+    await runIngestion(privateRun.id);
+    await setSourceLifecycle(tenantContext, privateVersion.id, 'ACTIVE', 'private fixture');
+    const privateItem = await prisma.knowledgeItem.findFirstOrThrow({
+      where: { sourceVersionId: privateVersion.id },
+    });
+    await expect(
+      createKnowledgeSource(platformOnlyContext, {
+        version: '1.0.0',
+        title: 'platform private denied',
+        visibility: 'ORGANIZATION_PRIVATE',
+        origin: 'matrix',
+      }),
+    ).rejects.toThrow('Resource not found or unavailable');
+    expect(await getKnowledgeSource(platformOnlyContext, privateSource.id)).toBeNull();
+    expect(await getSourceVersion(platformOnlyContext, privateVersion.id)).toBeNull();
+    expect(await getKnowledgeItem(platformOnlyContext, privateItem.id)).toBeNull();
+    expect(await getIngestionStatus(platformOnlyContext, privateRun.id)).toBeNull();
+    await expect(
+      registerSourceVersion(platformOnlyContext, {
+        ...registration,
+        sourceId: privateSource.id,
+        idempotencyKey: 'platform-private-version',
+        content: 'private2',
+      }),
+    ).rejects.toThrow('Resource not found or unavailable');
+    await expect(
+      recordPedagogicalReview(platformOnlyContext, {
+        version: '1.0.0',
+        sourceVersionId: privateVersion.id,
+        decision: 'REJECTED',
+        reason: 'platform private denied',
+      }),
+    ).rejects.toThrow('Resource not found or unavailable');
+    await expect(
+      recordUsagePermission(platformOnlyContext, {
+        version: '1.0.0',
+        sourceVersionId: privateVersion.id,
+        decision: 'DENIED',
+        evidenceReference: 'platform private denied',
+        scope: 'RETRIEVAL',
+      }),
+    ).rejects.toThrow('Resource not found or unavailable');
+    await expect(
+      requestIngestion(platformOnlyContext, {
+        version: '1.0.0',
+        sourceVersionId: privateVersion.id,
+        pipelineVersion: 'plain-v1',
+      }),
+    ).rejects.toThrow('Resource not found or unavailable');
+    await expect(
+      setSourceLifecycle(
+        platformOnlyContext,
+        privateVersion.id,
+        'SUSPENDED',
+        'platform private denied',
+      ),
+    ).rejects.toThrow('Resource not found or unavailable');
+    expect(await getKnowledgeSource(platform, privateSource.id)).toBeNull();
   });
 });
