@@ -1,90 +1,103 @@
 # Phase 40 implementation report
 
-This is a claim set for independent review, not an approval. Phase 40 was authorized by the permanent master after the independently rerun Phase 30 evidence. The executor implemented the provider-neutral generation engine on `codex/phase-40-generation-engine` from `fd419a5ef7577b6d2ca65ba6381a7a30e3200c18`.
+This is a claim set for independent review, not approval. This report records the Phase 40 review remediation from `83b51b4f0ae4d530230f060099be055c602e1ef1` on `codex/phase-40-generation-engine`. The remediation preserves the three prior Phase 40 commits and adds one forward-only migration.
 
 ## Commits
 
 - Control/preparation: `a67ba5c15797919681490ba3893d0b9d6324fdf3`.
-- Implementation: `c1874936314e047357b7f2607928ce6409b5e765`.
-- Report-only commit: recorded in the final response after commit creation; it is not included in this report commit’s own contents.
+- Original implementation: `c1874936314e047357b7f2607928ce6409b5e765`.
+- Original report-only: `83b51b4f0ae4d530230f060099be055c602e1ef1`.
+- Review-remediation implementation: `d82fb4e4081f3a9ab6fc7b7867125cdac731d1b7`.
+- Review-remediation report-only: recorded in the final response after commit creation.
 
-The ten preserved Phase 30 commits remain unchanged: `d8697293563a170fee96bd00bd1bc5bfbe655269d`, `532ca56f168017b81c4deb3cc8f7c0b6c523f2ba`, `766511ae6dd2ed334e873bdd60c1778ccf76e942`, `7064742ec06cbb9df899298a9ea154f8d3ad7f29`, `afa1f7a45c5d4294887c9b69025adebee463e3d3`, `677467b323aa5634ed642617ec2055a652e4f9aa`, `e348145f1ca60ddf6b1a29921301ee1bf4a180f5`, `b49ba435f948c1610eb58af3a073b6b7e975c2fe`, `61be97ff71ddabdaca69ccbac3db8fa642229c10`, and `fd419a5ef7577b6d2ca65ba6381a7a30e3200c18`.
+The ten preserved Phase 30 commits remain unchanged, including `fd419a5ef7577b6d2ca65ba6381a7a30e3200c18`. No Phase 20 or Phase 30 migration was edited.
 
-## Deliverables
+## Remediation result
 
-| Deliverable                                | Result              | Evidence                                                                                                                                                                                              |
-| ------------------------------------------ | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| D1 strict contracts and generated schemas  | PASS                | Ten strict v1 request/output/status/context schemas and generated snapshots; contracts check passed.                                                                                                  |
-| D2 provider-neutral gateway and registries | PASS / live not run | Immutable prompt/model registries, SHA-256 identities, deterministic fake outcomes, timeout signal, usage, and fail-closed preflight.                                                                 |
-| D3 persistence                             | PASS                | Migration `20260824004000_phase40_generation_engine`; GenerationRun, GenerationContextItem, GenerationUsage, QuestionSourceLink, checks, FKs, indexes, identity and append-only triggers.             |
-| D4 internal context boundary               | PASS                | Parameterized `ki.search_vector` query, Phase 30 eligibility joins, deterministic lineage ordering, bounded context, internal text only; public result uses provenance without normalized text.       |
-| D5 workflow                                | PASS                | Four exported tenant-scoped operations plus `selectGenerationContext` and `processGenerationRun`, idempotent ID-only outbox request, persisted authorization, strict result mapping, worker dispatch. |
-| D6 retry/timeout/budget/recovery           | PASS                | Five-state transition policy, bounded attempts, deterministic operation IDs, usage recording, safe enumerated failure codes, terminal no-op behavior.                                                 |
-| D7 regeneration isolation                  | PASS                | New immutable revision under assessment lock, unrelated graph copied, target content replaced, carried-forward and generated source links, base revision unchanged.                                   |
-| D8 traceability/redaction                  | PASS                | Selected-item citation checks, QuestionSourceLink lineage, safe audit/outbox/failure metadata, no source text in observability fields.                                                                |
-| D9 boundary/architecture                   | PASS                | Worker imports the provider-neutral AI package only; no provider SDK, network model, embeddings, web, editor, PDF, deployment, billing, or student feature.                                           |
-| D10 runbook/evaluation                     | PASS / live not run | Hebrew deterministic fake workflow and runbook added; no pedagogical or live-provider quality claim.                                                                                                  |
+| Area                             | Result              | Evidence                                                                                                                                                                                                    |
+| -------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Executable matrices              | PASS                | 173 registered rows execute domain, schema, gateway, or PostgreSQL behavior; 174 assertions including the total; zero skips/todos/only.                                                                     |
+| Revalidation and atomic success  | PASS                | `contextStillEligible` uses the corrected knowledge-item link join and runs inside the success transaction before revision, link, run, and audit commit.                                                    |
+| Provider boundary                | PASS / live not run | No default fake gateway remains in production processing; fake use requires explicit test/development configuration; missing configuration fails with `CONFIGURATION_ERROR`.                                |
+| Timeout and recovery             | PASS                | AbortController timer, AbortSignal propagation, bounded retry classification, five-second processing lease, stale reclaim, active-lease retry behavior, and terminal replay behavior are covered.           |
+| Database provenance enforcement  | PASS                | Forward migration `20260824004100_phase40_review_remediation` adds identity, eligibility, usage, state, lease, lineage, and append-only enforcement; 20 direct adversarial rows execute against PostgreSQL. |
+| Curriculum lineage and citations | PASS                | Context preserves the full deterministic lineage union; no `curriculumLinks[0]` fallback remains; generated and carried-forward source links retain prior-question lineage.                                 |
+| Context budget                   | PASS                | Stable ranked cumulative selection enforces item, character, and estimated-token limits before persistence.                                                                                                 |
+| Upgrade verifier                 | PASS                | The upgrade script migrates an exact eight-migration Phase 30 baseline, seeds representative records, applies 04100, verifies preservation and triggers, and reports only after assertions execute.         |
+| Contract/report reconciliation   | PASS                | Ten Phase 40 generated snapshots are the intended set; schema drift check is clean.                                                                                                                         |
 
-## Binding matrices
+## Binding matrix evidence
 
-All rows execute as permanent table-driven tests with one result assertion per row. The matrix suite executed 173 case rows plus one manifest-total assertion, for 174 matrix assertions, with zero skips, todos, or only markers.
+The executable suite reports the following exact rows. Each row has at least one result assertion; zero rows are label-only and there are zero skips.
 
-| Matrix                             | Cases | Result           |
-| ---------------------------------- | ----: | ---------------- |
-| T bidirectional tenant             |     8 | PASS             |
-| R role happy path                  |    24 | PASS             |
-| S persisted-state denial           |    24 | PASS             |
-| L run transitions, all 5 x 5 pairs |    25 | PASS             |
-| G gateway outcomes                 |    10 | PASS             |
-| E1 initial context eligibility     |    17 | PASS             |
-| E2 pre-commit invalidation         |     7 | PASS             |
-| O strict output/adversarial        |    12 | PASS             |
-| Q regeneration isolation           |    10 | PASS             |
-| C concurrency/idempotency          |     8 | PASS             |
-| A audit/redaction/append-only      |     8 | PASS             |
-| D direct-database adversarial      |    20 | PASS             |
-| Total                              |   173 | PASS, zero skips |
+| Matrix                           |    Rows |                                 Assertions |
+| -------------------------------- | ------: | -----------------------------------------: |
+| T bidirectional tenant           |       8 |                                          8 |
+| R role happy path                |      24 |                                         24 |
+| S persisted-state denial         |      24 |                                         24 |
+| L run transitions (5 x 5)        |      25 |                                         25 |
+| G gateway outcomes               |      10 |                                         10 |
+| E1 initial eligibility           |      17 |                                         17 |
+| E2 pre-commit invalidation       |       7 |                                          7 |
+| O strict/adversarial output      |      12 |                                         12 |
+| Q regeneration isolation         |      10 |                                         10 |
+| C concurrency/idempotency/replay |       8 |                                          8 |
+| A audit/redaction/append-only    |       8 |                                          8 |
+| D direct PostgreSQL adversarial  |      20 |                                         20 |
+| **Total**                        | **173** | **173**, plus one manifest-total assertion |
 
-The deterministic fake gateway test covers all ten injected outcome classes and the live-disabled preflight. The direct PostgreSQL Phase 40 test covers immutable run identity, legal state transitions, terminal-state reopening rejection, append-only deletion rejection, and nonnegative usage enforcement.
+The real PostgreSQL workflow suite includes successful draft finalization and isolated question regeneration, including citations, lineage, and output revision persistence.
 
 ## Final gate evidence
 
-All listed commands exited 0. The final tree had zero skips.
+All commands below exited 0 and required tests had zero skips.
 
-| Command                                 | Exit | Count/evidence                                                                           |
-| --------------------------------------- | ---: | ---------------------------------------------------------------------------------------- |
-| `pnpm install --frozen-lockfile`        |    0 | Frozen install complete                                                                  |
-| Prisma generate                         |    0 | Client generated                                                                         |
-| Prisma validate with explicit schema    |    0 | Valid                                                                                    |
-| Prisma format with explicit schema      |    0 | Formatted                                                                                |
-| `pnpm verify:phase40`                   |    0 | Frozen hashes, 8 migrations, required models, query boundary, and 173-case manifest PASS |
-| `pnpm format-check`                     |    0 | All files formatted                                                                      |
-| `pnpm lint`                             |    0 | Zero warnings/errors                                                                     |
-| `pnpm typecheck`                        |    0 | 9/9 package targets                                                                      |
-| `pnpm test`                             |    0 | 15 files, 238 tests, zero skips                                                          |
-| `pnpm contracts:check`                  |    0 | 4 files, 12 tests, schema drift clean                                                    |
-| `pnpm test:architecture`                |    0 | 1 file, 4 tests                                                                          |
-| deterministic fake-generation tests     |    0 | Fake outcome and preflight evidence included in unit suite                               |
-| `pnpm test-integration:local`           |    0 | 10 files, 61 PostgreSQL tests, zero skips                                                |
-| `pnpm test-integration:phase40-upgrade` |    0 | Phase 30-to-40 migration history and 8/8 count PASS                                      |
-| `pnpm live-evaluation:preflight`        |    0 | `LIVE_EVALUATION=DISABLED_BY_DEFAULT`                                                    |
-| `pnpm build`                            |    0 | 9/9 build targets                                                                        |
-| `git diff --check`                      |    0 | Clean                                                                                    |
+| Command                                 | Exit | Evidence                                                                                         |
+| --------------------------------------- | ---: | ------------------------------------------------------------------------------------------------ |
+| `pnpm install --frozen-lockfile`        |    0 | Already up to date; frozen install complete.                                                     |
+| Prisma generate                         |    0 | Client generated.                                                                                |
+| Prisma validate with explicit schema    |    0 | Valid.                                                                                           |
+| Prisma format / exact schema check      |    0 | Formatted and validated.                                                                         |
+| `pnpm verify:phase40`                   |    0 | Branch/baseline, protected migrations, 9 total migrations, boundary checks, 173 runtime rows.    |
+| `pnpm format-check`                     |    0 | All files formatted.                                                                             |
+| `pnpm lint`                             |    0 | Zero warnings/errors.                                                                            |
+| `pnpm typecheck`                        |    0 | 9/9 package targets.                                                                             |
+| `pnpm test`                             |    0 | 15 files, 239 tests, zero skips.                                                                 |
+| `pnpm contracts:check`                  |    0 | 4 files, 12 tests, generated schema drift clean.                                                 |
+| `pnpm test:architecture`                |    0 | 1 file, 4 tests.                                                                                 |
+| deterministic fake workflow tests       |    0 | AI outcome, abort-observed timeout, explicit fake, and live preflight coverage.                  |
+| `pnpm test-integration:local`           |    0 | 12 files, 83 PostgreSQL tests, zero skips; 9 migrations applied.                                 |
+| `pnpm test-integration:phase40-upgrade` |    0 | Phase 30 baseline through 04000, forward 04100, seeded data preservation and trigger assertions. |
+| `pnpm live-evaluation:preflight`        |    0 | `LIVE_EVALUATION=DISABLED_BY_DEFAULT`.                                                           |
+| `pnpm build`                            |    0 | 9/9 build targets.                                                                               |
+| `git diff --check`                      |    0 | Clean.                                                                                           |
 
-Fresh `teaching_test` migration: 8/8 PASS. Independent fresh `teaching_clean` migration: 8/8 PASS. The PostgreSQL harness applied all eight migrations in order, including `20260824004000_phase40_generation_engine`. Isolated shadow migration-history drift returned exactly `No difference detected.` and `MIGRATION_DRIFT=PASS`.
+Fresh `teaching_test` migration: **9/9 PASS**. Independent fresh `teaching_clean` migration: **9/9 PASS**. The upgrade test applied the exact Phase 30 baseline through `20260824004000_phase40_generation_engine`, then applied `20260824004100_phase40_review_remediation`; preservation and trigger assertions passed. Isolated shadow migration history returned exactly `No difference detected.` and `MIGRATION_DRIFT=PASS`.
 
-## Changed files
+## Changed files in remediation implementation commit
 
-`apps/worker/src/worker.ts`; `docs/architecture/project-state.md`; `docs/phases/40-phase-control-pack.md`; `docs/runbooks/phase-40-generation.md`; `package.json`; `packages/ai/src/ai.test.ts`; `packages/ai/src/index.ts`; `packages/ai/src/phase40-gateway.test.ts`; the nine generated Phase 40 contract snapshots under `packages/contracts/schemas/`; `packages/contracts/scripts/generate-schemas.mjs`; `packages/contracts/src/index.ts`; `packages/db/package.json`; `packages/db/prisma/migrations/20260824004000_phase40_generation_engine/migration.sql`; `packages/db/prisma/schema.prisma`; `packages/db/src/generation.ts`; `packages/db/src/index.ts`; `packages/db/src/phase40-matrices.test.ts`; `packages/db/src/phase40.database.integration.test.ts`; `packages/domain/src/index.ts`; `packages/domain/src/phase40-generation.test.ts`; `pnpm-lock.yaml`; `scripts/live-evaluation-preflight.mjs`; `scripts/phase40-upgrade-test.mjs`; `scripts/verify-phase40-control.mjs`; and the PostgreSQL harness fallback in `scripts/with-test-postgres.mjs`.
-
-Migrations 00100, 00200, 02000, 03000, 03100, 03200, and 03300 were not edited. No Phase 20 external assessment-revision contract or Phase 30 protected source/retrieval contract was intentionally changed.
+- `packages/ai/src/index.ts`
+- `packages/ai/src/phase40-gateway.test.ts`
+- `packages/contracts/src/index.ts`
+- `packages/contracts/schemas/generation-context-item.v1.json`
+- `packages/contracts/schemas/generation-context-provenance.v1.json`
+- `packages/contracts/schemas/generation-result.v1.json`
+- `packages/contracts/schemas/generation-status.v1.json`
+- `packages/db/prisma/schema.prisma`
+- `packages/db/prisma/migrations/20260824004100_phase40_review_remediation/migration.sql`
+- `packages/db/src/generation.ts`
+- `packages/db/src/phase40-matrices.test.ts`
+- `packages/db/src/phase40.adversarial.integration.test.ts`
+- `packages/db/src/phase40.workflow.integration.test.ts`
+- `scripts/phase40-upgrade-test.mjs`
+- `scripts/verify-phase40-control.mjs`
 
 ## Risks, deviations, and debt
 
-- No real provider was selected or evaluated. `LIVE PROVIDER EVALUATION NOT RUN — OWNER APPROVAL AND PROVIDER DECISION REQUIRED`.
-- The fake gateway demonstrates deterministic schema, retry, budget, citation, and isolation behavior; it does not establish pedagogical quality, provider quality, latency, or production cost.
-- The implementation is provider-neutral and requires a separately reviewed live adapter before production provider use.
+- `LIVE PROVIDER EVALUATION NOT RUN — OWNER APPROVAL AND PROVIDER DECISION REQUIRED`.
+- The deterministic fake proves local schema, timeout, retry, budget, citation, and isolation behavior; it does not prove live-provider quality, latency, or production cost.
+- A separately reviewed provider adapter and production configuration remain required; production does not silently select the fake gateway.
 - The report is a claim set for independent review and does not self-approve Phase 40.
 - No push, merge, deployment, paid service, or Phase 50 work was performed.
 
-Final worktree was clean after the report-only commit. Phase 50 was not started.
+The final worktree was clean after the report-only commit. Phase 50 was not started.
