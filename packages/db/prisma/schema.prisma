@@ -68,6 +68,24 @@ enum KnowledgeItemStatus {
   DEPRECATED
 }
 
+enum GenerationOperation {
+  DRAFT
+  REGENERATE_QUESTION
+}
+
+enum GenerationRunState {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  INSUFFICIENT_CONTEXT
+  FAILED
+}
+
+enum GenerationLineage {
+  GENERATED
+  CARRIED_FORWARD
+}
+
 model User {
   id                    String                 @id @default(uuid()) @db.Uuid
   normalizedEmail       String                 @unique @map("normalized_email") @db.VarChar(320)
@@ -82,6 +100,7 @@ model User {
   pedagogicalReviews    PedagogicalReview[]
   usagePermissions      UsagePermission[]
   sourceLifecycleEvents SourceLifecycleEvent[]
+  generationRuns        GenerationRun[]
 
   @@map("users")
 }
@@ -109,6 +128,7 @@ model Organization {
   auditEvents       AuditEvent[]
   outboxEvents      OutboxEvent[]
   assessments       Assessment[]
+  generationRuns    GenerationRun[]
   knowledgeSources  KnowledgeSource[]
   auditSourceEvents SourceLifecycleEvent[]
 
@@ -223,40 +243,45 @@ model Curriculum {
 }
 
 model CurriculumVersion {
-  id                 String                            @id @default(uuid()) @db.Uuid
-  curriculumId       String                            @map("curriculum_id") @db.Uuid
-  versionNumber      Int                               @map("version_number")
-  humanLabel         String?                           @map("human_label") @db.VarChar(200)
-  status             CurriculumVersionStatus           @default(DRAFT)
-  publishedAt        DateTime?                         @map("published_at")
-  deprecatedAt       DateTime?                         @map("deprecated_at")
-  createdAt          DateTime                          @default(now()) @map("created_at")
-  curriculum         Curriculum                        @relation(fields: [curriculumId], references: [id])
-  nodes              CurriculumNode[]
-  revisions          AssessmentRevision[]
-  knowledgeItemLinks KnowledgeItemCurriculumNodeLink[]
-  sourceVersionLinks SourceVersionCurriculumNodeLink[]
+  id                  String                            @id @default(uuid()) @db.Uuid
+  curriculumId        String                            @map("curriculum_id") @db.Uuid
+  versionNumber       Int                               @map("version_number")
+  humanLabel          String?                           @map("human_label") @db.VarChar(200)
+  status              CurriculumVersionStatus           @default(DRAFT)
+  publishedAt         DateTime?                         @map("published_at")
+  deprecatedAt        DateTime?                         @map("deprecated_at")
+  createdAt           DateTime                          @default(now()) @map("created_at")
+  curriculum          Curriculum                        @relation(fields: [curriculumId], references: [id])
+  nodes               CurriculumNode[]
+  revisions           AssessmentRevision[]
+  knowledgeItemLinks  KnowledgeItemCurriculumNodeLink[]
+  sourceVersionLinks  SourceVersionCurriculumNodeLink[]
+  generationContexts  GenerationContextItem[]
+  questionSourceLinks QuestionSourceLink[]
+  generationRuns      GenerationRun[]
 
   @@unique([curriculumId, versionNumber])
   @@map("curriculum_versions")
 }
 
 model CurriculumNode {
-  id                 String                            @id @default(uuid()) @db.Uuid
-  versionId          String                            @map("version_id") @db.Uuid
-  parentId           String?                           @map("parent_id") @db.Uuid
-  type               CurriculumNodeType
-  code               String
-  label              String
-  description        String?                           @db.VarChar(2000)
-  sortOrder          Int                               @map("sort_order")
-  version            CurriculumVersion                 @relation(fields: [versionId], references: [id])
-  parent             CurriculumNode?                   @relation("Tree", fields: [parentId], references: [id])
-  children           CurriculumNode[]                  @relation("Tree")
-  difficulties       CurriculumSkillDifficulty[]
-  links              AssessmentRevisionNodeLink[]
-  knowledgeItemLinks KnowledgeItemCurriculumNodeLink[]
-  sourceVersionLinks SourceVersionCurriculumNodeLink[]
+  id                  String                            @id @default(uuid()) @db.Uuid
+  versionId           String                            @map("version_id") @db.Uuid
+  parentId            String?                           @map("parent_id") @db.Uuid
+  type                CurriculumNodeType
+  code                String
+  label               String
+  description         String?                           @db.VarChar(2000)
+  sortOrder           Int                               @map("sort_order")
+  version             CurriculumVersion                 @relation(fields: [versionId], references: [id])
+  parent              CurriculumNode?                   @relation("Tree", fields: [parentId], references: [id])
+  children            CurriculumNode[]                  @relation("Tree")
+  difficulties        CurriculumSkillDifficulty[]
+  links               AssessmentRevisionNodeLink[]
+  knowledgeItemLinks  KnowledgeItemCurriculumNodeLink[]
+  sourceVersionLinks  SourceVersionCurriculumNodeLink[]
+  generationContexts  GenerationContextItem[]
+  questionSourceLinks QuestionSourceLink[]
 
   @@map("curriculum_nodes")
 }
@@ -279,26 +304,28 @@ model KnowledgeSource {
 }
 
 model SourceVersion {
-  id                 String                            @id @default(uuid()) @db.Uuid
-  sourceId           String                            @map("source_id") @db.Uuid
-  versionNumber      Int                               @map("version_number")
-  contentHash        String                            @map("content_hash") @db.Char(64)
-  contentReference   String                            @map("content_reference") @db.VarChar(1000)
-  contentMimeType    String                            @map("content_mime_type") @db.VarChar(120)
-  metadata           Json                              @default("{}")
-  requestFingerprint String                            @map("request_fingerprint") @db.Char(64)
-  idempotencyKey     String                            @map("idempotency_key") @db.VarChar(255)
-  lifecycle          SourceLifecycleStatus             @default(DRAFT)
-  createdAt          DateTime                          @default(now()) @map("created_at")
-  updatedAt          DateTime                          @updatedAt @map("updated_at")
-  source             KnowledgeSource                   @relation(fields: [sourceId], references: [id], onDelete: Restrict)
-  reviews            PedagogicalReview[]
-  permissions        UsagePermission[]
-  lifecycleEvents    SourceLifecycleEvent[]
-  ingestionRuns      IngestionRun[]
-  knowledgeItems     KnowledgeItem[]
-  curriculumLinks    SourceVersionCurriculumNodeLink[]
-  content            SourceVersionContent?
+  id                  String                            @id @default(uuid()) @db.Uuid
+  sourceId            String                            @map("source_id") @db.Uuid
+  versionNumber       Int                               @map("version_number")
+  contentHash         String                            @map("content_hash") @db.Char(64)
+  contentReference    String                            @map("content_reference") @db.VarChar(1000)
+  contentMimeType     String                            @map("content_mime_type") @db.VarChar(120)
+  metadata            Json                              @default("{}")
+  requestFingerprint  String                            @map("request_fingerprint") @db.Char(64)
+  idempotencyKey      String                            @map("idempotency_key") @db.VarChar(255)
+  lifecycle           SourceLifecycleStatus             @default(DRAFT)
+  createdAt           DateTime                          @default(now()) @map("created_at")
+  updatedAt           DateTime                          @updatedAt @map("updated_at")
+  source              KnowledgeSource                   @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  reviews             PedagogicalReview[]
+  permissions         UsagePermission[]
+  lifecycleEvents     SourceLifecycleEvent[]
+  ingestionRuns       IngestionRun[]
+  knowledgeItems      KnowledgeItem[]
+  curriculumLinks     SourceVersionCurriculumNodeLink[]
+  content             SourceVersionContent?
+  generationContexts  GenerationContextItem[]
+  questionSourceLinks QuestionSourceLink[]
 
   @@unique([sourceId, contentHash])
   @@unique([sourceId, idempotencyKey])
@@ -389,24 +416,26 @@ model SourceVersionContent {
 }
 
 model KnowledgeItem {
-  id              String                            @id @default(uuid()) @db.Uuid
-  sourceVersionId String                            @map("source_version_id") @db.Uuid
-  ingestionRunId  String                            @map("ingestion_run_id") @db.Uuid
-  organizationId  String?                           @map("organization_id") @db.Uuid
-  visibility      SourceVisibility
-  locator         String                            @db.VarChar(500)
-  normalizedText  String                            @map("normalized_text") @db.VarChar(30000)
-  textHash        String                            @map("text_hash") @db.Char(64)
-  metadata        Json                              @default("{}")
-  pipelineVersion String                            @map("pipeline_version") @db.VarChar(80)
-  parserVersion   String                            @map("parser_version") @db.VarChar(80)
-  status          KnowledgeItemStatus               @default(ACTIVE)
-  searchVector    Unsupported("tsvector")?
-  createdAt       DateTime                          @default(now()) @map("created_at")
-  updatedAt       DateTime                          @updatedAt @map("updated_at")
-  sourceVersion   SourceVersion                     @relation(fields: [sourceVersionId], references: [id], onDelete: Restrict)
-  ingestionRun    IngestionRun                      @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
-  curriculumLinks KnowledgeItemCurriculumNodeLink[]
+  id                  String                            @id @default(uuid()) @db.Uuid
+  sourceVersionId     String                            @map("source_version_id") @db.Uuid
+  ingestionRunId      String                            @map("ingestion_run_id") @db.Uuid
+  organizationId      String?                           @map("organization_id") @db.Uuid
+  visibility          SourceVisibility
+  locator             String                            @db.VarChar(500)
+  normalizedText      String                            @map("normalized_text") @db.VarChar(30000)
+  textHash            String                            @map("text_hash") @db.Char(64)
+  metadata            Json                              @default("{}")
+  pipelineVersion     String                            @map("pipeline_version") @db.VarChar(80)
+  parserVersion       String                            @map("parser_version") @db.VarChar(80)
+  status              KnowledgeItemStatus               @default(ACTIVE)
+  searchVector        Unsupported("tsvector")?
+  createdAt           DateTime                          @default(now()) @map("created_at")
+  updatedAt           DateTime                          @updatedAt @map("updated_at")
+  sourceVersion       SourceVersion                     @relation(fields: [sourceVersionId], references: [id], onDelete: Restrict)
+  ingestionRun        IngestionRun                      @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
+  curriculumLinks     KnowledgeItemCurriculumNodeLink[]
+  generationContexts  GenerationContextItem[]
+  questionSourceLinks QuestionSourceLink[]
 
   @@unique([sourceVersionId, locator, textHash])
   @@index([organizationId, visibility, status])
@@ -459,25 +488,28 @@ model Assessment {
   updatedAt       DateTime             @updatedAt @map("updated_at")
   organization    Organization         @relation(fields: [organizationId], references: [id])
   revisions       AssessmentRevision[]
+  generationRuns  GenerationRun[]
 
   @@map("assessments")
 }
 
 model AssessmentRevision {
-  id                  String                       @id @default(uuid()) @db.Uuid
-  assessmentId        String                       @map("assessment_id") @db.Uuid
-  revisionNumber      Int                          @map("revision_number")
-  idempotencyKey      String                       @map("idempotency_key")
-  requestFingerprint  String                       @map("request_fingerprint") @db.Char(64)
-  state               AssessmentRevisionState      @default(BUILDING)
-  curriculumVersionId String                       @map("curriculum_version_id") @db.Uuid
-  scoringMode         ScoringMode                  @map("scoring_mode")
-  totalScoreUnits     Int?                         @map("total_score_units")
-  createdAt           DateTime                     @default(now()) @map("created_at")
-  assessment          Assessment                   @relation(fields: [assessmentId], references: [id])
-  curriculumVersion   CurriculumVersion            @relation(fields: [curriculumVersionId], references: [id])
-  sections            AssessmentSection[]
-  nodeLinks           AssessmentRevisionNodeLink[]
+  id                   String                       @id @default(uuid()) @db.Uuid
+  assessmentId         String                       @map("assessment_id") @db.Uuid
+  revisionNumber       Int                          @map("revision_number")
+  idempotencyKey       String                       @map("idempotency_key")
+  requestFingerprint   String                       @map("request_fingerprint") @db.Char(64)
+  state                AssessmentRevisionState      @default(BUILDING)
+  curriculumVersionId  String                       @map("curriculum_version_id") @db.Uuid
+  scoringMode          ScoringMode                  @map("scoring_mode")
+  totalScoreUnits      Int?                         @map("total_score_units")
+  createdAt            DateTime                     @default(now()) @map("created_at")
+  assessment           Assessment                   @relation(fields: [assessmentId], references: [id])
+  curriculumVersion    CurriculumVersion            @relation(fields: [curriculumVersionId], references: [id])
+  sections             AssessmentSection[]
+  nodeLinks            AssessmentRevisionNodeLink[]
+  baseGenerationRuns   GenerationRun[]              @relation("GenerationBaseRevision")
+  outputGenerationRuns GenerationRun[]              @relation("GenerationOutputRevision")
 
   @@unique([assessmentId, revisionNumber])
   @@unique([assessmentId, idempotencyKey])
@@ -509,19 +541,21 @@ model AssessmentSection {
 }
 
 model AssessmentQuestion {
-  id           String                  @id @default(uuid()) @db.Uuid
-  sectionId    String                  @map("section_id") @db.Uuid
-  key          String
-  type         String
-  prompt       String
-  instructions String?                 @db.VarChar(5000)
-  difficulty   DifficultyBand?
-  order        Int
-  scoreUnits   Int?                    @map("score_units")
-  section      AssessmentSection       @relation(fields: [sectionId], references: [id])
-  subQuestions AssessmentSubQuestion[]
-  answers      Answer[]
-  rubrics      RubricCriterion[]
+  id                   String                  @id @default(uuid()) @db.Uuid
+  sectionId            String                  @map("section_id") @db.Uuid
+  key                  String
+  type                 String
+  prompt               String
+  instructions         String?                 @db.VarChar(5000)
+  difficulty           DifficultyBand?
+  order                Int
+  scoreUnits           Int?                    @map("score_units")
+  section              AssessmentSection       @relation(fields: [sectionId], references: [id])
+  subQuestions         AssessmentSubQuestion[]
+  answers              Answer[]
+  rubrics              RubricCriterion[]
+  questionSourceLinks  QuestionSourceLink[]
+  targetGenerationRuns GenerationRun[]         @relation("GenerationTargetQuestion")
 
   @@map("assessment_questions")
 }
@@ -567,4 +601,119 @@ model RubricCriterion {
   subQuestion   AssessmentSubQuestion? @relation(fields: [subQuestionId], references: [id])
 
   @@map("rubric_criteria")
+}
+
+model GenerationRun {
+  id                        String                  @id @default(uuid()) @db.Uuid
+  organizationId            String                  @map("organization_id") @db.Uuid
+  requestingUserId          String                  @map("requesting_user_id") @db.Uuid
+  assessmentId              String                  @map("assessment_id") @db.Uuid
+  operation                 GenerationOperation
+  idempotencyKey            String                  @map("idempotency_key") @db.VarChar(255)
+  requestFingerprint        String                  @map("request_fingerprint") @db.Char(64)
+  frozenSpecification       Json                    @map("frozen_specification")
+  curriculumVersionId       String                  @map("curriculum_version_id") @db.Uuid
+  baseRevisionId            String?                 @map("base_revision_id") @db.Uuid
+  targetQuestionId          String?                 @map("target_question_id") @db.Uuid
+  state                     GenerationRunState      @default(PENDING)
+  attempts                  Int                     @default(0)
+  failureCode               String?                 @map("failure_code") @db.VarChar(80)
+  promptTemplateVersion     String                  @map("prompt_template_version") @db.VarChar(80)
+  promptTemplateHash        String                  @map("prompt_template_hash") @db.Char(64)
+  modelConfigurationVersion String                  @map("model_configuration_version") @db.VarChar(80)
+  modelConfigurationHash    String                  @map("model_configuration_hash") @db.Char(64)
+  responseSchemaVersion     String                  @map("response_schema_version") @db.VarChar(40)
+  responseSchemaHash        String                  @map("response_schema_hash") @db.Char(64)
+  provider                  String?                 @db.VarChar(80)
+  model                     String?                 @db.VarChar(120)
+  outputRevisionId          String?                 @map("output_revision_id") @db.Uuid
+  createdAt                 DateTime                @default(now()) @map("created_at")
+  updatedAt                 DateTime                @updatedAt @map("updated_at")
+  processedAt               DateTime?               @map("processed_at")
+  organization              Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  requestingUser            User                    @relation(fields: [requestingUserId], references: [id], onDelete: Restrict)
+  assessment                Assessment              @relation(fields: [assessmentId], references: [id], onDelete: Restrict)
+  curriculumVersion         CurriculumVersion       @relation(fields: [curriculumVersionId], references: [id], onDelete: Restrict)
+  baseRevision              AssessmentRevision?     @relation("GenerationBaseRevision", fields: [baseRevisionId], references: [id], onDelete: Restrict)
+  targetQuestion            AssessmentQuestion?     @relation("GenerationTargetQuestion", fields: [targetQuestionId], references: [id], onDelete: Restrict)
+  outputRevision            AssessmentRevision?     @relation("GenerationOutputRevision", fields: [outputRevisionId], references: [id], onDelete: Restrict)
+  contextItems              GenerationContextItem[]
+  usage                     GenerationUsage[]
+  questionSourceLinks       QuestionSourceLink[]
+
+  @@unique([organizationId, assessmentId, idempotencyKey])
+  @@index([organizationId, state, createdAt])
+  @@map("generation_runs")
+}
+
+model GenerationContextItem {
+  id                  String            @id @default(uuid()) @db.Uuid
+  generationRunId     String            @map("generation_run_id") @db.Uuid
+  selectedOrder       Int               @map("selected_order")
+  knowledgeItemId     String            @map("knowledge_item_id") @db.Uuid
+  sourceVersionId     String            @map("source_version_id") @db.Uuid
+  locator             String            @db.VarChar(500)
+  textHash            String            @map("text_hash") @db.Char(64)
+  curriculumVersionId String            @map("curriculum_version_id") @db.Uuid
+  curriculumNodeId    String            @map("curriculum_node_id") @db.Uuid
+  rank                Int
+  score               Float
+  characterCount      Int               @map("character_count")
+  estimatedTokens     Int               @map("estimated_tokens")
+  createdAt           DateTime          @default(now()) @map("created_at")
+  generationRun       GenerationRun     @relation(fields: [generationRunId], references: [id], onDelete: Restrict)
+  knowledgeItem       KnowledgeItem     @relation(fields: [knowledgeItemId], references: [id], onDelete: Restrict)
+  sourceVersion       SourceVersion     @relation(fields: [sourceVersionId], references: [id], onDelete: Restrict)
+  curriculumVersion   CurriculumVersion @relation(fields: [curriculumVersionId], references: [id], onDelete: Restrict)
+  curriculumNode      CurriculumNode    @relation(fields: [curriculumNodeId], references: [id], onDelete: Restrict)
+
+  @@unique([generationRunId, selectedOrder])
+  @@unique([generationRunId, knowledgeItemId])
+  @@index([knowledgeItemId])
+  @@map("generation_context_items")
+}
+
+model GenerationUsage {
+  id              String        @id @default(uuid()) @db.Uuid
+  generationRunId String        @map("generation_run_id") @db.Uuid
+  attempt         Int
+  provider        String        @db.VarChar(80)
+  model           String        @db.VarChar(120)
+  requestId       String        @map("request_id") @db.VarChar(255)
+  inputTokens     Int           @map("input_tokens")
+  outputTokens    Int           @map("output_tokens")
+  totalTokens     Int           @map("total_tokens")
+  costMicros      Int           @map("cost_micros")
+  finishReason    String        @map("finish_reason") @db.VarChar(80)
+  createdAt       DateTime      @default(now()) @map("created_at")
+  generationRun   GenerationRun @relation(fields: [generationRunId], references: [id], onDelete: Restrict)
+
+  @@unique([generationRunId, attempt])
+  @@index([generationRunId, createdAt])
+  @@map("generation_usages")
+}
+
+model QuestionSourceLink {
+  id                   String             @id @default(uuid()) @db.Uuid
+  assessmentQuestionId String             @map("assessment_question_id") @db.Uuid
+  generationRunId      String             @map("generation_run_id") @db.Uuid
+  knowledgeItemId      String             @map("knowledge_item_id") @db.Uuid
+  sourceVersionId      String             @map("source_version_id") @db.Uuid
+  locator              String             @db.VarChar(500)
+  textHash             String             @map("text_hash") @db.Char(64)
+  curriculumVersionId  String             @map("curriculum_version_id") @db.Uuid
+  curriculumNodeId     String             @map("curriculum_node_id") @db.Uuid
+  lineage              GenerationLineage
+  priorQuestionId      String?            @map("prior_question_id") @db.Uuid
+  createdAt            DateTime           @default(now()) @map("created_at")
+  assessmentQuestion   AssessmentQuestion @relation(fields: [assessmentQuestionId], references: [id], onDelete: Restrict)
+  generationRun        GenerationRun      @relation(fields: [generationRunId], references: [id], onDelete: Restrict)
+  knowledgeItem        KnowledgeItem      @relation(fields: [knowledgeItemId], references: [id], onDelete: Restrict)
+  sourceVersion        SourceVersion      @relation(fields: [sourceVersionId], references: [id], onDelete: Restrict)
+  curriculumVersion    CurriculumVersion  @relation(fields: [curriculumVersionId], references: [id], onDelete: Restrict)
+  curriculumNode       CurriculumNode     @relation(fields: [curriculumNodeId], references: [id], onDelete: Restrict)
+
+  @@unique([assessmentQuestionId, generationRunId, knowledgeItemId])
+  @@index([assessmentQuestionId])
+  @@map("question_source_links")
 }

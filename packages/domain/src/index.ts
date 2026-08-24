@@ -33,6 +33,36 @@ export function sourceLifecycleTransitionsFor(
 ): readonly SourceLifecycleStatus[] {
   return sourceLifecycleTransitions[fromStatus];
 }
+
+export type GenerationRunState =
+  | 'PENDING'
+  | 'PROCESSING'
+  | 'SUCCEEDED'
+  | 'INSUFFICIENT_CONTEXT'
+  | 'FAILED';
+
+const generationRunTransitions: Readonly<
+  Record<GenerationRunState, readonly GenerationRunState[]>
+> = {
+  PENDING: ['PROCESSING'],
+  PROCESSING: ['PENDING', 'SUCCEEDED', 'INSUFFICIENT_CONTEXT', 'FAILED'],
+  SUCCEEDED: [],
+  INSUFFICIENT_CONTEXT: [],
+  FAILED: [],
+};
+
+export function canTransitionGenerationRun(
+  from: GenerationRunState,
+  to: GenerationRunState,
+): boolean {
+  return generationRunTransitions[from].includes(to);
+}
+
+export function generationRunTransitionsFor(
+  from: GenerationRunState,
+): readonly GenerationRunState[] {
+  return generationRunTransitions[from];
+}
 export type WorkspaceOperation =
   | 'READ_WORKSPACE_CONTEXT'
   | 'RENAME_WORKSPACE'

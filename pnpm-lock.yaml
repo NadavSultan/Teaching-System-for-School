@@ -147,6 +147,9 @@ importers:
       '@prisma/client':
         specifier: 6.19.3
         version: 6.19.3(prisma@6.19.3(typescript@6.0.3))(typescript@6.0.3)
+      '@teach/ai':
+        specifier: workspace:*
+        version: link:../ai
       '@teach/contracts':
         specifier: workspace:*
         version: link:../contracts

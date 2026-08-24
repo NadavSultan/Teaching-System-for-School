@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@prisma/client": "6.19.3",
+    "@teach/ai": "workspace:*",
     "@teach/contracts": "workspace:*",
     "@teach/domain": "workspace:*"
   },

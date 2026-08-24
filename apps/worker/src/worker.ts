@@ -1,4 +1,4 @@
-import { claimOutbox, finishOutbox, prisma, runIngestion } from '@teach/db';
+import { claimOutbox, finishOutbox, prisma, processGenerationRun, runIngestion } from '@teach/db';
 
 export type WorkerLogger = (event: Readonly<Record<string, unknown>>) => void;
 export type OutboxHandler = (event: {
@@ -20,6 +20,15 @@ export class OutboxWorker {
         'ingestionRunId' in event.payload
       )
         await runIngestion(String((event.payload as { ingestionRunId: unknown }).ingestionRunId));
+      if (
+        event.eventType === 'generation.requested' &&
+        typeof event.payload === 'object' &&
+        event.payload &&
+        'generationRunId' in event.payload
+      )
+        await processGenerationRun(
+          String((event.payload as { generationRunId: unknown }).generationRunId),
+        );
     },
   ) {}
   async pollOnce(): Promise<boolean> {

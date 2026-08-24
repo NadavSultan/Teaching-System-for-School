@@ -1,0 +1,68 @@
+{
+  "$ref": "#/definitions/GenerationUsageV1",
+  "definitions": {
+    "GenerationUsageV1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "attempt": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "inputTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outputTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "totalTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "costMicros": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "finishReason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        }
+      },
+      "required": [
+        "version",
+        "attempt",
+        "provider",
+        "model",
+        "requestId",
+        "inputTokens",
+        "outputTokens",
+        "totalTokens",
+        "costMicros",
+        "finishReason"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

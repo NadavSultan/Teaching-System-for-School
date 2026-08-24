@@ -1,0 +1,87 @@
+{
+  "$ref": "#/definitions/GenerationStatusV1",
+  "definitions": {
+    "GenerationStatusV1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "assessmentId": {
+          "$ref": "#/definitions/GenerationStatusV1/properties/id"
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "DRAFT",
+            "REGENERATE_QUESTION"
+          ]
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "PENDING",
+            "PROCESSING",
+            "SUCCEEDED",
+            "INSUFFICIENT_CONTEXT",
+            "FAILED"
+          ]
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failureCode": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "CONTEXT_EMPTY",
+                "CONTEXT_INVALIDATED",
+                "TIMEOUT",
+                "RATE_LIMITED",
+                "TRANSIENT_EXHAUSTED",
+                "PERMANENT_PROVIDER_ERROR",
+                "SCHEMA_INVALID",
+                "OUTPUT_INVALID",
+                "CONTEXT_INVALIDATED",
+                "BUDGET_EXCEEDED",
+                "CONFIGURATION_ERROR"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outputRevisionId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GenerationStatusV1/properties/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "id",
+        "assessmentId",
+        "operation",
+        "state",
+        "attempts",
+        "failureCode",
+        "outputRevisionId"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

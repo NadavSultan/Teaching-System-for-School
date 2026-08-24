@@ -1,0 +1,50 @@
+{
+  "$ref": "#/definitions/QuestionRegenerationRequestV1",
+  "definitions": {
+    "QuestionRegenerationRequestV1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "assessmentId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "baseRevisionId": {
+          "$ref": "#/definitions/QuestionRegenerationRequestV1/properties/assessmentId"
+        },
+        "targetQuestionId": {
+          "$ref": "#/definitions/QuestionRegenerationRequestV1/properties/assessmentId"
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "instruction": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 5000
+        },
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      },
+      "required": [
+        "version",
+        "assessmentId",
+        "baseRevisionId",
+        "targetQuestionId",
+        "idempotencyKey",
+        "instruction",
+        "query"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

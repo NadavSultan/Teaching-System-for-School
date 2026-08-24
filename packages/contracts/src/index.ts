@@ -352,3 +352,211 @@ export const knowledgeItemProvenanceSchema = z
       .max(1000),
   })
   .strict();
+
+export const GENERATION_SCHEMA_VERSION = '1.0.0' as const;
+export const generationOperationSchema = z.enum(['DRAFT', 'REGENERATE_QUESTION']);
+export const generationRunStateSchema = z.enum([
+  'PENDING',
+  'PROCESSING',
+  'SUCCEEDED',
+  'INSUFFICIENT_CONTEXT',
+  'FAILED',
+]);
+export const generationFailureCodeSchema = z.enum([
+  'CONTEXT_EMPTY',
+  'CONTEXT_INVALIDATED',
+  'TIMEOUT',
+  'RATE_LIMITED',
+  'TRANSIENT_EXHAUSTED',
+  'PERMANENT_PROVIDER_ERROR',
+  'SCHEMA_INVALID',
+  'OUTPUT_INVALID',
+  'CONTEXT_INVALIDATED',
+  'BUDGET_EXCEEDED',
+  'CONFIGURATION_ERROR',
+]);
+export const generationQuestionTypeSchema = z.string().regex(/^[A-Z][A-Z0-9_-]{0,63}$/);
+export const generationQuestionPlanSchema = z
+  .object({
+    key: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,99}$/),
+    order: z.number().int().nonnegative().max(1000),
+    type: generationQuestionTypeSchema,
+    difficulty: difficultyBandSchema,
+    scoreUnits: z.number().int().nonnegative().max(1_000_000).nullable(),
+    instructions: z.string().max(5000).default(''),
+    emphasis: z.string().max(500).default(''),
+  })
+  .strict();
+export const generationSectionPlanSchema = z
+  .object({
+    key: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,99}$/),
+    title: z.string().min(1).max(200),
+    order: z.number().int().nonnegative().max(1000),
+    instructions: z.string().max(5000).default(''),
+    scoreUnits: z.number().int().nonnegative().max(1_000_000).nullable(),
+    questions: z.array(generationQuestionPlanSchema).min(1).max(100),
+  })
+  .strict();
+export const draftGenerationRequestSchema = z
+  .object({
+    version: z.literal(GENERATION_SCHEMA_VERSION),
+    assessmentId: uuidSchema,
+    idempotencyKey: z.string().min(1).max(255),
+    curriculumVersionId: uuidSchema,
+    curriculumNodeIds: z.array(uuidSchema).min(1).max(100),
+    scoringMode: scoringModeSchema,
+    totalScoreUnits: z.number().int().nonnegative().max(1_000_000).nullable(),
+    query: z.string().trim().min(1).max(500),
+    instructions: z.string().max(5000).default(''),
+    sections: z.array(generationSectionPlanSchema).min(1).max(20),
+  })
+  .strict();
+export const questionRegenerationRequestSchema = z
+  .object({
+    version: z.literal(GENERATION_SCHEMA_VERSION),
+    assessmentId: uuidSchema,
+    baseRevisionId: uuidSchema,
+    targetQuestionId: uuidSchema,
+    idempotencyKey: z.string().min(1).max(255),
+    instruction: z.string().min(1).max(5000),
+    query: z.string().trim().min(1).max(500),
+  })
+  .strict();
+export const frozenGenerationSpecificationSchema = z
+  .object({
+    version: z.literal(GENERATION_SCHEMA_VERSION),
+    operation: generationOperationSchema,
+    assessmentId: uuidSchema,
+    curriculumVersionId: uuidSchema,
+    curriculumNodeIds: z.array(uuidSchema).min(1).max(100),
+    assessmentType: assessmentTypeSchema,
+    assessmentTitle: z.string().min(1).max(200),
+    scoringMode: scoringModeSchema,
+    totalScoreUnits: z.number().int().nonnegative().max(1_000_000).nullable(),
+    query: z.string().min(1).max(500),
+    instructions: z.string().max(5000),
+    sections: z.array(generationSectionPlanSchema).min(1).max(20),
+    baseRevisionId: uuidSchema.nullable(),
+    targetQuestionId: uuidSchema.nullable(),
+    regenerationInstruction: z.string().max(5000),
+  })
+  .strict();
+const generatedAnswerContentSchema = z
+  .object({
+    key: z.string().min(1).max(100),
+    order: z.number().int().nonnegative().max(1000),
+    text: z.string().min(1).max(10000),
+    data: z.record(z.unknown()).optional(),
+    explanation: z.string().max(10000).optional(),
+  })
+  .strict();
+const generatedRubricContentSchema = z
+  .object({
+    key: z.string().min(1).max(100),
+    description: z.string().min(1).max(2000),
+    order: z.number().int().nonnegative().max(1000),
+    scoreUnits: z.number().int().nonnegative().max(1_000_000).nullable(),
+  })
+  .strict();
+const generatedSubQuestionContentSchema = z
+  .object({
+    key: z.string().min(1).max(100),
+    prompt: z.string().min(1).max(10000),
+    order: z.number().int().nonnegative().max(1000),
+    scoreUnits: z.number().int().nonnegative().max(1_000_000).nullable(),
+    answers: z.array(generatedAnswerContentSchema).max(100),
+    rubrics: z.array(generatedRubricContentSchema).max(100),
+  })
+  .strict();
+export const generatedQuestionContentSchema = z
+  .object({
+    prompt: z.string().min(1).max(20000),
+    instructions: z.string().max(5000).optional(),
+    answers: z.array(generatedAnswerContentSchema).max(100),
+    rubrics: z.array(generatedRubricContentSchema).max(100),
+    subQuestions: z.array(generatedSubQuestionContentSchema).max(100),
+  })
+  .strict();
+export const generatedDraftOutputSchema = z
+  .object({
+    version: z.literal(GENERATION_SCHEMA_VERSION),
+    sections: z.array(
+      z
+        .object({
+          key: z.string().min(1).max(100),
+          order: z.number().int().nonnegative().max(1000),
+          questions: z.array(
+            z
+              .object({
+                key: z.string().min(1).max(100),
+                order: z.number().int().nonnegative().max(1000),
+                type: generationQuestionTypeSchema,
+                difficulty: difficultyBandSchema,
+                scoreUnits: z.number().int().nonnegative().max(1_000_000).nullable(),
+                content: generatedQuestionContentSchema,
+                citations: z.array(uuidSchema).min(1).max(100),
+              })
+              .strict(),
+          ),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+export const generatedQuestionOutputSchema = z
+  .object({
+    version: z.literal(GENERATION_SCHEMA_VERSION),
+    content: generatedQuestionContentSchema,
+    citations: z.array(uuidSchema).min(1).max(100),
+  })
+  .strict();
+export const generationContextItemSchema = z
+  .object({
+    knowledgeItemId: uuidSchema,
+    sourceVersionId: uuidSchema,
+    locator: z.string().min(1).max(500),
+    textHash: z.string().regex(/^[a-f0-9]{64}$/),
+    curriculumVersionId: uuidSchema,
+    curriculumNodeId: uuidSchema,
+    rank: z.number().int().positive(),
+    score: z.number().nonnegative(),
+    text: z.string().min(1).max(30000),
+    characterCount: z.number().int().positive().max(30000),
+    estimatedTokens: z.number().int().positive().max(10000),
+  })
+  .strict();
+export const generationContextProvenanceSchema = generationContextItemSchema.omit({ text: true });
+export const generationStatusSchema = z
+  .object({
+    version: z.literal(GENERATION_SCHEMA_VERSION),
+    id: uuidSchema,
+    assessmentId: uuidSchema,
+    operation: generationOperationSchema,
+    state: generationRunStateSchema,
+    attempts: z.number().int().nonnegative(),
+    failureCode: generationFailureCodeSchema.nullable(),
+    outputRevisionId: uuidSchema.nullable(),
+  })
+  .strict();
+export const generationResultSchema = z
+  .object({
+    version: z.literal(GENERATION_SCHEMA_VERSION),
+    status: generationStatusSchema,
+    context: z.array(generationContextProvenanceSchema),
+    revision: finalizedAssessmentRevisionSchema.nullable(),
+  })
+  .strict();
+export const generationUsageSchema = z
+  .object({
+    version: z.literal(GENERATION_SCHEMA_VERSION),
+    attempt: z.number().int().positive(),
+    provider: z.string().min(1).max(80),
+    model: z.string().min(1).max(120),
+    requestId: z.string().min(1).max(255),
+    inputTokens: z.number().int().nonnegative(),
+    outputTokens: z.number().int().nonnegative(),
+    totalTokens: z.number().int().nonnegative(),
+    costMicros: z.number().int().nonnegative(),
+    finishReason: z.string().min(1).max(80),
+  })
+  .strict();

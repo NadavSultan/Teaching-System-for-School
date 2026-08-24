@@ -28,6 +28,16 @@ import {
   knowledgeItemProvenanceSchema,
   retrievalRequestSchema,
   retrievalResultSchema,
+  draftGenerationRequestSchema,
+  questionRegenerationRequestSchema,
+  frozenGenerationSpecificationSchema,
+  generatedDraftOutputSchema,
+  generatedQuestionOutputSchema,
+  generationStatusSchema,
+  generationResultSchema,
+  generationContextItemSchema,
+  generationContextProvenanceSchema,
+  generationUsageSchema,
 } from '../dist/index.js';
 
 const outputDirectory = join(dirname(fileURLToPath(import.meta.url)), '..', 'schemas');
@@ -73,6 +83,28 @@ const schemas = [
   ['knowledge-item-provenance.v1.json', knowledgeItemProvenanceSchema, 'KnowledgeItemProvenanceV1'],
   ['retrieval-request.v1.json', retrievalRequestSchema, 'RetrievalRequestV1'],
   ['retrieval-result.v1.json', retrievalResultSchema, 'RetrievalResultV1'],
+  ['draft-generation-request.v1.json', draftGenerationRequestSchema, 'DraftGenerationRequestV1'],
+  [
+    'question-regeneration-request.v1.json',
+    questionRegenerationRequestSchema,
+    'QuestionRegenerationRequestV1',
+  ],
+  [
+    'frozen-generation-specification.v1.json',
+    frozenGenerationSpecificationSchema,
+    'FrozenGenerationSpecificationV1',
+  ],
+  ['generated-draft-output.v1.json', generatedDraftOutputSchema, 'GeneratedDraftOutputV1'],
+  ['generated-question-output.v1.json', generatedQuestionOutputSchema, 'GeneratedQuestionOutputV1'],
+  ['generation-status.v1.json', generationStatusSchema, 'GenerationStatusV1'],
+  ['generation-result.v1.json', generationResultSchema, 'GenerationResultV1'],
+  ['generation-context-item.v1.json', generationContextItemSchema, 'GenerationContextItemV1'],
+  [
+    'generation-context-provenance.v1.json',
+    generationContextProvenanceSchema,
+    'GenerationContextProvenanceV1',
+  ],
+  ['generation-usage.v1.json', generationUsageSchema, 'GenerationUsageV1'],
 ];
 let drift = false;
 for (const [file, schema, name] of schemas) {

@@ -1,0 +1,490 @@
+{
+  "$ref": "#/definitions/GenerationResultV1",
+  "definitions": {
+    "GenerationResultV1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "status": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "const": "1.0.0"
+            },
+            "id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "assessmentId": {
+              "$ref": "#/definitions/GenerationResultV1/properties/status/properties/id"
+            },
+            "operation": {
+              "type": "string",
+              "enum": [
+                "DRAFT",
+                "REGENERATE_QUESTION"
+              ]
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "PENDING",
+                "PROCESSING",
+                "SUCCEEDED",
+                "INSUFFICIENT_CONTEXT",
+                "FAILED"
+              ]
+            },
+            "attempts": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "failureCode": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "CONTEXT_EMPTY",
+                    "CONTEXT_INVALIDATED",
+                    "TIMEOUT",
+                    "RATE_LIMITED",
+                    "TRANSIENT_EXHAUSTED",
+                    "PERMANENT_PROVIDER_ERROR",
+                    "SCHEMA_INVALID",
+                    "OUTPUT_INVALID",
+                    "CONTEXT_INVALIDATED",
+                    "BUDGET_EXCEEDED",
+                    "CONFIGURATION_ERROR"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "outputRevisionId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GenerationResultV1/properties/status/properties/id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "version",
+            "id",
+            "assessmentId",
+            "operation",
+            "state",
+            "attempts",
+            "failureCode",
+            "outputRevisionId"
+          ],
+          "additionalProperties": false
+        },
+        "context": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "knowledgeItemId": {
+                "$ref": "#/definitions/GenerationResultV1/properties/status/properties/id"
+              },
+              "sourceVersionId": {
+                "$ref": "#/definitions/GenerationResultV1/properties/status/properties/id"
+              },
+              "locator": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              },
+              "textHash": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "curriculumVersionId": {
+                "$ref": "#/definitions/GenerationResultV1/properties/status/properties/id"
+              },
+              "curriculumNodeId": {
+                "$ref": "#/definitions/GenerationResultV1/properties/status/properties/id"
+              },
+              "rank": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              "score": {
+                "type": "number",
+                "minimum": 0
+              },
+              "characterCount": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 30000
+              },
+              "estimatedTokens": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 10000
+              }
+            },
+            "required": [
+              "knowledgeItemId",
+              "sourceVersionId",
+              "locator",
+              "textHash",
+              "curriculumVersionId",
+              "curriculumNodeId",
+              "rank",
+              "score",
+              "characterCount",
+              "estimatedTokens"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "version": {
+                  "type": "string",
+                  "const": "1.0.0"
+                },
+                "id": {
+                  "$ref": "#/definitions/GenerationResultV1/properties/status/properties/id"
+                },
+                "assessmentId": {
+                  "$ref": "#/definitions/GenerationResultV1/properties/status/properties/id"
+                },
+                "revisionNumber": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0
+                },
+                "curriculumVersionId": {
+                  "$ref": "#/definitions/GenerationResultV1/properties/status/properties/id"
+                },
+                "scoringMode": {
+                  "type": "string",
+                  "enum": [
+                    "NONE",
+                    "POINTS"
+                  ]
+                },
+                "totalScoreUnits": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "finalized": {
+                  "type": "boolean",
+                  "const": true
+                },
+                "curriculumNodeIds": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/GenerationResultV1/properties/status/properties/id"
+                  }
+                },
+                "sections": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100
+                      },
+                      "title": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "instructions": {
+                        "type": "string",
+                        "maxLength": 5000
+                      },
+                      "order": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "scoreUnits": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1000000
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "id": {
+                        "$ref": "#/definitions/GenerationResultV1/properties/status/properties/id"
+                      },
+                      "questions": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "key": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 100
+                            },
+                            "type": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 64
+                            },
+                            "prompt": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 20000
+                            },
+                            "instructions": {
+                              "type": "string",
+                              "maxLength": 5000
+                            },
+                            "order": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "difficulty": {
+                              "type": "string",
+                              "enum": [
+                                "LOW",
+                                "MEDIUM",
+                                "HIGH"
+                              ]
+                            },
+                            "scoreUnits": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 1000000
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "id": {
+                              "$ref": "#/definitions/GenerationResultV1/properties/status/properties/id"
+                            },
+                            "answers": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "key": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 100
+                                  },
+                                  "order": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 1000
+                                  },
+                                  "text": {
+                                    "type": "string",
+                                    "maxLength": 10000
+                                  },
+                                  "data": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                  },
+                                  "explanation": {
+                                    "type": "string",
+                                    "maxLength": 10000
+                                  },
+                                  "id": {
+                                    "$ref": "#/definitions/GenerationResultV1/properties/status/properties/id"
+                                  }
+                                },
+                                "required": [
+                                  "key",
+                                  "order",
+                                  "text",
+                                  "id"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "rubrics": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "key": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 100
+                                  },
+                                  "description": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 2000
+                                  },
+                                  "order": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  },
+                                  "scoreUnits": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 1000000
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "id": {
+                                    "$ref": "#/definitions/GenerationResultV1/properties/status/properties/id"
+                                  }
+                                },
+                                "required": [
+                                  "key",
+                                  "description",
+                                  "order",
+                                  "id"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "subQuestions": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "key": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 100
+                                  },
+                                  "prompt": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 10000
+                                  },
+                                  "order": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  },
+                                  "scoreUnits": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 1000000
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "id": {
+                                    "$ref": "#/definitions/GenerationResultV1/properties/status/properties/id"
+                                  },
+                                  "answers": {
+                                    "type": "array",
+                                    "items": {
+                                      "$ref": "#/definitions/GenerationResultV1/properties/revision/anyOf/0/properties/sections/items/properties/questions/items/properties/answers/items"
+                                    }
+                                  },
+                                  "rubrics": {
+                                    "type": "array",
+                                    "items": {
+                                      "$ref": "#/definitions/GenerationResultV1/properties/revision/anyOf/0/properties/sections/items/properties/questions/items/properties/rubrics/items"
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "key",
+                                  "prompt",
+                                  "order",
+                                  "id",
+                                  "answers",
+                                  "rubrics"
+                                ],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": [
+                            "key",
+                            "type",
+                            "prompt",
+                            "order",
+                            "id",
+                            "answers",
+                            "rubrics",
+                            "subQuestions"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "key",
+                      "title",
+                      "order",
+                      "id",
+                      "questions"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "version",
+                "id",
+                "assessmentId",
+                "revisionNumber",
+                "curriculumVersionId",
+                "scoringMode",
+                "totalScoreUnits",
+                "finalized",
+                "curriculumNodeIds",
+                "sections"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "status",
+        "context",
+        "revision"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

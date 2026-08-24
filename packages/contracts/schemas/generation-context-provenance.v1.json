@@ -1,0 +1,64 @@
+{
+  "$ref": "#/definitions/GenerationContextProvenanceV1",
+  "definitions": {
+    "GenerationContextProvenanceV1": {
+      "type": "object",
+      "properties": {
+        "knowledgeItemId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sourceVersionId": {
+          "$ref": "#/definitions/GenerationContextProvenanceV1/properties/knowledgeItemId"
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "textHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "curriculumVersionId": {
+          "$ref": "#/definitions/GenerationContextProvenanceV1/properties/knowledgeItemId"
+        },
+        "curriculumNodeId": {
+          "$ref": "#/definitions/GenerationContextProvenanceV1/properties/knowledgeItemId"
+        },
+        "rank": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "score": {
+          "type": "number",
+          "minimum": 0
+        },
+        "characterCount": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 30000
+        },
+        "estimatedTokens": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 10000
+        }
+      },
+      "required": [
+        "knowledgeItemId",
+        "sourceVersionId",
+        "locator",
+        "textHash",
+        "curriculumVersionId",
+        "curriculumNodeId",
+        "rank",
+        "score",
+        "characterCount",
+        "estimatedTokens"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

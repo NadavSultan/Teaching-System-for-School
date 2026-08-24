@@ -32,18 +32,27 @@ const pg = new EmbeddedPostgres({
   onLog: () => undefined,
 });
 const pnpmCli = process.env.npm_execpath;
-if (!pnpmCli) throw new Error('This harness must be started through pnpm.');
 const run = (args, database) =>
   new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [pnpmCli, ...args], {
-      stdio: 'inherit',
-      env: {
-        ...process.env,
-        NODE_ENV: 'test',
-        AUTH_ADAPTER: 'test',
-        DATABASE_URL: `postgresql://phase10:phase10_local_only@127.0.0.1:55432/${database}?schema=public`,
-      },
-    });
+    const child = pnpmCli
+      ? spawn(process.execPath, [pnpmCli, ...args], {
+          stdio: 'inherit',
+          env: {
+            ...process.env,
+            NODE_ENV: 'test',
+            AUTH_ADAPTER: 'test',
+            DATABASE_URL: `postgresql://phase10:phase10_local_only@127.0.0.1:55432/${database}?schema=public`,
+          },
+        })
+      : spawn('pnpm.cmd', args, {
+          stdio: 'inherit',
+          env: {
+            ...process.env,
+            NODE_ENV: 'test',
+            AUTH_ADAPTER: 'test',
+            DATABASE_URL: `postgresql://phase10:phase10_local_only@127.0.0.1:55432/${database}?schema=public`,
+          },
+        });
     child.once('exit', (code) =>
       code === 0 ? resolve() : reject(new Error(`pnpm ${args.join(' ')} failed with exit ${code}`)),
     );

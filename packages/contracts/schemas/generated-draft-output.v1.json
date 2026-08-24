@@ -1,0 +1,266 @@
+{
+  "$ref": "#/definitions/GeneratedDraftOutputV1",
+  "definitions": {
+    "GeneratedDraftOutputV1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "order": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "questions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 100
+                    },
+                    "order": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000
+                    },
+                    "type": {
+                      "type": "string",
+                      "pattern": "^[A-Z][A-Z0-9_-]{0,63}$"
+                    },
+                    "difficulty": {
+                      "type": "string",
+                      "enum": [
+                        "LOW",
+                        "MEDIUM",
+                        "HIGH"
+                      ]
+                    },
+                    "scoreUnits": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 1000000
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "content": {
+                      "type": "object",
+                      "properties": {
+                        "prompt": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 20000
+                        },
+                        "instructions": {
+                          "type": "string",
+                          "maxLength": 5000
+                        },
+                        "answers": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 100
+                              },
+                              "order": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 1000
+                              },
+                              "text": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 10000
+                              },
+                              "data": {
+                                "type": "object",
+                                "additionalProperties": {}
+                              },
+                              "explanation": {
+                                "type": "string",
+                                "maxLength": 10000
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "order",
+                              "text"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "maxItems": 100
+                        },
+                        "rubrics": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 100
+                              },
+                              "description": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 2000
+                              },
+                              "order": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 1000
+                              },
+                              "scoreUnits": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 1000000
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "description",
+                              "order",
+                              "scoreUnits"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "maxItems": 100
+                        },
+                        "subQuestions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 100
+                              },
+                              "prompt": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 10000
+                              },
+                              "order": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 1000
+                              },
+                              "scoreUnits": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 1000000
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "answers": {
+                                "type": "array",
+                                "items": {
+                                  "$ref": "#/definitions/GeneratedDraftOutputV1/properties/sections/items/properties/questions/items/properties/content/properties/answers/items"
+                                },
+                                "maxItems": 100
+                              },
+                              "rubrics": {
+                                "type": "array",
+                                "items": {
+                                  "$ref": "#/definitions/GeneratedDraftOutputV1/properties/sections/items/properties/questions/items/properties/content/properties/rubrics/items"
+                                },
+                                "maxItems": 100
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "prompt",
+                              "order",
+                              "scoreUnits",
+                              "answers",
+                              "rubrics"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "maxItems": 100
+                        }
+                      },
+                      "required": [
+                        "prompt",
+                        "answers",
+                        "rubrics",
+                        "subQuestions"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "citations": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "minItems": 1,
+                      "maxItems": 100
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "order",
+                    "type",
+                    "difficulty",
+                    "scoreUnits",
+                    "content",
+                    "citations"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "key",
+              "order",
+              "questions"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "version",
+        "sections"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

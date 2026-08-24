@@ -1,0 +1,229 @@
+{
+  "$ref": "#/definitions/FrozenGenerationSpecificationV1",
+  "definitions": {
+    "FrozenGenerationSpecificationV1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "DRAFT",
+            "REGENERATE_QUESTION"
+          ]
+        },
+        "assessmentId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "curriculumVersionId": {
+          "$ref": "#/definitions/FrozenGenerationSpecificationV1/properties/assessmentId"
+        },
+        "curriculumNodeIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FrozenGenerationSpecificationV1/properties/assessmentId"
+          },
+          "minItems": 1,
+          "maxItems": 100
+        },
+        "assessmentType": {
+          "type": "string",
+          "enum": [
+            "WORKSHEET",
+            "TEST"
+          ]
+        },
+        "assessmentTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "scoringMode": {
+          "type": "string",
+          "enum": [
+            "NONE",
+            "POINTS"
+          ]
+        },
+        "totalScoreUnits": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "instructions": {
+          "type": "string",
+          "maxLength": 5000
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,99}$"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "order": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "instructions": {
+                "type": "string",
+                "maxLength": 5000,
+                "default": ""
+              },
+              "scoreUnits": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "questions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,99}$"
+                    },
+                    "order": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000
+                    },
+                    "type": {
+                      "type": "string",
+                      "pattern": "^[A-Z][A-Z0-9_-]{0,63}$"
+                    },
+                    "difficulty": {
+                      "type": "string",
+                      "enum": [
+                        "LOW",
+                        "MEDIUM",
+                        "HIGH"
+                      ]
+                    },
+                    "scoreUnits": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 1000000
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "instructions": {
+                      "type": "string",
+                      "maxLength": 5000,
+                      "default": ""
+                    },
+                    "emphasis": {
+                      "type": "string",
+                      "maxLength": 500,
+                      "default": ""
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "order",
+                    "type",
+                    "difficulty",
+                    "scoreUnits"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 100
+              }
+            },
+            "required": [
+              "key",
+              "title",
+              "order",
+              "scoreUnits",
+              "questions"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 20
+        },
+        "baseRevisionId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FrozenGenerationSpecificationV1/properties/assessmentId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "targetQuestionId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FrozenGenerationSpecificationV1/properties/assessmentId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "regenerationInstruction": {
+          "type": "string",
+          "maxLength": 5000
+        }
+      },
+      "required": [
+        "version",
+        "operation",
+        "assessmentId",
+        "curriculumVersionId",
+        "curriculumNodeIds",
+        "assessmentType",
+        "assessmentTitle",
+        "scoringMode",
+        "totalScoreUnits",
+        "query",
+        "instructions",
+        "sections",
+        "baseRevisionId",
+        "targetQuestionId",
+        "regenerationInstruction"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}
