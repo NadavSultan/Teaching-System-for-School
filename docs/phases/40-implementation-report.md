@@ -26,10 +26,11 @@ The three modified matrix suites now provide explicit per-row gateway/adversaria
 1. `502daa9` — baseline exact matrix evidence.
 2. `0882d60` — `fix(phase40): close evidence integrity matrix gaps`.
 3. `afe7ab4` — `fix(phase40): preserve explicit matrix formatting`.
-4. This report-only corrective commit follows this update.
+4. `28e298a` — `fix(phase40): remove matrix formatter suppressions`.
+5. This report-only corrective commit follows this update.
 
 ## Remaining deviation
 
-`pnpm lint` exits 1 only on four `no-useless-escape` diagnostics in the immutable protected files `tests/phase40-evidence-integrity-master-control.test.ts` and `tests/phase40-exact-matrix-master-control.test.ts`. No authorized implementation file has lint diagnostics. Those protected files cannot be edited under the approved scope, so the all-green lint claim is not available.
+`pnpm lint` exits 1 only on eight `no-useless-escape` diagnostics in the immutable protected files `tests/phase40-evidence-integrity-master-control.test.ts` and `tests/phase40-exact-matrix-master-control.test.ts`. No authorized implementation file has lint diagnostics. Those protected files cannot be edited under the approved scope, so the all-green lint claim is not available.
 
 Required handoff status: `BLOCKED: immutable protected master-test lint diagnostics prevent a truthful all-green Phase 40 claim`.
