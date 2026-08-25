@@ -42,4 +42,39 @@ describe('Phase 40 protected master source gate', () => {
       "kind === 'foreign-base' ? '00000000-0000-4000-8000-000000000099'",
     );
   });
+
+  it('MG-15 rejects generic or aggregated binding-matrix assertions', () => {
+    const matrixFiles = [
+      'packages/db/src/phase40.regeneration-matrix.integration.test.ts',
+      'packages/db/src/phase40.concurrency-audit-directdb.integration.test.ts',
+      'packages/db/src/phase40.output-matrix.integration.test.ts',
+      'packages/db/src/phase40.eligibility-matrix.integration.test.ts',
+    ];
+    for (const file of matrixFiles) {
+      const source = readFileSync(file, 'utf8');
+      expect(source, `${file} contains bare rejects.toThrow()`).not.toMatch(
+        /\.rejects\.toThrow\(\)/,
+      );
+    }
+    const regeneration = readFileSync(matrixFiles[0]!, 'utf8');
+    const concurrency = readFileSync(matrixFiles[1]!, 'utf8');
+    const output = readFileSync(matrixFiles[2]!, 'utf8');
+    expect(regeneration).not.toMatch(
+      /if\s*\(\s*kind === 'missing-target'[\s\S]{0,120}\|\|[\s\S]{0,120}foreign-target/,
+    );
+    expect(regeneration).not.toContain('links.some(');
+    expect(concurrency).not.toContain('results.some(');
+    expect(output).not.toContain('toBeGreaterThan(');
+  });
+
+  it('MG-16 rejects derived truth, unstable target exclusion, and false reporting', () => {
+    const generation = readFileSync('packages/db/src/generation.ts', 'utf8');
+    const upgrade = readFileSync('scripts/phase40-upgrade-test.mjs', 'utf8');
+    const report = readFileSync('docs/phases/40-implementation-report.md', 'utf8');
+    expect(generation).not.toMatch(
+      /INSERT INTO generation_expected_question_citations[\s\S]{0,700}FROM question_source_links/,
+    );
+    expect(upgrade).not.toContain("q.key <> 'q1'");
+    expect(report).not.toContain('migrations `00100` through `04600` were not modified');
+  });
 });

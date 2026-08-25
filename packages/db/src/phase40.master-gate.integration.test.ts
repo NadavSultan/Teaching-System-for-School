@@ -351,6 +351,113 @@ describe('Phase 40 protected master acceptance gate', () => {
       }),
     ).rejects.toThrow(/question source assessment identity invalid/i);
   });
+
+  it('MG-13 derives expected citations independently from validated provider output', async () => {
+    const fixture = await createGenerationFixture();
+    const secondItem = await addSecondEligibleKnowledgeItem(fixture);
+    const triggerName = 'phase40_master_suppress_one_actual_citation';
+    const functionName = 'phase40_master_suppress_one_actual_citation_fn';
+    await prisma.$executeRawUnsafe(
+      'ALTER TABLE question_source_links DISABLE TRIGGER question_source_link_append_only',
+    );
+    await prisma.$executeRawUnsafe(`
+      CREATE OR REPLACE FUNCTION ${functionName}() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.generation_run_id = '${fixture.generationRunId}'::uuid
+           AND NEW.knowledge_item_id = '${secondItem.id}'::uuid THEN
+          DELETE FROM question_source_links WHERE id = NEW.id;
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER ${triggerName}
+      AFTER INSERT ON question_source_links
+      FOR EACH ROW EXECUTE FUNCTION ${functionName}()
+    `);
+    try {
+      const result = await processGenerationRun(
+        fixture.generationRunId,
+        prisma,
+        multiCitationGateway([fixture.knowledgeItemId, secondItem.id]),
+      );
+      expect(result?.state).toBe('FAILED');
+      expect(result?.failureCode).toBe('SCHEMA_INVALID');
+      expect(result?.outputRevisionId).toBeNull();
+      expect(
+        await prisma.assessmentRevision.count({
+          where: {
+            assessmentId: fixture.assessmentId,
+            idempotencyKey: `generation:${fixture.generationRunId}`,
+          },
+        }),
+      ).toBe(0);
+      expect(
+        await prisma.questionSourceLink.count({
+          where: { generationRunId: fixture.generationRunId },
+        }),
+      ).toBe(0);
+      const expectedRows = await prisma.$queryRaw<Array<{ count: bigint }>>`
+        SELECT count(*)::bigint AS count
+        FROM generation_expected_question_citations
+        WHERE generation_run_id = ${fixture.generationRunId}::uuid
+      `;
+      expect(Number(expectedRows[0]?.count ?? -1)).toBe(0);
+    } finally {
+      await prisma.$executeRawUnsafe(
+        `DROP TRIGGER IF EXISTS ${triggerName} ON question_source_links`,
+      );
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS ${functionName}()`);
+      await prisma.$executeRawUnsafe(
+        'ALTER TABLE question_source_links ENABLE TRIGGER question_source_link_append_only',
+      );
+    }
+  });
+
+  it('MG-14 closes the expected citation set after a run succeeds', async () => {
+    const fixture = await createGenerationFixture();
+    const secondItem = await addSecondEligibleKnowledgeItem(fixture);
+    const result = await processGenerationRun(
+      fixture.generationRunId,
+      prisma,
+      multiCitationGateway([fixture.knowledgeItemId]),
+    );
+    const output = await getGenerationResult(fixture.context, fixture.generationRunId);
+    const outputQuestion = output?.revision?.sections[0]?.questions[0];
+    const curriculumLink = await prisma.knowledgeItemCurriculumNodeLink.findFirstOrThrow({
+      where: {
+        knowledgeItemId: secondItem.id,
+        curriculumVersionId: fixture.curriculumVersionId,
+        curriculumNodeId: fixture.curriculumNodeId,
+      },
+    });
+    if (!result?.outputRevisionId || !outputQuestion)
+      throw new Error('master successful output missing');
+
+    let caught: unknown;
+    try {
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`
+          INSERT INTO generation_expected_question_citations (
+            generation_run_id, assessment_question_id, knowledge_item_id, source_version_id,
+            locator, text_hash, curriculum_version_id, curriculum_node_id, lineage, prior_question_id
+          ) VALUES (
+            ${fixture.generationRunId}::uuid, ${outputQuestion.id}::uuid, ${secondItem.id}::uuid,
+            ${secondItem.sourceVersionId}::uuid, ${secondItem.locator}, ${secondItem.textHash},
+            ${curriculumLink.curriculumVersionId}::uuid, ${curriculumLink.curriculumNodeId}::uuid,
+            'GENERATED', NULL
+          )
+        `;
+        await tx.$executeRaw`SET CONSTRAINTS ALL IMMEDIATE`;
+        throw new Error(missingValidatorRejection);
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(String(caught)).toContain('generation expected citation set is closed');
+    expect(String(caught)).not.toContain(missingValidatorRejection);
+  });
 });
 
 afterAll(() => prisma.$disconnect());
