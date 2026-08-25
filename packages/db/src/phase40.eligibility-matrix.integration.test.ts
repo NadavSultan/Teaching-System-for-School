@@ -11,8 +11,6 @@ async function expectedCitationCount(runId: string): Promise<number> {
   `;
   return Number(rows[0]!.count);
 }
-// The generated Prisma model is named generationExpectedQuestionCitation; this hand-authored table is queried directly because it is not in schema.prisma.
-const expectedCitationModelEvidence = 'generationExpectedQuestionCitation.count';
 
 describe('E1 — independent current Phase 30 eligibility dimensions', () => {
   it.each(phase40AcceptanceRegistry.E1)(
@@ -90,7 +88,6 @@ describe('E1 — independent current Phase 30 eligibility dimensions', () => {
         expect(latest.decision).toBe('DENIED');
       }
       const selected = await selectGenerationContext(fixture.generationRunId, prisma);
-      expect(expectedCitationModelEvidence).toBe('generationExpectedQuestionCitation.count');
       expect(selected).toEqual([]);
       const processed = await processGenerationRun(
         fixture.generationRunId,

@@ -20,7 +20,6 @@ type Expected = {
 };
 
 const gatewayExpectedByOutcome: Record<string, Expected> = {
-  // Exact registry spellings are kept visible for the protected source gate: 'malformed': 'timeout': 'replay':
   'valid-draft': {
     state: 'SUCCEEDED',
     failureCode: null,
@@ -39,7 +38,7 @@ const gatewayExpectedByOutcome: Record<string, Expected> = {
     sourceLinkCount: 1,
     expectedCitationCount: 1,
   },
-  ['malformed']: {
+  'malformed': {
     state: 'FAILED',
     failureCode: 'SCHEMA_INVALID',
     attempts: 1,
@@ -57,7 +56,7 @@ const gatewayExpectedByOutcome: Record<string, Expected> = {
     sourceLinkCount: 0,
     expectedCitationCount: 0,
   },
-  ['timeout']: {
+  'timeout': {
     state: 'SUCCEEDED',
     failureCode: null,
     attempts: 2,
@@ -102,7 +101,7 @@ const gatewayExpectedByOutcome: Record<string, Expected> = {
     sourceLinkCount: 0,
     expectedCitationCount: 0,
   },
-  ['replay']: {
+  'replay': {
     state: 'SUCCEEDED',
     failureCode: null,
     attempts: 1,
@@ -113,33 +112,116 @@ const gatewayExpectedByOutcome: Record<string, Expected> = {
   },
 };
 
-const adversarialExpectedByKind: Record<string, Expected> = Object.fromEntries(
-  phase40AcceptanceRegistry.O.map((kind) => [
-    kind,
-    kind === 'valid-planned-draft'
-      ? {
-          state: 'SUCCEEDED',
-          failureCode: null,
-          attempts: 1,
-          usageCount: 1,
-          outputRevisionCount: 1,
-          sourceLinkCount: 1,
-          expectedCitationCount: 1,
-        }
-      : {
-          state: 'FAILED',
-          failureCode:
-            kind === 'unknown-field' || kind === 'missing-citation'
-              ? 'SCHEMA_INVALID'
-              : 'OUTPUT_INVALID',
-          attempts: 1,
-          usageCount: 1,
-          outputRevisionCount: 0,
-          sourceLinkCount: 0,
-          expectedCitationCount: 0,
-        },
-  ]),
-);
+const adversarialExpectedByKind: Record<string, Expected> = {
+  'valid-planned-draft': {
+    state: 'SUCCEEDED',
+    failureCode: null,
+    attempts: 1,
+    usageCount: 1,
+    outputRevisionCount: 1,
+    sourceLinkCount: 1,
+    expectedCitationCount: 1,
+  },
+  'unknown-field': {
+    state: 'FAILED',
+    failureCode: 'SCHEMA_INVALID',
+    attempts: 1,
+    usageCount: 1,
+    outputRevisionCount: 0,
+    sourceLinkCount: 0,
+    expectedCitationCount: 0,
+  },
+  'missing-section': {
+    state: 'FAILED',
+    failureCode: 'OUTPUT_INVALID',
+    attempts: 1,
+    usageCount: 1,
+    outputRevisionCount: 0,
+    sourceLinkCount: 0,
+    expectedCitationCount: 0,
+  },
+  'unplanned-key': {
+    state: 'FAILED',
+    failureCode: 'OUTPUT_INVALID',
+    attempts: 1,
+    usageCount: 1,
+    outputRevisionCount: 0,
+    sourceLinkCount: 0,
+    expectedCitationCount: 0,
+  },
+  'duplicate-key': {
+    state: 'FAILED',
+    failureCode: 'OUTPUT_INVALID',
+    attempts: 1,
+    usageCount: 1,
+    outputRevisionCount: 0,
+    sourceLinkCount: 0,
+    expectedCitationCount: 0,
+  },
+  'wrong-order': {
+    state: 'FAILED',
+    failureCode: 'OUTPUT_INVALID',
+    attempts: 1,
+    usageCount: 1,
+    outputRevisionCount: 0,
+    sourceLinkCount: 0,
+    expectedCitationCount: 0,
+  },
+  'type-mismatch': {
+    state: 'FAILED',
+    failureCode: 'OUTPUT_INVALID',
+    attempts: 1,
+    usageCount: 1,
+    outputRevisionCount: 0,
+    sourceLinkCount: 0,
+    expectedCitationCount: 0,
+  },
+  'difficulty-mismatch': {
+    state: 'FAILED',
+    failureCode: 'OUTPUT_INVALID',
+    attempts: 1,
+    usageCount: 1,
+    outputRevisionCount: 0,
+    sourceLinkCount: 0,
+    expectedCitationCount: 0,
+  },
+  'score-mismatch': {
+    state: 'FAILED',
+    failureCode: 'OUTPUT_INVALID',
+    attempts: 1,
+    usageCount: 1,
+    outputRevisionCount: 0,
+    sourceLinkCount: 0,
+    expectedCitationCount: 0,
+  },
+  'missing-citation': {
+    state: 'FAILED',
+    failureCode: 'SCHEMA_INVALID',
+    attempts: 1,
+    usageCount: 1,
+    outputRevisionCount: 0,
+    sourceLinkCount: 0,
+    expectedCitationCount: 0,
+  },
+  'unknown-citation': {
+    state: 'FAILED',
+    failureCode: 'OUTPUT_INVALID',
+    attempts: 1,
+    usageCount: 1,
+    outputRevisionCount: 0,
+    sourceLinkCount: 0,
+    expectedCitationCount: 0,
+  },
+  'foreign-citation': {
+    state: 'FAILED',
+    failureCode: 'OUTPUT_INVALID',
+    attempts: 1,
+    usageCount: 1,
+    outputRevisionCount: 0,
+    sourceLinkCount: 0,
+    expectedCitationCount: 0,
+  },
+};
 
 async function evidence(runId: string, assessmentId: string) {
   const expectedCitationRows = await prisma.$queryRaw<Array<{ count: bigint }>>`

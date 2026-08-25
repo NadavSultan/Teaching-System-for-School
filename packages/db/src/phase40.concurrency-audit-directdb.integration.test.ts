@@ -2,7 +2,24 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { DeterministicFakeModelGateway } from '@teach/ai';
 import { phase40AcceptanceRegistry } from './phase40.acceptance.registry.js';
 import { createGenerationFixture } from './phase40.acceptance.fixtures.js';
-import { prisma, processGenerationRun, requestDraftGeneration } from './index.js';
+import {
+  getGenerationResult,
+  prisma,
+  processGenerationRun,
+  requestDraftGeneration,
+} from './index.js';
+
+function extractDatabaseDiagnostic(error: unknown): { sqlState: string; databaseMessage: string } {
+  const message = error instanceof Error ? error.message : String(error);
+  const connector = message.match(/code: "([0-9A-Z]{5})", message: "([^"]*)"/);
+  if (connector) return { sqlState: connector[1]!, databaseMessage: connector[2]! };
+  const match = message.match(/Raw query failed\. Code: `([0-9A-Z]{5})`\. Message: `([\s\S]*)`/);
+  if (match) return { sqlState: match[1]!, databaseMessage: match[2]! };
+  const diagnostic = error as { meta?: { code?: string; message?: string } };
+  if (diagnostic.meta?.code && diagnostic.meta.message)
+    return { sqlState: diagnostic.meta.code, databaseMessage: diagnostic.meta.message };
+  throw new Error(`database diagnostic unavailable: ${message}`);
+}
 
 async function expectExactDatabaseError(
   action: () => Promise<unknown>,
@@ -18,14 +35,9 @@ async function expectExactDatabaseError(
     error = caught;
   }
   expect(completed).toBe(false);
-  const diagnostic = error instanceof Error ? error.message : String(error);
-  const sqlState =
-    (error as { meta?: { code?: unknown } } | undefined)?.meta?.code ??
-    (error as { code?: unknown } | undefined)?.code ??
-    diagnostic.match(/code:\s*["']([0-9A-Z]{5})["']/)?.[1] ??
-    diagnostic.match(new RegExp(`\\b${expectedSqlState}\\b`))?.[0];
+  const { sqlState, databaseMessage } = extractDatabaseDiagnostic(error);
   expect(sqlState).toBe(expectedSqlState);
-  expect(diagnostic).toContain(expectedMessage);
+  expect(databaseMessage).toBe(expectedMessage);
 }
 async function expectedCitationCount(runId: string): Promise<number> {
   const rows = await prisma.$queryRaw<Array<{ count: bigint }>>`
@@ -463,8 +475,6 @@ describe('D — direct database adversarial invariants', () => {
         'duplicate-context-order',
         'forged-context-lineage',
         'forged-context-item',
-        'forged-question-run',
-        'forged-source-link',
       ].includes(kind);
       if (needsOutput)
         await processGenerationRun(
@@ -475,17 +485,30 @@ describe('D — direct database adversarial invariants', () => {
       before = await prisma.generationRun.findUniqueOrThrow({
         where: { id: fixture.generationRunId },
       });
-      if (kind === 'run-identity' || kind === 'forged-owner')
+      if (kind === 'run-identity')
+        await expectExactDatabaseError(
+          async () => {
+            const foreign = await createGenerationFixture();
+            return prisma.generationRun.update({
+              where: { id: fixture.generationRunId },
+              data: { requestingUserId: foreign.workspace.user.id },
+            });
+          },
+          'generation run identity is immutable',
+          'P0001',
+        );
+      else if (kind === 'forged-owner') {
+        const foreign = await createGenerationFixture();
         await expectExactDatabaseError(
           () =>
             prisma.generationRun.update({
               where: { id: fixture.generationRunId },
-              data: { organizationId: '00000000-0000-4000-8000-000000000099' },
+              data: { organizationId: foreign.workspace.organization.id },
             }),
           'generation assessment owner invalid',
           'P0001',
         );
-      else if (kind === 'context-update' || kind === 'context-delete') {
+      } else if (kind === 'context-update' || kind === 'context-delete') {
         const context = await prisma.generationContextItem.findFirstOrThrow({
           where: { generationRunId: fixture.generationRunId },
         });
@@ -558,7 +581,7 @@ describe('D — direct database adversarial invariants', () => {
             ? 'generation context identity or eligibility invalid'
             : kind === 'forged-context-lineage'
               ? 'generation context complete lineage invalid'
-              : 'Key (';
+              : `Key (generation_run_id, selected_order)=(${fixture.generationRunId}, ${context.selectedOrder}) already exists.`;
         const contextSqlState = kind === 'duplicate-context-order' ? '23505' : 'P0001';
         const contextAction =
           kind === 'duplicate-context-order'
@@ -591,20 +614,91 @@ describe('D — direct database adversarial invariants', () => {
                   },
                 });
         await expectExactDatabaseError(contextAction, contextMessage, contextSqlState);
-      } else if (kind === 'forged-question-run' || kind === 'forged-source-link') {
-        const link = await prisma.questionSourceLink.findFirstOrThrow({
-          where: { generationRunId: fixture.generationRunId },
+      } else if (kind === 'forged-question-run') {
+        const foreign = await createGenerationFixture();
+        const foreignRun = await processGenerationRun(
+          foreign.generationRunId,
+          prisma,
+          new DeterministicFakeModelGateway(),
+        );
+        const foreignResult = await getGenerationResult(foreign.context, foreign.generationRunId);
+        const foreignQuestion = foreignResult?.revision?.sections[0]?.questions[0];
+        const foreignItem = await prisma.knowledgeItem.findUniqueOrThrow({
+          where: { id: foreign.knowledgeItemId },
+        });
+        if (!foreignRun?.outputRevisionId || !foreignQuestion)
+          throw new Error('foreign question fixture missing');
+        await expectExactDatabaseError(
+          () =>
+            prisma.questionSourceLink.create({
+              data: {
+                assessmentQuestionId: foreignQuestion.id,
+                generationRunId: fixture.generationRunId,
+                knowledgeItemId: foreign.knowledgeItemId,
+                sourceVersionId: foreign.sourceVersionId,
+                locator: 'fixture://foreign',
+                textHash: foreignItem.textHash,
+                curriculumVersionId: foreign.curriculumVersionId,
+                curriculumNodeId: foreign.curriculumNodeId,
+                lineage: 'GENERATED',
+              },
+            }),
+          'question source assessment identity invalid',
+          'P0001',
+        );
+      } else if (kind === 'forged-source-link') {
+        const processed = await processGenerationRun(
+          fixture.generationRunId,
+          prisma,
+          new DeterministicFakeModelGateway(),
+        );
+        before = await prisma.generationRun.findUniqueOrThrow({
+          where: { id: fixture.generationRunId },
+        });
+        const result = await getGenerationResult(fixture.context, fixture.generationRunId);
+        const question = result?.revision?.sections[0]?.questions[0];
+        if (!processed?.outputRevisionId || !question)
+          throw new Error('source identity fixture missing');
+        const pending = await requestDraftGeneration(fixture.context, {
+          version: '1.0.0',
+          assessmentId: fixture.assessmentId,
+          idempotencyKey: `forged-source-${fixture.generationRunId}`,
+          curriculumVersionId: fixture.curriculumVersionId,
+          curriculumNodeIds: [fixture.curriculumNodeId],
+          scoringMode: 'NONE',
+          totalScoreUnits: null,
+          query: 'x',
+          sections: [
+            {
+              key: 's1',
+              title: 'x',
+              order: 0,
+              scoreUnits: null,
+              questions: [
+                { key: 'q1', order: 0, type: 'OPEN', difficulty: 'LOW', scoreUnits: null, instructions: '', emphasis: '' },
+              ],
+            },
+          ],
+        });
+        const item = await prisma.knowledgeItem.findUniqueOrThrow({
+          where: { id: fixture.knowledgeItemId },
         });
         await expectExactDatabaseError(
           () =>
-            prisma.questionSourceLink.update({
-              where: { id: link.id },
-              data:
-                kind === 'forged-question-run'
-                  ? { generationRunId: '00000000-0000-4000-8000-000000000099' }
-                  : { sourceVersionId: '00000000-0000-4000-8000-000000000099' },
+            prisma.questionSourceLink.create({
+              data: {
+                assessmentQuestionId: question.id,
+                generationRunId: pending.id,
+                knowledgeItemId: fixture.knowledgeItemId,
+                sourceVersionId: fixture.sourceVersionId,
+                locator: 'forged-locator',
+                textHash: item.textHash,
+                curriculumVersionId: fixture.curriculumVersionId,
+                curriculumNodeId: fixture.curriculumNodeId,
+                lineage: 'GENERATED',
+              },
             }),
-          'generation evidence is append-only',
+          'question source identity invalid',
           'P0001',
         );
       } else if (kind === 'negative-usage')
@@ -631,20 +725,25 @@ describe('D — direct database adversarial invariants', () => {
         const usage = await prisma.generationUsage.findFirstOrThrow({
           where: { generationRunId: fixture.generationRunId },
         });
+        const expectedMessage = `Key (generation_run_id, attempt)=(${fixture.generationRunId}, ${usage.attempt}) already exists.`;
         await expectExactDatabaseError(
           () =>
             prisma.$executeRaw`INSERT INTO generation_usages (id, generation_run_id, attempt, provider, model, request_id, input_tokens, output_tokens, total_tokens, cost_micros, finish_reason) SELECT gen_random_uuid(), generation_run_id, attempt, provider, model, request_id, input_tokens, output_tokens, total_tokens, cost_micros, finish_reason FROM generation_usages WHERE id = ${usage.id}::uuid`,
-          'Key (',
+          expectedMessage,
           '23505',
         );
-      } else if (kind === 'duplicate-idempotency')
+      } else if (kind === 'duplicate-idempotency') {
+        const run = await prisma.generationRun.findUniqueOrThrow({
+          where: { id: fixture.generationRunId },
+        });
+        const expectedMessage = `Key (organization_id, assessment_id, idempotency_key)=(${run.organizationId}, ${run.assessmentId}, ${run.idempotencyKey}) already exists.`;
         await expectExactDatabaseError(
           () =>
-            prisma.$executeRaw`INSERT INTO generation_runs SELECT * FROM generation_runs WHERE id = ${fixture.generationRunId}::uuid`,
-          'Key (',
+            prisma.$executeRaw`INSERT INTO generation_runs (id, organization_id, requesting_user_id, assessment_id, operation, idempotency_key, request_fingerprint, frozen_specification, curriculum_version_id, state, attempts, prompt_template_version, prompt_template_hash, model_configuration_version, model_configuration_hash, response_schema_version, response_schema_hash) SELECT gen_random_uuid(), organization_id, requesting_user_id, assessment_id, operation, idempotency_key, request_fingerprint, frozen_specification, curriculum_version_id, state, attempts, prompt_template_version, prompt_template_hash, model_configuration_version, model_configuration_hash, response_schema_version, response_schema_hash FROM generation_runs WHERE id = ${fixture.generationRunId}::uuid`,
+          expectedMessage,
           '23505',
         );
-      else if (kind === 'terminal-reopen')
+      } else if (kind === 'terminal-reopen')
         await expectExactDatabaseError(
           () =>
             prisma.generationRun.update({
@@ -654,17 +753,36 @@ describe('D — direct database adversarial invariants', () => {
           'invalid generation run transition',
           'P0001',
         );
-      else if (kind === 'success-without-revision')
+      else if (kind === 'success-without-revision') {
+        await prisma.generationRun.update({
+          where: { id: fixture.generationRunId },
+          data: {
+            state: 'PROCESSING',
+            attempts: 1,
+            processingStartedAt: new Date(),
+            leaseExpiresAt: new Date(Date.now() + 60_000),
+          },
+        });
+        before = await prisma.generationRun.findUniqueOrThrow({
+          where: { id: fixture.generationRunId },
+        });
         await expectExactDatabaseError(
           () =>
             prisma.generationRun.update({
               where: { id: fixture.generationRunId },
-              data: { state: 'SUCCEEDED', processedAt: new Date() },
+              data: {
+                state: 'SUCCEEDED',
+                provider: 'fake',
+                model: 'fake',
+                processedAt: new Date(),
+                failureCode: null,
+                outputRevisionId: null,
+              },
             }),
-          'invalid generation run transition',
+          'success shape invalid',
           'P0001',
         );
-      else if (kind === 'orphan-identity')
+      } else if (kind === 'orphan-identity')
         await expectExactDatabaseError(
           () =>
             prisma.generationRun.update({
@@ -674,17 +792,43 @@ describe('D — direct database adversarial invariants', () => {
           'generation assessment owner invalid',
           'P0001',
         );
-      else if (kind === 'wrong-assessment-revision')
+      else if (kind === 'wrong-assessment-revision') {
+        const foreign = await createGenerationFixture();
+        const foreignRun = await processGenerationRun(
+          foreign.generationRunId,
+          prisma,
+          new DeterministicFakeModelGateway(),
+        );
+        if (!foreignRun?.outputRevisionId) throw new Error('foreign revision fixture missing');
+        await prisma.generationRun.update({
+          where: { id: fixture.generationRunId },
+          data: {
+            state: 'PROCESSING',
+            attempts: 1,
+            processingStartedAt: new Date(),
+            leaseExpiresAt: new Date(Date.now() + 60_000),
+          },
+        });
+        before = await prisma.generationRun.findUniqueOrThrow({
+          where: { id: fixture.generationRunId },
+        });
         await expectExactDatabaseError(
           () =>
             prisma.generationRun.update({
               where: { id: fixture.generationRunId },
-              data: { outputRevisionId: '00000000-0000-4000-8000-000000000099' },
+              data: {
+                state: 'SUCCEEDED',
+                provider: 'fake',
+                model: 'fake',
+                processedAt: new Date(),
+                failureCode: null,
+                outputRevisionId: foreignRun.outputRevisionId,
+              },
             }),
-          'invalid generation run transition',
+          'output revision identity invalid',
           'P0001',
         );
-      else throw new Error(`unhandled direct-db case: ${kind}`);
+      } else throw new Error(`unhandled direct-db case: ${kind}`);
       const after = await prisma.generationRun.findUniqueOrThrow({
         where: { id: fixture.generationRunId },
       });
