@@ -675,7 +675,15 @@ describe('D — direct database adversarial invariants', () => {
               order: 0,
               scoreUnits: null,
               questions: [
-                { key: 'q1', order: 0, type: 'OPEN', difficulty: 'LOW', scoreUnits: null, instructions: '', emphasis: '' },
+                {
+                  key: 'q1',
+                  order: 0,
+                  type: 'OPEN',
+                  difficulty: 'LOW',
+                  scoreUnits: null,
+                  instructions: '',
+                  emphasis: '',
+                },
               ],
             },
           ],

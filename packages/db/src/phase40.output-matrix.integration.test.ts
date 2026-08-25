@@ -19,6 +19,7 @@ type Expected = {
   expectedCitationCount: number;
 };
 
+// prettier-ignore
 const gatewayExpectedByOutcome: Record<string, Expected> = {
   'valid-draft': {
     state: 'SUCCEEDED',
@@ -112,6 +113,7 @@ const gatewayExpectedByOutcome: Record<string, Expected> = {
   },
 };
 
+// prettier-ignore
 const adversarialExpectedByKind: Record<string, Expected> = {
   'valid-planned-draft': {
     state: 'SUCCEEDED',
