@@ -4,6 +4,10 @@ import { readFileSync } from 'node:fs';
 const read = (file: string) => readFileSync(file, 'utf8');
 const withoutComments = (source: string) =>
   source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+const literalProperty = (id: string) =>
+  /^[A-Za-z_$][\w$]*$/.test(id)
+    ? new RegExp(`(?:^|\\n)\\s*(?:['\"]${id}['\"]|${id})\\s*:\\s*\\{`)
+    : new RegExp(`(?:^|\\n)\\s*['\"]${id}['\"]\\s*:\\s*\\{`);
 
 const outputFile = 'packages/db/src/phase40.output-matrix.integration.test.ts';
 const eligibilityFile = 'packages/db/src/phase40.eligibility-matrix.integration.test.ts';
@@ -14,6 +18,7 @@ describe('Phase 40 evidence integrity master closure', () => {
     const rawOutput = read(outputFile);
     const rawEligibility = read(eligibilityFile);
     expect(`${rawOutput}\n${rawEligibility}`).not.toMatch(/source gate|protected source/i);
+    expect(rawOutput).not.toContain('prettier-ignore');
     expect(rawEligibility).not.toContain('expectedCitationModelEvidence');
     expect(rawEligibility).not.toMatch(
       /expect\((?<quote>['"])(?<value>[^'"]+)\k<quote>\)\.toBe\(\k<quote>\k<value>\k<quote>\)/,
@@ -58,9 +63,7 @@ describe('Phase 40 evidence integrity master closure', () => {
       'unknown-citation',
       'foreign-citation',
     ]) {
-      expect(source, `missing explicit expectation entry for ${id}`).toMatch(
-        new RegExp(`(?:^|\\n)\\s*['\"]${id}['\"]\\s*:\\s*\\{`),
-      );
+      expect(source, `missing explicit expectation entry for ${id}`).toMatch(literalProperty(id));
     }
   });
 

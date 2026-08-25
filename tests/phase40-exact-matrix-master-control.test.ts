@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 
 const read = (file: string) => readFileSync(file, 'utf8');
+const literalProperty = (id: string) =>
+  /^[A-Za-z_$][\w$]*$/.test(id)
+    ? new RegExp(`(?:['\"]${id}['\"]|${id})\\s*:`)
+    : new RegExp(`['\"]${id}['\"]\\s*:`);
 
 const files = {
   tenant: 'packages/db/src/phase40.tenant-matrix.integration.test.ts',
@@ -65,9 +69,7 @@ describe('Phase 40 exact matrix master closure', () => {
       'budget-overrun',
       'replay',
     ]) {
-      expect(output, `missing exact G expectation for ${id}`).toMatch(
-        new RegExp(`['\"]${id}['\"]\\s*:`),
-      );
+      expect(output, `missing exact G expectation for ${id}`).toMatch(literalProperty(id));
     }
     for (const field of [
       'state',

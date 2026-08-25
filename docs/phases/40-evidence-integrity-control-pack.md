@@ -6,7 +6,7 @@ The MG-17 through MG-20 source gate became green, but independent inspection fou
 
 ## Required closure
 
-1. Delete every source-gate comment, self-check constant/assertion, computed-key workaround, and evidence-only sentinel.
+1. Delete every source-gate or formatter-suppression comment, self-check constant/assertion, computed-key workaround, and evidence-only sentinel. Normal quoted or unquoted literal object keys are both accepted; do not suppress Prettier to preserve a matcher-specific spelling.
 2. Keep the real E1 SQL count helper and assert its numeric result; do not mention a nonexistent Prisma model merely to satisfy a source string.
 3. Write literal, explicit, comment-free expectation entries for every G and O registry ID. Do not generate O expectations with `Object.fromEntries`, `map`, grouped ternaries, or shared fallback objects.
 4. Add `extractDatabaseDiagnostic` that extracts a real PostgreSQL SQLSTATE and the underlying database message from the caught Prisma/raw error. `expectExactDatabaseError` must compare `databaseMessage` with `expectedMessage` using exact equality.

@@ -33,9 +33,9 @@ const protectedDigests = {
   'tests/phase40-master-control.test.ts':
     'deaa1ea2cbe9d819b14d6de91b130da1a11d44eac68592b4670b6c84b4dc6488',
   'tests/phase40-exact-matrix-master-control.test.ts':
-    '9004668f504c2fdcebe3cbd8d4642d0a3f4467227828dfbe6225406b674c2259',
+    '4034710b17b6e7284ffb2ca4fbe1122c2b96cf39c70d45671967e8176321e931',
   'tests/phase40-evidence-integrity-master-control.test.ts':
-    '18182f5fea210a038557a72f38000511671837a5bbefd8d38dcef2f7636e776c',
+    'eb2a0eecc8981dde4857149555c5da1f92953bcae2a62ea88af0c6265849836c',
   'scripts/verify-phase40-control.mjs':
     '12a9b40e0173d1062b3ba5794336235e14c7bd3d8a0b40fdb51da60760423715',
   'docs/phases/40-master-gate-baseline.md':
@@ -57,11 +57,11 @@ const protectedDigests = {
   'docs/phases/40-exact-matrix-closure-baseline.md':
     '9c424fc5916d008996b52cfdbe33ffd826cf87d6bd31a4453595cc6f1a453830',
   'docs/phases/40-evidence-integrity-control-pack.md':
-    '2d2c619286da35518f988e62ad43a04453ab7b945a97a9d67bfa66a5c0faf590',
+    '925b7d79f7db188edf428d508d6f4ac8f9afd5f863af4effa916dad7ba17aa66',
   'docs/phases/40-evidence-integrity-executor-handoff.md':
-    '99ecbdcbb2a730732b061dea96a90153639cd1235c3ac2a4e7ee740e5b77baa4',
+    '99a181d1419b3e2f9a66138e9e61bc020cd5cbe8765f09a608493be8a22633eb',
   'docs/phases/40-evidence-integrity-baseline.md':
-    '1d6ac447c6577d1268cfd58eec1dedb5792909353f4101dbbc3e4f9672dff64b',
+    '2c9bed3750dea0ef7713d152115b6186c194c80bd5af10e5e03cb038e15bdab5',
 };
 
 const frozenPhase40Migrations = {
