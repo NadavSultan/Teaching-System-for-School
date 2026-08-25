@@ -42,20 +42,23 @@ for (const [name, expected] of Object.entries(frozen)) {
     .digest('hex');
   if (digest !== expected) throw new Error(`frozen migration changed: ${name}`);
 }
-if (
-  execSync('git branch --show-current', { encoding: 'utf8' }).trim() !==
-  'codex/phase-40-generation-engine'
-)
+const branch = execSync('git branch --show-current', { encoding: 'utf8' }).trim();
+if (branch !== 'codex/phase-40-generation-engine' && branch !== 'codex/phase-40-final-remediation')
   throw new Error('wrong branch');
 execSync('git merge-base --is-ancestor fd419a5ef7577b6d2ca65ba6381a7a30e3200c18 HEAD');
 const migrations = readdirSync('packages/db/prisma/migrations').filter((name) =>
   /^\d+_/.test(name),
 );
+if (migrations.length !== 13 && migrations.length !== 14)
+  throw new Error(`expected 13 baseline or 14 remediated migrations, got ${migrations.length}`);
+if (migrations.filter((name) => name.startsWith('20260824004300_')).length !== 1)
+  throw new Error('expected exactly one 04300 migration');
+const post045 = migrations.filter((name) => Number(name.match(/^(\d+)_/)?.[1]) > 20260824004500);
 if (
-  migrations.length !== 13 ||
-  migrations.filter((name) => name.startsWith('20260824004300_')).length !== 1
+  post045.length > 1 ||
+  (post045.length === 1 && post045[0] !== '20260824004600_phase40_master_gate_closure')
 )
-  throw new Error(`expected thirteen migrations, got ${migrations.length}`);
+  throw new Error(`unexpected post-04500 migrations: ${post045.join(', ')}`);
 const registry = readFileSync('packages/db/src/phase40.acceptance.registry.ts', 'utf8');
 const expectedCounts = {
   T: 8,
@@ -156,4 +159,4 @@ for (const token of ['AbortController', 'timeout', 'contextStillEligible(runId, 
   if (!generation.includes(token)) throw new Error(`generation safety missing ${token}`);
 console.log('PHASE40_CONTROL=STRUCTURAL_PASS');
 console.log('MATRIX_MANIFEST=173');
-console.log('MIGRATION_COUNT=13');
+console.log(`MIGRATION_COUNT=${migrations.length}`);
