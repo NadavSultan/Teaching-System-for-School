@@ -20,8 +20,9 @@ try {
   syncBuiltinESMExports();
 }
 
-const databaseDir = join(os.tmpdir(), 'teaching-phase40-upgrade-postgres');
-const prismaCopy = join(os.tmpdir(), 'teaching-phase40-upgrade-prisma');
+const databaseDir = join(os.tmpdir(), `teaching-phase40-upgrade-postgres-${process.pid}`);
+const prismaCopy = join(os.tmpdir(), `teaching-phase40-upgrade-prisma-${process.pid}`);
+const port = 55440 + (process.pid % 500);
 rmSync(databaseDir, { recursive: true, force: true });
 rmSync(prismaCopy, { recursive: true, force: true });
 mkdirSync(databaseDir, { recursive: true });
@@ -29,23 +30,31 @@ const pg = new EmbeddedPostgres({
   databaseDir,
   user: 'phase40',
   password: 'phase40_local_only',
-  port: 55434,
+  port,
   persistent: false,
-  onLog: () => undefined,
+  onLog: (message) => console.error(`PG_LOG ${message}`),
 });
-const databaseUrl =
-  'postgresql://phase40:phase40_local_only@127.0.0.1:55434/teaching_upgrade?schema=public';
+const databaseUrl = `postgresql://phase40:phase40_local_only@127.0.0.1:${port}/teaching_upgrade?schema=public`;
 const cleanDatabase = 'teaching_upgrade_clean';
+const prismaPackage = readdirSync(resolve('node_modules/.pnpm')).find((name) =>
+  name.startsWith('prisma@'),
+);
+if (!prismaPackage) throw new Error('Prisma CLI package is unavailable');
+const prismaCli = resolve(
+  'node_modules/.pnpm',
+  prismaPackage,
+  'node_modules/prisma/build/index.js',
+);
 const runDeployFor = (database, schema) => {
-  const args = ['--filter', '@teach/db', 'exec', 'prisma', 'migrate', 'deploy', '--schema', schema];
   const env = {
     ...process.env,
     DATABASE_URL: databaseUrl.replace('teaching_upgrade?', `${database}?`),
     CI: 'true',
   };
-  if (process.env.npm_execpath)
-    execFileSync(process.execPath, [process.env.npm_execpath, ...args], { stdio: 'inherit', env });
-  else execFileSync('pnpm.cmd', args, { stdio: 'inherit', env });
+  execFileSync(process.execPath, [prismaCli, 'migrate', 'deploy', '--schema', schema], {
+    stdio: 'inherit',
+    env,
+  });
 };
 const runDeploy = (schema) => runDeployFor('teaching_upgrade', schema);
 try {
@@ -61,10 +70,12 @@ try {
       '20260824004100_phase40_review_remediation',
       '20260824004200_phase40_final_review_closure',
       '20260824004300_phase40_acceptance_closure',
+      '20260824004400_phase40_complete_output_graph',
     ].includes(name),
   ))
     rmSync(join(prismaCopy, 'migrations', migration), { recursive: true, force: true });
   runDeploy(join(prismaCopy, 'schema.prisma'));
+  console.log('UPGRADE_STAGE=04000_APPLIED');
   const client = pg.getPgClient('teaching_upgrade');
   await client.connect();
   await client.query(
@@ -170,22 +181,39 @@ try {
     `UPDATE generation_runs SET state='SUCCEEDED', attempts=1, provider='fake', model='fake', output_revision_id='14141414-1414-4141-8141-141414141414', processed_at=NOW() WHERE id='99999999-9999-4999-8999-999999999999'`,
   );
   await phase40Seed.end();
+  console.log('UPGRADE_STAGE=04000_DATA_SEEDED');
   cpSync(
     join(sourcePrisma, 'migrations', '20260824004100_phase40_review_remediation'),
     join(prismaCopy, 'migrations', '20260824004100_phase40_review_remediation'),
     { recursive: true },
   );
+  console.log('UPGRADE_STAGE=04100_START');
+  runDeploy(join(prismaCopy, 'schema.prisma'));
+  console.log('UPGRADE_STAGE=04100_APPLIED');
   cpSync(
     join(sourcePrisma, 'migrations', '20260824004200_phase40_final_review_closure'),
     join(prismaCopy, 'migrations', '20260824004200_phase40_final_review_closure'),
     { recursive: true },
   );
+  console.log('UPGRADE_STAGE=04200_START');
+  runDeploy(join(prismaCopy, 'schema.prisma'));
+  console.log('UPGRADE_STAGE=04200_APPLIED');
   cpSync(
     join(sourcePrisma, 'migrations', '20260824004300_phase40_acceptance_closure'),
     join(prismaCopy, 'migrations', '20260824004300_phase40_acceptance_closure'),
     { recursive: true },
   );
+  console.log('UPGRADE_STAGE=04300_START');
   runDeploy(join(prismaCopy, 'schema.prisma'));
+  console.log('UPGRADE_STAGE=04300_APPLIED');
+  cpSync(
+    join(sourcePrisma, 'migrations', '20260824004400_phase40_complete_output_graph'),
+    join(prismaCopy, 'migrations', '20260824004400_phase40_complete_output_graph'),
+    { recursive: true },
+  );
+  console.log('UPGRADE_STAGE=04400_START');
+  runDeploy(join(prismaCopy, 'schema.prisma'));
+  console.log('UPGRADE_STAGE=04400_APPLIED');
   const verify = pg.getPgClient('teaching_upgrade');
   await verify.connect();
   const checks = await Promise.all([
@@ -229,7 +257,7 @@ try {
     /^\d+_/.test(name),
   );
   if (
-    migrations.length !== 11 ||
+    migrations.length !== 12 ||
     !existsSync(
       'packages/db/prisma/migrations/20260824004100_phase40_review_remediation/migration.sql',
     ) ||
@@ -238,21 +266,65 @@ try {
     ) ||
     !existsSync(
       'packages/db/prisma/migrations/20260824004300_phase40_acceptance_closure/migration.sql',
+    ) ||
+    !existsSync(
+      'packages/db/prisma/migrations/20260824004400_phase40_complete_output_graph/migration.sql',
     )
   )
     throw new Error('final migration count mismatch');
   runDeployFor('teaching_upgrade_clean', sourcePrisma + '/schema.prisma');
   const clean = pg.getPgClient(cleanDatabase);
   await clean.connect();
-  const comparison = await clean.query(
-    `SELECT count(*)::int AS count FROM pg_trigger WHERE NOT tgisinternal`,
-  );
-  await clean.end();
-  if (comparison.rows[0].count <= 0) throw new Error('clean schema comparison did not execute');
+  const catalogFingerprint = async (db) => {
+    const c = pg.getPgClient(db);
+    await c.connect();
+    const result = await c.query(`
+      WITH catalog AS (
+        SELECT 'column|' || table_name || '|' || column_name || '|' || data_type || '|' ||
+          COALESCE(column_default, '') || '|' || is_nullable AS value
+        FROM information_schema.columns
+        WHERE table_schema='public'
+        UNION ALL
+        SELECT 'constraint|' || conrelid::regclass::text || '|' || conname || '|' || pg_get_constraintdef(oid)
+        FROM pg_constraint WHERE connamespace='public'::regnamespace
+        UNION ALL
+        SELECT 'index|' || schemaname || '|' || indexname || '|' || indexdef
+        FROM pg_indexes WHERE schemaname='public'
+        UNION ALL
+        SELECT 'trigger|' || c.relname || '|' || t.tgname || '|' || pg_get_triggerdef(t.oid)
+        FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+        WHERE NOT t.tgisinternal AND c.relnamespace='public'::regnamespace
+        UNION ALL
+        SELECT 'function|' || p.oid::regprocedure::text || '|' || pg_get_functiondef(p.oid)
+        FROM pg_proc p WHERE p.pronamespace='public'::regnamespace
+      )
+      SELECT md5(COALESCE(string_agg(value, E'\\n' ORDER BY value), '')) AS fingerprint,
+             count(*)::int AS rows FROM catalog
+    `);
+    await c.end();
+    return result.rows[0];
+  };
+  const upgradedFingerprint = await catalogFingerprint('teaching_upgrade');
+  const cleanFingerprint = await catalogFingerprint(cleanDatabase);
+  if (
+    upgradedFingerprint.fingerprint !== cleanFingerprint.fingerprint ||
+    upgradedFingerprint.rows !== cleanFingerprint.rows
+  )
+    throw new Error(
+      `catalog fingerprint mismatch: upgraded=${upgradedFingerprint.fingerprint}/${upgradedFingerprint.rows} clean=${cleanFingerprint.fingerprint}/${cleanFingerprint.rows}`,
+    );
+  const comparison = await cleanFingerprint;
+  if (!comparison.fingerprint || comparison.rows <= 0)
+    throw new Error('clean schema comparison did not execute');
   console.log('PHASE30_TO_PHASE40_UPGRADE=PASS');
-  console.log('UPGRADE_03300_TO_04000_TO_04100_TO_04200_TO_04300=PASS');
+  console.log('UPGRADE_03300_TO_04000_TO_04100_TO_04200_TO_04300_TO_04400=PASS');
   console.log('DATA_PRESERVATION_CONTEXT_LINEAGE_SOURCE_LINK_ASSERTIONS=PASS');
-  console.log('SECOND_CLEAN_DATABASE_COMPARISON=PASS');
+  console.log(
+    `SECOND_CLEAN_DATABASE_COMPARISON=PASS fingerprint=${upgradedFingerprint.fingerprint} rows=${upgradedFingerprint.rows}`,
+  );
+} catch (error) {
+  console.error('PHASE40_UPGRADE_ERROR', error instanceof Error ? error.stack : error);
+  throw error;
 } finally {
   if (process.platform === 'win32' && pg.process?.pid)
     spawnSync('taskkill', ['/pid', String(pg.process.pid), '/f', '/t'], { stdio: 'ignore' });

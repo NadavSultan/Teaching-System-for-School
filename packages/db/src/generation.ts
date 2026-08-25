@@ -915,7 +915,11 @@ async function persistRegeneratedRevision(
 
 function safeCode(error: unknown): string {
   if (error instanceof GatewayFailure)
-    return error.code === 'TRANSIENT' ? 'TRANSIENT_EXHAUSTED' : error.code;
+    return error.code === 'TRANSIENT'
+      ? 'TRANSIENT_EXHAUSTED'
+      : error.code === 'PERMANENT'
+        ? 'PERMANENT_PROVIDER_ERROR'
+        : error.code;
   if (!(error instanceof Error)) return 'SCHEMA_INVALID';
   if (error.message === 'OUTPUT_INVALID') return 'OUTPUT_INVALID';
   if (error.message === 'CONTEXT_INVALIDATED') return 'CONTEXT_INVALIDATED';

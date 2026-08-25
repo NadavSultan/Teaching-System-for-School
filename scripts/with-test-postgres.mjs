@@ -1,5 +1,5 @@
 import { mkdirSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import fsPromises from 'node:fs/promises';
@@ -20,18 +20,20 @@ try {
 if (process.platform === 'win32') fsPromises.chmod = async () => undefined;
 const { default: EmbeddedPostgres } = await import('embedded-postgres');
 
-const databaseDir = join(os.tmpdir(), 'teaching-phase10-postgres');
+const databaseDir = join(os.tmpdir(), `teaching-phase40-postgres-${process.pid}`);
+const port = 55432 + (process.pid % 500);
 rmSync(databaseDir, { recursive: true, force: true });
 mkdirSync(databaseDir, { recursive: true });
 const pg = new EmbeddedPostgres({
   databaseDir,
   user: 'phase10',
   password: 'phase10_local_only',
-  port: 55432,
+  port,
   persistent: false,
   onLog: () => undefined,
 });
 const pnpmCli = process.env.npm_execpath;
+const childPath = `${dirname(process.execPath)}${process.platform === 'win32' ? ';' : ':'}${process.env.Path ?? process.env.PATH ?? ''}`;
 const run = (args, database) =>
   new Promise((resolve, reject) => {
     const child = pnpmCli
@@ -39,18 +41,25 @@ const run = (args, database) =>
           stdio: 'inherit',
           env: {
             ...process.env,
+            CI: 'true',
+            Path: childPath,
+            PATH: childPath,
             NODE_ENV: 'test',
             AUTH_ADAPTER: 'test',
-            DATABASE_URL: `postgresql://phase10:phase10_local_only@127.0.0.1:55432/${database}?schema=public`,
+            DATABASE_URL: `postgresql://phase10:phase10_local_only@127.0.0.1:${port}/${database}?schema=public`,
           },
         })
       : spawn('pnpm.cmd', args, {
+          shell: true,
           stdio: 'inherit',
           env: {
             ...process.env,
+            CI: 'true',
+            Path: childPath,
+            PATH: childPath,
             NODE_ENV: 'test',
             AUTH_ADAPTER: 'test',
-            DATABASE_URL: `postgresql://phase10:phase10_local_only@127.0.0.1:55432/${database}?schema=public`,
+            DATABASE_URL: `postgresql://phase10:phase10_local_only@127.0.0.1:${port}/${database}?schema=public`,
           },
         });
     child.once('exit', (code) =>
@@ -86,7 +95,7 @@ try {
       '--to-schema-datasource',
       'prisma/schema.prisma',
       '--shadow-database-url',
-      'postgresql://phase10:phase10_local_only@127.0.0.1:55432/teaching_shadow?schema=public',
+      `postgresql://phase10:phase10_local_only@127.0.0.1:${port}/teaching_shadow?schema=public`,
       '--exit-code',
     ],
     'teaching_clean',

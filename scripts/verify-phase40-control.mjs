@@ -7,6 +7,7 @@ const required = [
   'packages/db/prisma/migrations/20260824004100_phase40_review_remediation/migration.sql',
   'packages/db/prisma/migrations/20260824004200_phase40_final_review_closure/migration.sql',
   'packages/db/prisma/migrations/20260824004300_phase40_acceptance_closure/migration.sql',
+  'packages/db/prisma/migrations/20260824004400_phase40_complete_output_graph/migration.sql',
   'packages/db/src/phase40.acceptance.registry.ts',
   'packages/db/src/phase40.tenant-matrix.integration.test.ts',
   'packages/db/src/phase40.role-state-matrix.integration.test.ts',
@@ -15,7 +16,7 @@ const required = [
   'packages/db/src/phase40.output-matrix.integration.test.ts',
   'packages/db/src/phase40.regeneration-matrix.integration.test.ts',
   'packages/db/src/phase40.concurrency-audit-directdb.integration.test.ts',
-  'packages/db/src/phase40.acceptance.integration.helpers.ts',
+  'packages/db/src/phase40.acceptance.fixtures.ts',
 ];
 for (const file of required) if (!existsSync(file)) throw new Error(`missing ${file}`);
 const frozen = {
@@ -50,10 +51,10 @@ const migrations = readdirSync('packages/db/prisma/migrations').filter((name) =>
   /^\d+_/.test(name),
 );
 if (
-  migrations.length !== 11 ||
+  migrations.length !== 12 ||
   migrations.filter((name) => name.startsWith('20260824004300_')).length !== 1
 )
-  throw new Error(`expected eleven migrations, got ${migrations.length}`);
+  throw new Error(`expected twelve migrations, got ${migrations.length}`);
 const registry = readFileSync('packages/db/src/phase40.acceptance.registry.ts', 'utf8');
 const expectedCounts = {
   T: 8,
@@ -88,6 +89,14 @@ for (const token of [
   'it.each',
 ])
   if (!integration.includes(token)) throw new Error(`integration behavior missing ${token}`);
+const dedicated = required.filter((file) => file.includes('integration.test.ts'));
+for (const file of dedicated) {
+  const source = readFileSync(file, 'utf8');
+  if (!source.includes('phase40AcceptanceRegistry'))
+    throw new Error(`unregistered integration cases: ${file}`);
+  if (!source.includes('createGenerationFixture'))
+    throw new Error(`non-isolated fixture binding: ${file}`);
+}
 const matrixUnit = readFileSync('packages/db/src/phase40-matrices.test.ts', 'utf8');
 for (const forbidden of [
   'authorizeWorkspace',
@@ -109,6 +118,17 @@ for (const token of [
   'jsonb_array_length',
 ])
   if (!migration043.includes(token)) throw new Error(`043 enforcement missing ${token}`);
+const migration044 = readFileSync(
+  'packages/db/prisma/migrations/20260824004400_phase40_complete_output_graph/migration.sql',
+  'utf8',
+);
+for (const token of [
+  'phase40_validate_complete_output_graph',
+  'phase40_complete_output_run_guard',
+  'phase40_complete_output_link_guard',
+  'DEFERRABLE INITIALLY DEFERRED',
+])
+  if (!migration044.includes(token)) throw new Error(`044 enforcement missing ${token}`);
 const upgrade = readFileSync('scripts/phase40-upgrade-test.mjs', 'utf8');
 for (const token of [
   'generation_context_items',
@@ -116,6 +136,9 @@ for (const token of [
   'SECOND_CLEAN_DATABASE_COMPARISON',
   '03300',
   '04300',
+  '04400',
+  'pg_get_functiondef',
+  'pg_get_triggerdef',
 ])
   if (!upgrade.includes(token)) throw new Error(`upgrade evidence missing ${token}`);
 const generation = readFileSync('packages/db/src/generation.ts', 'utf8');
@@ -131,4 +154,4 @@ for (const token of ['AbortController', 'timeout', 'contextStillEligible(runId, 
   if (!generation.includes(token)) throw new Error(`generation safety missing ${token}`);
 console.log('PHASE40_CONTROL=STRUCTURAL_PASS');
 console.log('MATRIX_MANIFEST=173');
-console.log('MIGRATION_COUNT=11');
+console.log('MIGRATION_COUNT=12');

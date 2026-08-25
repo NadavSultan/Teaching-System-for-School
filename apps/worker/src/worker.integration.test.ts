@@ -9,8 +9,11 @@ describe('single-worker outbox', () => {
       data: { eventType: 'phase10.noop', payload: {}, idempotencyKey: `worker-${Date.now()}` },
     });
     await prisma.outboxEvent.updateMany({
-      where: { status: 'PENDING', id: { not: event.id } },
-      data: { availableAt: new Date(Date.now() + 60_000) },
+      where: { id: { not: event.id } },
+      data: {
+        availableAt: new Date(Date.now() + 60_000),
+        leaseExpiresAt: new Date(Date.now() + 60_000),
+      },
     });
     await prisma.outboxEvent.update({ where: { id: event.id }, data: { availableAt: new Date() } });
     const worker = new OutboxWorker(() => undefined);
@@ -31,8 +34,11 @@ describe('single-worker outbox', () => {
       },
     });
     await prisma.outboxEvent.updateMany({
-      where: { status: 'PENDING', id: { not: event.id } },
-      data: { availableAt: new Date(Date.now() + 60_000) },
+      where: { id: { not: event.id } },
+      data: {
+        availableAt: new Date(Date.now() + 60_000),
+        leaseExpiresAt: new Date(Date.now() + 60_000),
+      },
     });
     await prisma.outboxEvent.update({ where: { id: event.id }, data: { availableAt: new Date() } });
     const failing = new OutboxWorker(
@@ -67,8 +73,11 @@ describe('single-worker outbox', () => {
       data: { eventType: 'phase10.lease', payload: {}, idempotencyKey: `lease-${Date.now()}` },
     });
     await prisma.outboxEvent.updateMany({
-      where: { status: 'PENDING', id: { not: event.id } },
-      data: { availableAt: new Date(Date.now() + 60_000) },
+      where: { id: { not: event.id } },
+      data: {
+        availableAt: new Date(Date.now() + 60_000),
+        leaseExpiresAt: new Date(Date.now() + 60_000),
+      },
     });
     await prisma.outboxEvent.update({ where: { id: event.id }, data: { availableAt: new Date() } });
     expect((await claimOutbox(prisma, 60_000))?.id).toBe(event.id);
