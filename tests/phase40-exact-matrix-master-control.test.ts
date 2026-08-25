@@ -83,7 +83,7 @@ describe('Phase 40 exact matrix master closure', () => {
     expect(eligibility).toContain('new DeterministicFakeModelGateway()');
     expect(eligibility).toContain("state).toBe('INSUFFICIENT_CONTEXT')");
     expect(eligibility).toContain("failureCode).toBe('CONTEXT_EMPTY')");
-    expect(eligibility).toContain('generationExpectedQuestionCitation.count');
+    expect(eligibility).toContain('expectedCitationCount(');
     expect(eligibility).toContain('questionSourceLink.count');
     expect(eligibility).toContain('outputRevisionId).toBeNull()');
   });
