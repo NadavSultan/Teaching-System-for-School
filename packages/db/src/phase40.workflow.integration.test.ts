@@ -167,7 +167,7 @@ describe('Phase 40 complete draft and regeneration workflow', () => {
           priorQuestionId: target.id,
         },
       }),
-    ).toBeGreaterThan(0);
+    ).toBe(1);
 
     const lateGateway: ModelGateway = {
       execute: async () => {

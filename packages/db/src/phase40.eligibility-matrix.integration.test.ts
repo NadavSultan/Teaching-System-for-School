@@ -81,7 +81,7 @@ describe('E1 — independent current Phase 30 eligibility dimensions', () => {
       const selected = await selectGenerationContext(fixture.generationRunId, prisma);
       expect(selected).toEqual([]);
       const processed = await processGenerationRun(fixture.generationRunId, prisma, undefined);
-      expect(['INSUFFICIENT_CONTEXT', 'FAILED']).toContain(processed?.state);
+      expect(processed?.state).toBe('FAILED');
       expect(
         await prisma.assessmentRevision.count({
           where: {

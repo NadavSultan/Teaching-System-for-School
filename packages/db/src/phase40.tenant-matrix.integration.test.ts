@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { DeterministicFakeModelGateway } from '@teach/ai';
+import { AccessDeniedError } from '@teach/domain';
 import { phase40AcceptanceRegistry } from './phase40.acceptance.registry.js';
 import { createGenerationFixture } from './phase40.acceptance.fixtures.js';
 import {
@@ -68,7 +69,7 @@ describe('T — persisted bidirectional tenant matrix', () => {
       if (operation === 'P1')
         await expect(
           requestDraftGeneration(caller.context, draftRequest(target)),
-        ).rejects.toThrow();
+        ).rejects.toBeInstanceOf(AccessDeniedError);
       if (operation === 'P2')
         await expect(
           requestQuestionRegeneration(caller.context, {
@@ -80,7 +81,10 @@ describe('T — persisted bidirectional tenant matrix', () => {
             instruction: 'ניסוח',
             query: 'שלום',
           }),
-        ).rejects.toThrow();
+        ).rejects.toMatchObject({
+          constructor: AccessDeniedError,
+          message: 'Resource not found or unavailable',
+        });
       if (operation === 'P3')
         expect(await getGenerationStatus(caller.context, target.generationRunId)).toBeNull();
       if (operation === 'P4')

@@ -62,7 +62,7 @@ describe('E2 — pre-commit eligibility invalidation', () => {
         prisma,
         invalidatingGateway,
       );
-      expect(['FAILED', 'INSUFFICIENT_CONTEXT']).toContain(result?.state);
+      expect(result?.state).toBe('INSUFFICIENT_CONTEXT');
       expect(
         await prisma.assessmentRevision.count({ where: { assessmentId: fixture.assessmentId } }),
       ).toBe(before);

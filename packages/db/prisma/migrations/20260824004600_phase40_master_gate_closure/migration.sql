@@ -1,5 +1,162 @@
 -- Phase 40 final remediation. 04000-04500 are immutable history.
 
+CREATE TABLE generation_expected_question_citations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  generation_run_id UUID NOT NULL REFERENCES generation_runs(id) ON DELETE RESTRICT,
+  assessment_question_id UUID NOT NULL REFERENCES assessment_questions(id) ON DELETE RESTRICT,
+  knowledge_item_id UUID NOT NULL REFERENCES knowledge_items(id) ON DELETE RESTRICT,
+  source_version_id UUID NOT NULL REFERENCES source_versions(id) ON DELETE RESTRICT,
+  locator VARCHAR(500) NOT NULL,
+  text_hash CHAR(64) NOT NULL,
+  curriculum_version_id UUID NOT NULL REFERENCES curriculum_versions(id) ON DELETE RESTRICT,
+  curriculum_node_id UUID NOT NULL REFERENCES curriculum_nodes(id) ON DELETE RESTRICT,
+  lineage "GenerationLineage" NOT NULL,
+  prior_question_id UUID REFERENCES assessment_questions(id) ON DELETE RESTRICT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT generation_expected_question_citations_unique
+    UNIQUE (generation_run_id, assessment_question_id, knowledge_item_id)
+);
+
+CREATE INDEX generation_expected_question_citations_run_idx
+  ON generation_expected_question_citations (generation_run_id, assessment_question_id);
+
+CREATE OR REPLACE FUNCTION phase40_expected_citation_append_only() RETURNS trigger AS $$
+BEGIN
+  IF TG_OP <> 'INSERT' THEN
+    RAISE EXCEPTION 'generation expected citation is append-only';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER generation_expected_question_citations_append_only
+  BEFORE UPDATE OR DELETE ON generation_expected_question_citations
+  FOR EACH ROW EXECUTE FUNCTION phase40_expected_citation_append_only();
+
+INSERT INTO generation_expected_question_citations (
+  generation_run_id, assessment_question_id, knowledge_item_id, source_version_id,
+  locator, text_hash, curriculum_version_id, curriculum_node_id, lineage, prior_question_id
+)
+SELECT l.generation_run_id, l.assessment_question_id, l.knowledge_item_id, l.source_version_id,
+       l.locator, l.text_hash, l.curriculum_version_id, l.curriculum_node_id,
+       l.lineage, l.prior_question_id
+FROM question_source_links l
+JOIN generation_runs r ON r.id = l.generation_run_id
+WHERE r.state = 'SUCCEEDED';
+
+CREATE OR REPLACE FUNCTION phase40_validate_complete_output_graph(run_id UUID) RETURNS void AS $$
+DECLARE r RECORD; output_question_count INTEGER; link_count INTEGER; base_question_count INTEGER;
+  target_section_key TEXT; target_section_order INTEGER; target_question_key TEXT; target_question_order INTEGER;
+BEGIN
+  SELECT * INTO r FROM generation_runs WHERE id = run_id;
+  IF r.id IS NULL OR r.state <> 'SUCCEEDED' THEN RETURN; END IF;
+  IF r.output_revision_id IS NULL THEN RAISE EXCEPTION 'successful generation requires output revision'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM assessment_revisions ar JOIN assessments a ON a.id=ar.assessment_id
+    WHERE ar.id=r.output_revision_id AND ar.assessment_id=r.assessment_id AND a.organization_id=r.organization_id
+      AND ar.state='FINALIZED' AND ar.idempotency_key='generation:' || r.id)
+    THEN RAISE EXCEPTION 'successful generation output identity invalid'; END IF;
+  SELECT count(*) INTO output_question_count FROM assessment_questions q JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=r.output_revision_id;
+  SELECT count(*) INTO link_count FROM question_source_links l WHERE l.generation_run_id=r.id;
+  IF output_question_count=0 OR link_count < output_question_count THEN RAISE EXCEPTION 'successful generation requires complete source graph'; END IF;
+  IF EXISTS (SELECT 1 FROM assessment_questions q JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=r.output_revision_id
+    AND NOT EXISTS (SELECT 1 FROM question_source_links l WHERE l.generation_run_id=r.id AND l.assessment_question_id=q.id))
+    THEN RAISE EXCEPTION 'output question has no source link'; END IF;
+  IF EXISTS (SELECT 1 FROM question_source_links l WHERE l.generation_run_id=r.id
+    AND NOT EXISTS (SELECT 1 FROM assessment_questions q JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=r.output_revision_id AND q.id=l.assessment_question_id))
+    THEN RAISE EXCEPTION 'source link points outside output revision'; END IF;
+  IF EXISTS (SELECT 1 FROM question_source_links l WHERE l.generation_run_id=r.id GROUP BY l.assessment_question_id, l.knowledge_item_id, l.source_version_id, l.locator, l.text_hash, l.curriculum_version_id, l.curriculum_node_id, l.lineage, l.prior_question_id HAVING count(*) > 1)
+    THEN RAISE EXCEPTION 'duplicate source citation'; END IF;
+  IF EXISTS (
+    (SELECT assessment_question_id, knowledge_item_id, source_version_id, locator, text_hash, curriculum_version_id, curriculum_node_id, lineage, prior_question_id
+       FROM question_source_links WHERE generation_run_id=r.id
+     EXCEPT
+     SELECT assessment_question_id, knowledge_item_id, source_version_id, locator, text_hash, curriculum_version_id, curriculum_node_id, lineage, prior_question_id
+       FROM generation_expected_question_citations WHERE generation_run_id=r.id)
+    UNION ALL
+    (SELECT assessment_question_id, knowledge_item_id, source_version_id, locator, text_hash, curriculum_version_id, curriculum_node_id, lineage, prior_question_id
+       FROM generation_expected_question_citations WHERE generation_run_id=r.id
+     EXCEPT
+     SELECT assessment_question_id, knowledge_item_id, source_version_id, locator, text_hash, curriculum_version_id, curriculum_node_id, lineage, prior_question_id
+       FROM question_source_links WHERE generation_run_id=r.id)
+  ) THEN RAISE EXCEPTION 'generation expected citation set mismatch'; END IF;
+  IF r.operation='DRAFT' THEN
+    IF EXISTS (SELECT 1 FROM question_source_links l WHERE l.generation_run_id=r.id AND (l.lineage <> 'GENERATED' OR l.prior_question_id IS NOT NULL)) THEN RAISE EXCEPTION 'draft source graph contains carried lineage'; END IF;
+  ELSE
+    SELECT count(*) INTO base_question_count FROM assessment_questions q JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=r.base_revision_id;
+    IF output_question_count <> base_question_count THEN RAISE EXCEPTION 'regeneration changed question cardinality'; END IF;
+    SELECT s.key, s."order", q.key, q."order"
+      INTO target_section_key, target_section_order, target_question_key, target_question_order
+      FROM assessment_questions q JOIN assessment_sections s ON s.id=q.section_id
+      WHERE q.id=r.target_question_id AND s.revision_id=r.base_revision_id;
+    IF target_question_key IS NULL THEN RAISE EXCEPTION 'regeneration target identity invalid'; END IF;
+    IF EXISTS (
+      (SELECT key, "order", title, instructions, score_units FROM assessment_sections WHERE revision_id=r.base_revision_id
+       EXCEPT SELECT key, "order", title, instructions, score_units FROM assessment_sections WHERE revision_id=r.output_revision_id)
+      UNION ALL
+      (SELECT key, "order", title, instructions, score_units FROM assessment_sections WHERE revision_id=r.output_revision_id
+       EXCEPT SELECT key, "order", title, instructions, score_units FROM assessment_sections WHERE revision_id=r.base_revision_id)
+    ) THEN RAISE EXCEPTION 'regeneration section graph mismatch'; END IF;
+    IF EXISTS (
+      (SELECT bs.key, bs."order", bq.key, bq."order", bq.type FROM assessment_questions bq JOIN assessment_sections bs ON bs.id=bq.section_id WHERE bs.revision_id=r.base_revision_id
+       EXCEPT SELECT os.key, os."order", oq.key, oq."order", oq.type FROM assessment_questions oq JOIN assessment_sections os ON os.id=oq.section_id WHERE os.revision_id=r.output_revision_id)
+      UNION ALL
+      (SELECT os.key, os."order", oq.key, oq."order", oq.type FROM assessment_questions oq JOIN assessment_sections os ON os.id=oq.section_id WHERE os.revision_id=r.output_revision_id
+       EXCEPT SELECT bs.key, bs."order", bq.key, bq."order", bq.type FROM assessment_questions bq JOIN assessment_sections bs ON bs.id=bq.section_id WHERE bs.revision_id=r.base_revision_id)
+    ) THEN RAISE EXCEPTION 'regeneration question slot graph invalid'; END IF;
+    IF EXISTS (
+      (SELECT bs.key, bs."order", bq.key, bq."order", bq.prompt, bq.instructions, bq.difficulty, bq.score_units FROM assessment_questions bq JOIN assessment_sections bs ON bs.id=bq.section_id WHERE bs.revision_id=r.base_revision_id AND (bs.key, bs."order", bq.key, bq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order)
+       EXCEPT SELECT os.key, os."order", oq.key, oq."order", oq.prompt, oq.instructions, oq.difficulty, oq.score_units FROM assessment_questions oq JOIN assessment_sections os ON os.id=oq.section_id WHERE os.revision_id=r.output_revision_id AND (os.key, os."order", oq.key, oq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order))
+      UNION ALL
+      (SELECT os.key, os."order", oq.key, oq."order", oq.prompt, oq.instructions, oq.difficulty, oq.score_units FROM assessment_questions oq JOIN assessment_sections os ON os.id=oq.section_id WHERE os.revision_id=r.output_revision_id AND (os.key, os."order", oq.key, oq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order)
+       EXCEPT SELECT bs.key, bs."order", bq.key, bq."order", bq.prompt, bq.instructions, bq.difficulty, bq.score_units FROM assessment_questions bq JOIN assessment_sections bs ON bs.id=bq.section_id WHERE bs.revision_id=r.base_revision_id AND (bs.key, bs."order", bq.key, bq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order))
+    ) THEN RAISE EXCEPTION 'regeneration unrelated question graph mismatch'; END IF;
+    IF EXISTS (
+      (SELECT bs.key, bs."order", bq.key, bq."order", sq.key, sq."order", sq.prompt, sq.score_units FROM assessment_sub_questions sq JOIN assessment_questions bq ON bq.id=sq.question_id JOIN assessment_sections bs ON bs.id=bq.section_id WHERE bs.revision_id=r.base_revision_id AND (bs.key, bs."order", bq.key, bq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order)
+       EXCEPT SELECT os.key, os."order", oq.key, oq."order", sq.key, sq."order", sq.prompt, sq.score_units FROM assessment_sub_questions sq JOIN assessment_questions oq ON oq.id=sq.question_id JOIN assessment_sections os ON os.id=oq.section_id WHERE os.revision_id=r.output_revision_id AND (os.key, os."order", oq.key, oq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order))
+      UNION ALL
+      (SELECT os.key, os."order", oq.key, oq."order", sq.key, sq."order", sq.prompt, sq.score_units FROM assessment_sub_questions sq JOIN assessment_questions oq ON oq.id=sq.question_id JOIN assessment_sections os ON os.id=oq.section_id WHERE os.revision_id=r.output_revision_id AND (os.key, os."order", oq.key, oq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order)
+       EXCEPT SELECT bs.key, bs."order", bq.key, bq."order", sq.key, sq."order", sq.prompt, sq.score_units FROM assessment_sub_questions sq JOIN assessment_questions bq ON bq.id=sq.question_id JOIN assessment_sections bs ON bs.id=bq.section_id WHERE bs.revision_id=r.base_revision_id AND (bs.key, bs."order", bq.key, bq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order))
+    ) THEN RAISE EXCEPTION 'regeneration sub-question graph mismatch'; END IF;
+    IF EXISTS (
+      (SELECT bs.key, bs."order", bq.key, bq."order", a.key, a."order", a.text, a.explanation, a.answer_data FROM answers a JOIN assessment_questions bq ON bq.id=a.question_id JOIN assessment_sections bs ON bs.id=bq.section_id WHERE bs.revision_id=r.base_revision_id AND (bs.key, bs."order", bq.key, bq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order)
+       EXCEPT SELECT os.key, os."order", oq.key, oq."order", a.key, a."order", a.text, a.explanation, a.answer_data FROM answers a JOIN assessment_questions oq ON oq.id=a.question_id JOIN assessment_sections os ON os.id=oq.section_id WHERE os.revision_id=r.output_revision_id AND (os.key, os."order", oq.key, oq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order))
+      UNION ALL
+      (SELECT os.key, os."order", oq.key, oq."order", a.key, a."order", a.text, a.explanation, a.answer_data FROM answers a JOIN assessment_questions oq ON oq.id=a.question_id JOIN assessment_sections os ON os.id=oq.section_id WHERE os.revision_id=r.output_revision_id AND (os.key, os."order", oq.key, oq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order)
+       EXCEPT SELECT bs.key, bs."order", bq.key, bq."order", a.key, a."order", a.text, a.explanation, a.answer_data FROM answers a JOIN assessment_questions bq ON bq.id=a.question_id JOIN assessment_sections bs ON bs.id=bq.section_id WHERE bs.revision_id=r.base_revision_id AND (bs.key, bs."order", bq.key, bq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order))
+    ) THEN RAISE EXCEPTION 'regeneration answer graph mismatch'; END IF;
+    IF EXISTS (
+      (SELECT bs.key, bs."order", bq.key, bq."order", sq.key, sq."order", a.key, a."order", a.text, a.explanation, a.answer_data FROM answers a JOIN assessment_sub_questions sq ON sq.id=a.sub_question_id JOIN assessment_questions bq ON bq.id=sq.question_id JOIN assessment_sections bs ON bs.id=bq.section_id WHERE bs.revision_id=r.base_revision_id AND (bs.key, bs."order", bq.key, bq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order)
+       EXCEPT SELECT os.key, os."order", oq.key, oq."order", sq.key, sq."order", a.key, a."order", a.text, a.explanation, a.answer_data FROM answers a JOIN assessment_sub_questions sq ON sq.id=a.sub_question_id JOIN assessment_questions oq ON oq.id=sq.question_id JOIN assessment_sections os ON os.id=oq.section_id WHERE os.revision_id=r.output_revision_id AND (os.key, os."order", oq.key, oq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order))
+      UNION ALL
+      (SELECT os.key, os."order", oq.key, oq."order", sq.key, sq."order", a.key, a."order", a.text, a.explanation, a.answer_data FROM answers a JOIN assessment_sub_questions sq ON sq.id=a.sub_question_id JOIN assessment_questions oq ON oq.id=sq.question_id JOIN assessment_sections os ON os.id=oq.section_id WHERE os.revision_id=r.output_revision_id AND (os.key, os."order", oq.key, oq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order)
+       EXCEPT SELECT bs.key, bs."order", bq.key, bq."order", sq.key, sq."order", a.key, a."order", a.text, a.explanation, a.answer_data FROM answers a JOIN assessment_sub_questions sq ON sq.id=a.sub_question_id JOIN assessment_questions bq ON bq.id=sq.question_id JOIN assessment_sections bs ON bs.id=bq.section_id WHERE bs.revision_id=r.base_revision_id AND (bs.key, bs."order", bq.key, bq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order))
+    ) THEN RAISE EXCEPTION 'regeneration answer graph mismatch'; END IF;
+    IF EXISTS (
+      (SELECT bs.key, bs."order", bq.key, bq."order", rc.key, rc."order", rc.description, rc.score_units FROM rubric_criteria rc JOIN assessment_questions bq ON bq.id=rc.question_id JOIN assessment_sections bs ON bs.id=bq.section_id WHERE bs.revision_id=r.base_revision_id AND (bs.key, bs."order", bq.key, bq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order)
+       EXCEPT SELECT os.key, os."order", oq.key, oq."order", rc.key, rc."order", rc.description, rc.score_units FROM rubric_criteria rc JOIN assessment_questions oq ON oq.id=rc.question_id JOIN assessment_sections os ON os.id=oq.section_id WHERE os.revision_id=r.output_revision_id AND (os.key, os."order", oq.key, oq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order))
+      UNION ALL
+      (SELECT os.key, os."order", oq.key, oq."order", rc.key, rc."order", rc.description, rc.score_units FROM rubric_criteria rc JOIN assessment_questions oq ON oq.id=rc.question_id JOIN assessment_sections os ON os.id=oq.section_id WHERE os.revision_id=r.output_revision_id AND (os.key, os."order", oq.key, oq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order)
+       EXCEPT SELECT bs.key, bs."order", bq.key, bq."order", rc.key, rc."order", rc.description, rc.score_units FROM rubric_criteria rc JOIN assessment_questions bq ON bq.id=rc.question_id JOIN assessment_sections bs ON bs.id=bq.section_id WHERE bs.revision_id=r.base_revision_id AND (bs.key, bs."order", bq.key, bq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order))
+    ) THEN RAISE EXCEPTION 'regeneration rubric graph mismatch'; END IF;
+    IF EXISTS (
+      (SELECT DISTINCT bs.key, bs."order", bq.key, bq."order", l.knowledge_item_id, l.source_version_id, l.locator, l.text_hash, l.curriculum_version_id, l.curriculum_node_id, 'CARRIED_FORWARD'::"GenerationLineage" FROM question_source_links l JOIN assessment_questions bq ON bq.id=l.assessment_question_id JOIN assessment_sections bs ON bs.id=bq.section_id WHERE bs.revision_id=r.base_revision_id AND (bs.key, bs."order", bq.key, bq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order)
+       EXCEPT SELECT DISTINCT os.key, os."order", oq.key, oq."order", l.knowledge_item_id, l.source_version_id, l.locator, l.text_hash, l.curriculum_version_id, l.curriculum_node_id, l.lineage FROM question_source_links l JOIN assessment_questions oq ON oq.id=l.assessment_question_id JOIN assessment_sections os ON os.id=oq.section_id WHERE l.generation_run_id=r.id AND (os.key, os."order", oq.key, oq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order))
+      UNION ALL
+      (SELECT DISTINCT os.key, os."order", oq.key, oq."order", l.knowledge_item_id, l.source_version_id, l.locator, l.text_hash, l.curriculum_version_id, l.curriculum_node_id, l.lineage FROM question_source_links l JOIN assessment_questions oq ON oq.id=l.assessment_question_id JOIN assessment_sections os ON os.id=oq.section_id WHERE l.generation_run_id=r.id AND (os.key, os."order", oq.key, oq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order)
+       EXCEPT SELECT DISTINCT bs.key, bs."order", bq.key, bq."order", l.knowledge_item_id, l.source_version_id, l.locator, l.text_hash, l.curriculum_version_id, l.curriculum_node_id, 'CARRIED_FORWARD'::"GenerationLineage" FROM question_source_links l JOIN assessment_questions bq ON bq.id=l.assessment_question_id JOIN assessment_sections bs ON bs.id=bq.section_id WHERE bs.revision_id=r.base_revision_id AND (bs.key, bs."order", bq.key, bq."order") <> (target_section_key, target_section_order, target_question_key, target_question_order))
+    ) THEN RAISE EXCEPTION 'regeneration unrelated source graph mismatch'; END IF;
+    IF EXISTS (SELECT 1 FROM question_source_links l WHERE l.generation_run_id=r.id AND l.lineage='GENERATED' AND l.prior_question_id IS DISTINCT FROM r.target_question_id) THEN RAISE EXCEPTION 'regeneration generated link targets wrong prior question'; END IF;
+    IF EXISTS (SELECT 1 FROM assessment_questions bq JOIN assessment_sections bs ON bs.id=bq.section_id WHERE bs.revision_id=r.base_revision_id AND bq.id IS DISTINCT FROM r.target_question_id
+      AND NOT EXISTS (SELECT 1 FROM question_source_links l WHERE l.generation_run_id=r.id AND l.lineage='CARRIED_FORWARD' AND l.prior_question_id=bq.id)) THEN RAISE EXCEPTION 'regeneration missing carried-forward provenance'; END IF;
+    IF EXISTS (SELECT 1 FROM question_source_links l WHERE l.generation_run_id=r.id AND l.lineage='CARRIED_FORWARD' AND NOT EXISTS (SELECT 1 FROM question_source_links prior WHERE prior.assessment_question_id=l.prior_question_id AND prior.generation_run_id IS NOT NULL AND prior.knowledge_item_id=l.knowledge_item_id AND prior.source_version_id=l.source_version_id AND prior.locator=l.locator AND prior.text_hash=l.text_hash AND prior.curriculum_version_id=l.curriculum_version_id AND prior.curriculum_node_id=l.curriculum_node_id)) THEN RAISE EXCEPTION 'carried-forward source set mismatch'; END IF;
+  END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+DO $$ DECLARE r RECORD; BEGIN
+  FOR r IN SELECT id FROM generation_runs WHERE state='SUCCEEDED' LOOP PERFORM phase40_validate_complete_output_graph(r.id); END LOOP;
+END $$;
+
 CREATE OR REPLACE FUNCTION phase40_generation_context_identity() RETURNS trigger AS $$
 DECLARE run_row RECORD; item_row RECORD; source_row RECORD; latest_lifecycle TEXT; latest_review TEXT; latest_permission TEXT; permission_until TIMESTAMPTZ;
 BEGIN

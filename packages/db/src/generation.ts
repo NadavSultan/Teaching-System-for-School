@@ -913,6 +913,19 @@ async function persistRegeneratedRevision(
   return revision.id;
 }
 
+async function persistExpectedQuestionCitations(tx: GenerationTx, generationRunId: string) {
+  await tx.$executeRaw`
+    INSERT INTO generation_expected_question_citations (
+      generation_run_id, assessment_question_id, knowledge_item_id, source_version_id,
+      locator, text_hash, curriculum_version_id, curriculum_node_id, lineage, prior_question_id
+    )
+    SELECT generation_run_id, assessment_question_id, knowledge_item_id, source_version_id,
+           locator, text_hash, curriculum_version_id, curriculum_node_id, lineage, prior_question_id
+    FROM question_source_links
+    WHERE generation_run_id = ${generationRunId}::uuid
+  `;
+}
+
 function safeCode(error: unknown): string {
   if (error instanceof GatewayFailure)
     return error.code === 'TRANSIENT'
@@ -1083,6 +1096,7 @@ export async function processGenerationRun(
           if (!(await contextStillEligible(runId, selected, tx)))
             throw new Error('CONTEXT_INVALIDATED');
           revisionId = await persistRevision(tx, run, revisionInput, linksByQuestion);
+          await persistExpectedQuestionCitations(tx, runId);
           const result = await tx.generationRun.update({
             where: { id: runId },
             data: {
@@ -1114,6 +1128,7 @@ export async function processGenerationRun(
           if (!(await contextStillEligible(runId, selected, tx)))
             throw new Error('CONTEXT_INVALIDATED');
           revisionId = await persistRegeneratedRevision(tx, run, output, selected);
+          await persistExpectedQuestionCitations(tx, runId);
           const result = await tx.generationRun.update({
             where: { id: runId },
             data: {

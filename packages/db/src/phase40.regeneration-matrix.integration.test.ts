@@ -126,8 +126,23 @@ describe('Q — regeneration graph isolation and provenance', () => {
           const secondResult = await getGenerationResult(fixture.context, second.id);
           targetId = secondResult!.revision!.sections[0]!.questions[0]!.id;
         }
-        await expect(
-          requestQuestionRegeneration(fixture.context, {
+        const before = {
+          runs: await prisma.generationRun.count({
+            where: { organizationId: fixture.context.organizationId },
+          }),
+          revisions: await prisma.assessmentRevision.count({
+            where: { assessmentId: fixture.assessmentId },
+          }),
+          outbox: await prisma.outboxEvent.count({
+            where: { organizationId: fixture.context.organizationId },
+          }),
+          audits: await prisma.auditEvent.count({
+            where: { organizationId: fixture.context.organizationId },
+          }),
+        };
+        let caught: unknown;
+        try {
+          await requestQuestionRegeneration(fixture.context, {
             version: '1.0.0',
             assessmentId: fixture.assessmentId,
             baseRevisionId: base!.revision!.id,
@@ -135,8 +150,32 @@ describe('Q — regeneration graph isolation and provenance', () => {
             idempotencyKey: `q-${kind}-${fixture.generationRunId}`,
             instruction: 'ניסוח',
             query: 'שלום',
+          });
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toBeInstanceOf(AccessDeniedError);
+        expect((caught as Error).message).toBe('Resource not found or unavailable');
+        expect(
+          await prisma.generationRun.count({
+            where: { organizationId: fixture.context.organizationId },
           }),
-        ).rejects.toThrow();
+        ).toBe(before.runs);
+        expect(
+          await prisma.assessmentRevision.count({
+            where: { assessmentId: fixture.assessmentId },
+          }),
+        ).toBe(before.revisions);
+        expect(
+          await prisma.outboxEvent.count({
+            where: { organizationId: fixture.context.organizationId },
+          }),
+        ).toBe(before.outbox);
+        expect(
+          await prisma.auditEvent.count({
+            where: { organizationId: fixture.context.organizationId },
+          }),
+        ).toBe(before.audits);
         return;
       }
       if (kind === 'concurrent-sequential-revisions') {

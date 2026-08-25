@@ -64,7 +64,7 @@ describe('C — real generation concurrency, lease, replay, and idempotency', ()
         });
         const recovered = await processGenerationRun(fixture.generationRunId, prisma, undefined);
         expect(recovered?.attempts).toBe(2);
-        expect(['FAILED', 'INSUFFICIENT_CONTEXT']).toContain(recovered?.state);
+        expect(recovered?.state).toBe('FAILED');
         return;
       }
       if (kind === 'crash-after-claim') {
@@ -193,7 +193,7 @@ describe('A — persisted audit, outbox, redaction, and append-only evidence', (
         const audits = await prisma.auditEvent.findMany({
           where: { targetId: fixture.generationRunId },
         });
-        expect(audits.length).toBeGreaterThan(0);
+        expect(audits.length).toBe(2);
         expect(audits.every((audit) => !JSON.stringify(audit.metadata).includes('שלום עולם'))).toBe(
           true,
         );
