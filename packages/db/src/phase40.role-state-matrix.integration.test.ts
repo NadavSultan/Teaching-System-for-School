@@ -100,6 +100,21 @@ describe('S — persisted authorization state denial', () => {
     async (caseId) => {
       const [state, operation] = caseId.split(':');
       const fixture = await createGenerationFixture();
+      const base = await processGenerationRun(
+        fixture.generationRunId,
+        prisma,
+        new DeterministicFakeModelGateway(),
+      );
+      const baseResult = await getGenerationResult(fixture.context, fixture.generationRunId);
+      const baseQuestion = baseResult?.revision?.sections[0]?.questions[0];
+      if (!base?.outputRevisionId || !baseQuestion)
+        throw new Error('state denial fixture graph missing');
+      const countsBefore = await Promise.all([
+        prisma.generationRun.count({ where: { organizationId: fixture.context.organizationId } }),
+        prisma.outboxEvent.count({ where: { organizationId: fixture.context.organizationId } }),
+        prisma.auditEvent.count({ where: { organizationId: fixture.context.organizationId } }),
+        prisma.assessmentRevision.count({ where: { assessmentId: fixture.assessmentId } }),
+      ]);
       if (state === 'inactive-user')
         await prisma.user.update({
           where: { id: fixture.context.principal.userId },
@@ -155,7 +170,25 @@ describe('S — persisted authorization state denial', () => {
               scoringMode: 'NONE',
               totalScoreUnits: null,
               query: 'שלום',
-              sections: [],
+              sections: [
+                {
+                  key: 's1',
+                  title: 'קטע',
+                  order: 0,
+                  scoreUnits: null,
+                  questions: [
+                    {
+                      key: 'q1',
+                      order: 0,
+                      type: 'OPEN',
+                      difficulty: 'LOW',
+                      scoreUnits: null,
+                      instructions: '',
+                      emphasis: '',
+                    },
+                  ],
+                },
+              ],
             }),
           ),
         ).rejects.toThrow();
@@ -165,8 +198,8 @@ describe('S — persisted authorization state denial', () => {
             requestQuestionRegeneration(forged, {
               version: '1.0.0',
               assessmentId: fixture.assessmentId,
-              baseRevisionId: fixture.generationRunId,
-              targetQuestionId: fixture.knowledgeItemId,
+              baseRevisionId: base.outputRevisionId,
+              targetQuestionId: baseQuestion.id,
               idempotencyKey: `denied-r-${caseId}`,
               instruction: 'ניסוח',
               query: 'שלום',
@@ -177,6 +210,14 @@ describe('S — persisted authorization state denial', () => {
         expect(await getGenerationStatus(forged, fixture.generationRunId)).toBeNull();
       if (operation === 'P4')
         expect(await getGenerationResult(forged, fixture.generationRunId)).toBeNull();
+      expect(
+        await Promise.all([
+          prisma.generationRun.count({ where: { organizationId: fixture.context.organizationId } }),
+          prisma.outboxEvent.count({ where: { organizationId: fixture.context.organizationId } }),
+          prisma.auditEvent.count({ where: { organizationId: fixture.context.organizationId } }),
+          prisma.assessmentRevision.count({ where: { assessmentId: fixture.assessmentId } }),
+        ]),
+      ).toEqual(countsBefore);
     },
   );
 });

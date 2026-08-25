@@ -1,4 +1,5 @@
 import { CONTRACT_VERSION } from '@teach/contracts';
+import { createHash } from 'node:crypto';
 import type { AccessContext } from '@teach/domain';
 import {
   createAssessment,
@@ -34,7 +35,13 @@ export async function createGenerationFixture(
     role?: 'TEACHER' | 'COORDINATOR' | 'SCHOOL_ADMIN';
     review?: 'APPROVED' | 'REJECTED' | null;
     permission?: 'ALLOWED' | 'DENIED' | null;
-    lifecycle?: 'ACTIVE' | 'SUSPENDED' | 'DEPRECATED' | 'FAILED' | 'NEEDS_RE_REVIEW';
+    lifecycle?: 'DRAFT' | 'ACTIVE' | 'SUSPENDED' | 'DEPRECATED' | 'FAILED' | 'NEEDS_RE_REVIEW';
+    permissionValidUntil?: string;
+    wrongRequestedNode?: boolean;
+    wrongRequestedCurriculum?: boolean;
+    multiQuestion?: boolean;
+    inactiveItem?: boolean;
+    crossTenantPrivate?: boolean;
     visibility?: 'ORGANIZATION_PRIVATE' | 'PLATFORM_SHARED';
     secondTenant?: boolean;
     query?: string;
@@ -61,7 +68,7 @@ export async function createGenerationFixture(
     providerSubject: `dev:${workspace.user.id}`,
     platformAdmin: false,
   } as const;
-  const context = await resolveAccessContext(principal, organization.id);
+  let context = await resolveAccessContext(principal, organization.id);
   const imported = await importCurriculumDraft({
     version: '1.0.0',
     code: `P40CASE${Date.now()}${Math.floor(Math.random() * 1_000_000)}`,
@@ -71,10 +78,34 @@ export async function createGenerationFixture(
     versionNumber: 1,
     nodes: [{ type: 'GRADE', code: 'G7', label: 'ז', sortOrder: 0 }],
   });
-  await publishCurriculumVersion(imported.version.id, workspace.user.id);
   const node = await prisma.curriculumNode.findFirstOrThrow({
     where: { versionId: imported.version.id },
   });
+  let requestedCurriculumVersionId = imported.version.id;
+  let requestedNodeIds = [node.id];
+  if (options.wrongRequestedNode) {
+    const extra = await prisma.curriculumNode.create({
+      data: { versionId: imported.version.id, type: 'GRADE', code: 'G8', label: 'ח', sortOrder: 1 },
+    });
+    requestedNodeIds = [extra.id];
+  }
+  await publishCurriculumVersion(imported.version.id, workspace.user.id);
+  if (options.wrongRequestedCurriculum) {
+    const other = await importCurriculumDraft({
+      version: '1.0.0',
+      code: `P40OTHER${Date.now()}${Math.floor(Math.random() * 1_000_000)}`,
+      educationSystemCode: 'IL',
+      subjectCode: 'HE',
+      displayName: 'עברית אחרת',
+      versionNumber: 1,
+      nodes: [{ type: 'GRADE', code: 'G9', label: 'ט', sortOrder: 0 }],
+    });
+    await publishCurriculumVersion(other.version.id, workspace.user.id);
+    requestedCurriculumVersionId = other.version.id;
+    requestedNodeIds = [
+      (await prisma.curriculumNode.findFirstOrThrow({ where: { versionId: other.version.id } })).id,
+    ];
+  }
   const source = await createKnowledgeSource(context, {
     version: '1.0.0',
     title: 'מקור בדיקה',
@@ -106,9 +137,12 @@ export async function createGenerationFixture(
       decision: options.permission ?? 'ALLOWED',
       evidenceReference: 'case evidence',
       scope: 'AI_GENERATION',
+      validUntil: options.permissionValidUntil,
     });
   }
-  if (options.lifecycle && options.lifecycle !== 'ACTIVE') {
+  if (options.lifecycle === 'DRAFT') {
+    // Keep the immutable initial DRAFT lifecycle evidence.
+  } else if (options.lifecycle && options.lifecycle !== 'ACTIVE') {
     await setSourceLifecycle(context, registered.id, options.lifecycle, 'case lifecycle');
   } else {
     await setSourceLifecycle(context, registered.id, 'ACTIVE', 'case active');
@@ -119,9 +153,58 @@ export async function createGenerationFixture(
     pipelineVersion: `plain-v1-${suffix}`,
   });
   const completedIngestion = await runIngestion(ingestion.id);
-  const item = await prisma.knowledgeItem.findFirstOrThrow({
+  let item = await prisma.knowledgeItem.findFirstOrThrow({
     where: { ingestionRunId: completedIngestion.id },
   });
+  if (options.inactiveItem) {
+    const normalizedText = `${item.normalizedText} פריט לא פעיל`;
+    const textHash = createHash('sha256').update(normalizedText, 'utf8').digest('hex');
+    item = await prisma.knowledgeItem.create({
+      data: {
+        sourceVersionId: item.sourceVersionId,
+        ingestionRunId: item.ingestionRunId,
+        organizationId: item.organizationId,
+        visibility: item.visibility,
+        locator: `${item.locator}-inactive`,
+        normalizedText,
+        textHash,
+        metadata: {},
+        pipelineVersion: item.pipelineVersion,
+        parserVersion: item.parserVersion,
+        status: 'SUSPENDED',
+        curriculumLinks: {
+          create: { curriculumVersionId: imported.version.id, curriculumNodeId: node.id },
+        },
+      },
+    });
+  }
+  if (options.crossTenantPrivate) {
+    const otherWorkspace = await createPersonalWorkspace({
+      email: `p40-cross-${suffix}@example.test`,
+      workspaceName: `Phase 40 cross tenant ${suffix}`,
+    });
+    const otherOrganization = await prisma.organization.create({
+      data: { name: `Phase 40 cross school ${suffix}`, workspaceType: 'SCHOOL' },
+    });
+    await prisma.membership.create({
+      data: {
+        userId: otherWorkspace.user.id,
+        organizationId: otherOrganization.id,
+        role: 'TEACHER',
+      },
+    });
+    context = await resolveAccessContext(
+      {
+        version: CONTRACT_VERSION,
+        userId: otherWorkspace.user.id,
+        email: otherWorkspace.user.normalizedEmail,
+        provider: 'development',
+        providerSubject: `dev:${otherWorkspace.user.id}`,
+        platformAdmin: false,
+      },
+      otherOrganization.id,
+    );
+  }
   const assessment = await createAssessment(context, {
     version: '1.0.0',
     type: 'WORKSHEET',
@@ -133,30 +216,76 @@ export async function createGenerationFixture(
     version: '1.0.0',
     assessmentId: assessment.id,
     idempotencyKey: `draft-${suffix}`,
-    curriculumVersionId: imported.version.id,
-    curriculumNodeIds: [node.id],
+    curriculumVersionId: requestedCurriculumVersionId,
+    curriculumNodeIds: requestedNodeIds,
     scoringMode: 'NONE',
     totalScoreUnits: null,
-    query: options.query ?? 'שלום',
-    sections: [
-      {
-        key: 's1',
-        title: 'קטע',
-        order: 0,
-        scoreUnits: null,
-        questions: [
+    query: options.query ?? (options.inactiveItem ? 'פריט לא פעיל' : 'שלום'),
+    sections: options.multiQuestion
+      ? [
           {
-            key: 'q1',
+            key: 's1',
+            title: 'קטע ראשון',
             order: 0,
-            type: 'OPEN',
-            difficulty: 'LOW',
             scoreUnits: null,
-            instructions: '',
-            emphasis: '',
+            questions: [
+              {
+                key: 'q1',
+                order: 0,
+                type: 'OPEN',
+                difficulty: 'LOW',
+                scoreUnits: null,
+                instructions: '',
+                emphasis: '',
+              },
+              {
+                key: 'q2',
+                order: 1,
+                type: 'OPEN',
+                difficulty: 'LOW',
+                scoreUnits: null,
+                instructions: '',
+                emphasis: '',
+              },
+            ],
+          },
+          {
+            key: 's2',
+            title: 'קטע שני',
+            order: 1,
+            scoreUnits: null,
+            questions: [
+              {
+                key: 'q3',
+                order: 0,
+                type: 'OPEN',
+                difficulty: 'LOW',
+                scoreUnits: null,
+                instructions: '',
+                emphasis: '',
+              },
+            ],
+          },
+        ]
+      : [
+          {
+            key: 's1',
+            title: 'קטע',
+            order: 0,
+            scoreUnits: null,
+            questions: [
+              {
+                key: 'q1',
+                order: 0,
+                type: 'OPEN',
+                difficulty: 'LOW',
+                scoreUnits: null,
+                instructions: '',
+                emphasis: '',
+              },
+            ],
           },
         ],
-      },
-    ],
   });
   return {
     context,

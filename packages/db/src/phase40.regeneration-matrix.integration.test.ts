@@ -14,7 +14,7 @@ describe('Q — regeneration graph isolation and provenance', () => {
   it.each(phase40AcceptanceRegistry.Q)(
     '%s asserts the persisted base/output graph contract',
     async (kind) => {
-      const fixture = await createGenerationFixture();
+      const fixture = await createGenerationFixture({ multiQuestion: true });
       const baseRun = await processGenerationRun(
         fixture.generationRunId,
         prisma,
@@ -131,6 +131,14 @@ describe('Q — regeneration graph isolation and provenance', () => {
       expect(
         links.some((link) => link.lineage === 'GENERATED' && link.priorQuestionId === target!.id),
       ).toBe(true);
+      if (kind === 'unrelated-structure-equal' || kind === 'carried-forward-links') {
+        expect(regenerated?.revision?.sections.length).toBe(base?.revision?.sections.length);
+        expect(regenerated?.revision?.sections[1]?.questions[0]?.key).toBe(
+          base?.revision?.sections[1]?.questions[0]?.key,
+        );
+      }
+      if (kind === 'carried-forward-links')
+        expect(links.some((link) => link.lineage === 'CARRIED_FORWARD')).toBe(true);
       if (kind === 'idempotent-retry') expect(retry.id).toBe(regeneration.id);
     },
   );

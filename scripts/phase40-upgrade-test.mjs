@@ -57,6 +57,7 @@ const runDeployFor = (database, schema) => {
   });
 };
 const runDeploy = (schema) => runDeployFor('teaching_upgrade', schema);
+let completed = false;
 try {
   await pg.initialise();
   await pg.start();
@@ -71,6 +72,7 @@ try {
       '20260824004200_phase40_final_review_closure',
       '20260824004300_phase40_acceptance_closure',
       '20260824004400_phase40_complete_output_graph',
+      '20260824004500_phase40_exact_output_graph',
     ].includes(name),
   ))
     rmSync(join(prismaCopy, 'migrations', migration), { recursive: true, force: true });
@@ -211,44 +213,33 @@ try {
     join(prismaCopy, 'migrations', '20260824004400_phase40_complete_output_graph'),
     { recursive: true },
   );
+  cpSync(
+    join(sourcePrisma, 'migrations', '20260824004500_phase40_exact_output_graph'),
+    join(prismaCopy, 'migrations', '20260824004500_phase40_exact_output_graph'),
+    { recursive: true },
+  );
   console.log('UPGRADE_STAGE=04400_START');
   runDeploy(join(prismaCopy, 'schema.prisma'));
   console.log('UPGRADE_STAGE=04400_APPLIED');
+  console.log('UPGRADE_STAGE=04500_START');
+  runDeploy(join(prismaCopy, 'schema.prisma'));
+  console.log('UPGRADE_STAGE=04500_APPLIED');
   const verify = pg.getPgClient('teaching_upgrade');
   await verify.connect();
-  const checks = await Promise.all([
-    verify.query(
-      `SELECT 1 FROM information_schema.columns WHERE table_name = 'generation_runs' AND column_name = 'lease_expires_at'`,
-    ),
-    verify.query(
-      `SELECT 1 FROM pg_trigger WHERE tgname = 'generation_usage_guard' AND NOT tgisinternal`,
-    ),
-    verify.query(
-      `SELECT 1 FROM pg_trigger WHERE tgname = 'generation_context_identity' AND NOT tgisinternal`,
-    ),
-    verify.query(
-      `SELECT 1 FROM pg_trigger WHERE tgname = 'question_source_identity' AND NOT tgisinternal`,
-    ),
-    verify.query(`SELECT 1 FROM source_versions WHERE id = '88888888-8888-4888-8888-888888888888'`),
-    verify.query(
-      `SELECT 1 FROM generation_runs WHERE id = '99999999-9999-4999-8999-999999999999' AND state = 'SUCCEEDED' AND attempts = 1 AND output_revision_id = '14141414-1414-4141-8141-141414141414'`,
-    ),
-    verify.query(
-      `SELECT 1 FROM generation_usages WHERE generation_run_id = '99999999-9999-4999-8999-999999999999' AND total_tokens = input_tokens + output_tokens`,
-    ),
-    verify.query(
-      `SELECT 1 FROM pg_constraint WHERE conname = 'generation_context_items_lineage_ck'`,
-    ),
-    verify.query(
-      `SELECT 1 FROM pg_trigger WHERE tgname = 'phase40_review_source_lock' AND NOT tgisinternal`,
-    ),
-    verify.query(
-      `SELECT 1 FROM pg_trigger WHERE tgname = 'question_source_commit_guard' AND NOT tgisinternal`,
-    ),
-    verify.query(
-      `SELECT 1 FROM pg_constraint WHERE conname = 'generation_context_items_lineage_ck'`,
-    ),
-  ]);
+  const checkSql = [
+    `SELECT 1 FROM information_schema.columns WHERE table_name = 'generation_runs' AND column_name = 'lease_expires_at'`,
+    `SELECT 1 FROM pg_trigger WHERE tgname = 'generation_usage_guard' AND NOT tgisinternal`,
+    `SELECT 1 FROM pg_trigger WHERE tgname = 'generation_context_identity' AND NOT tgisinternal`,
+    `SELECT 1 FROM pg_trigger WHERE tgname = 'question_source_identity' AND NOT tgisinternal`,
+    `SELECT 1 FROM source_versions WHERE id = '88888888-8888-4888-8888-888888888888'`,
+    `SELECT 1 FROM generation_runs WHERE id = '99999999-9999-4999-8999-999999999999' AND state = 'SUCCEEDED' AND attempts = 1 AND output_revision_id = '14141414-1414-4141-8141-141414141414'`,
+    `SELECT 1 FROM generation_usages WHERE generation_run_id = '99999999-9999-4999-8999-999999999999' AND total_tokens = input_tokens + output_tokens`,
+    `SELECT 1 FROM pg_constraint WHERE conname = 'generation_context_items_lineage_ck'`,
+    `SELECT 1 FROM pg_trigger WHERE tgname = 'phase40_review_source_lock' AND NOT tgisinternal`,
+    `SELECT 1 FROM pg_trigger WHERE tgname = 'question_source_commit_guard' AND NOT tgisinternal`,
+  ];
+  const checks = [];
+  for (const sql of checkSql) checks.push(await verify.query(sql));
   await verify.end();
   if (checks.some((check) => check.rowCount !== 1)) {
     throw new Error('Phase 40 upgrade assertions failed');
@@ -257,7 +248,7 @@ try {
     /^\d+_/.test(name),
   );
   if (
-    migrations.length !== 12 ||
+    migrations.length !== 13 ||
     !existsSync(
       'packages/db/prisma/migrations/20260824004100_phase40_review_remediation/migration.sql',
     ) ||
@@ -269,12 +260,13 @@ try {
     ) ||
     !existsSync(
       'packages/db/prisma/migrations/20260824004400_phase40_complete_output_graph/migration.sql',
+    ) ||
+    !existsSync(
+      'packages/db/prisma/migrations/20260824004500_phase40_exact_output_graph/migration.sql',
     )
   )
     throw new Error('final migration count mismatch');
   runDeployFor('teaching_upgrade_clean', sourcePrisma + '/schema.prisma');
-  const clean = pg.getPgClient(cleanDatabase);
-  await clean.connect();
   const catalogFingerprint = async (db) => {
     const c = pg.getPgClient(db);
     await c.connect();
@@ -317,16 +309,31 @@ try {
   if (!comparison.fingerprint || comparison.rows <= 0)
     throw new Error('clean schema comparison did not execute');
   console.log('PHASE30_TO_PHASE40_UPGRADE=PASS');
-  console.log('UPGRADE_03300_TO_04000_TO_04100_TO_04200_TO_04300_TO_04400=PASS');
+  console.log('UPGRADE_03300_TO_04000_TO_04100_TO_04200_TO_04300_TO_04400_TO_04500=PASS');
   console.log('DATA_PRESERVATION_CONTEXT_LINEAGE_SOURCE_LINK_ASSERTIONS=PASS');
   console.log(
     `SECOND_CLEAN_DATABASE_COMPARISON=PASS fingerprint=${upgradedFingerprint.fingerprint} rows=${upgradedFingerprint.rows}`,
   );
+  completed = true;
 } catch (error) {
   console.error('PHASE40_UPGRADE_ERROR', error instanceof Error ? error.stack : error);
   throw error;
 } finally {
-  if (process.platform === 'win32' && pg.process?.pid)
-    spawnSync('taskkill', ['/pid', String(pg.process.pid), '/f', '/t'], { stdio: 'ignore' });
+  if (process.platform === 'win32' && pg.process?.pid) {
+    const killResult = spawnSync('taskkill', ['/pid', String(pg.process.pid), '/f', '/t'], {
+      stdio: 'ignore',
+      timeout: 10_000,
+    });
+    if (killResult.error) {
+      try {
+        process.kill(pg.process.pid);
+      } catch {
+        // The embedded server may already have exited after the timeout.
+      }
+    }
+  } else {
+    await pg.stop();
+  }
   rmSync(prismaCopy, { recursive: true, force: true });
+  if (completed) process.exit(0);
 }

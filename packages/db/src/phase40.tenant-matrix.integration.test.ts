@@ -1,10 +1,12 @@
 import { afterAll, describe, expect, it } from 'vitest';
+import { DeterministicFakeModelGateway } from '@teach/ai';
 import { phase40AcceptanceRegistry } from './phase40.acceptance.registry.js';
 import { createGenerationFixture } from './phase40.acceptance.fixtures.js';
 import {
   getGenerationResult,
   getGenerationStatus,
   prisma,
+  processGenerationRun,
   requestDraftGeneration,
   requestQuestionRegeneration,
 } from './index.js';
@@ -54,6 +56,15 @@ describe('T — persisted bidirectional tenant matrix', () => {
       const [direction, operation] = caseId.split(':');
       const caller = direction === 'A->B' ? owner : foreign;
       const target = direction === 'A->B' ? foreign : owner;
+      const foreignBase = await processGenerationRun(
+        target.generationRunId,
+        prisma,
+        new DeterministicFakeModelGateway(),
+      );
+      const foreignResult = await getGenerationResult(target.context, target.generationRunId);
+      const foreignQuestion = foreignResult?.revision?.sections[0]?.questions[0];
+      if (!foreignBase?.outputRevisionId || !foreignQuestion)
+        throw new Error('foreign finalized graph missing');
       if (operation === 'P1')
         await expect(
           requestDraftGeneration(caller.context, draftRequest(target)),
@@ -63,8 +74,8 @@ describe('T — persisted bidirectional tenant matrix', () => {
           requestQuestionRegeneration(caller.context, {
             version: '1.0.0',
             assessmentId: target.assessmentId,
-            baseRevisionId: target.generationRunId,
-            targetQuestionId: target.knowledgeItemId,
+            baseRevisionId: foreignBase.outputRevisionId,
+            targetQuestionId: foreignQuestion.id,
             idempotencyKey: `foreign-regen-${target.generationRunId}`,
             instruction: 'ניסוח',
             query: 'שלום',

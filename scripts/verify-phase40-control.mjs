@@ -8,6 +8,7 @@ const required = [
   'packages/db/prisma/migrations/20260824004200_phase40_final_review_closure/migration.sql',
   'packages/db/prisma/migrations/20260824004300_phase40_acceptance_closure/migration.sql',
   'packages/db/prisma/migrations/20260824004400_phase40_complete_output_graph/migration.sql',
+  'packages/db/prisma/migrations/20260824004500_phase40_exact_output_graph/migration.sql',
   'packages/db/src/phase40.acceptance.registry.ts',
   'packages/db/src/phase40.tenant-matrix.integration.test.ts',
   'packages/db/src/phase40.role-state-matrix.integration.test.ts',
@@ -51,10 +52,10 @@ const migrations = readdirSync('packages/db/prisma/migrations').filter((name) =>
   /^\d+_/.test(name),
 );
 if (
-  migrations.length !== 12 ||
+  migrations.length !== 13 ||
   migrations.filter((name) => name.startsWith('20260824004300_')).length !== 1
 )
-  throw new Error(`expected twelve migrations, got ${migrations.length}`);
+  throw new Error(`expected thirteen migrations, got ${migrations.length}`);
 const registry = readFileSync('packages/db/src/phase40.acceptance.registry.ts', 'utf8');
 const expectedCounts = {
   T: 8,
@@ -137,6 +138,7 @@ for (const token of [
   '03300',
   '04300',
   '04400',
+  '04500',
   'pg_get_functiondef',
   'pg_get_triggerdef',
 ])
@@ -154,4 +156,4 @@ for (const token of ['AbortController', 'timeout', 'contextStillEligible(runId, 
   if (!generation.includes(token)) throw new Error(`generation safety missing ${token}`);
 console.log('PHASE40_CONTROL=STRUCTURAL_PASS');
 console.log('MATRIX_MANIFEST=173');
-console.log('MIGRATION_COUNT=12');
+console.log('MIGRATION_COUNT=13');

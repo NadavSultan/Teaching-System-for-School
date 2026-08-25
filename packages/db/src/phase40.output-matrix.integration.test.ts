@@ -2,11 +2,37 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { DeterministicFakeModelGateway, type ModelGateway } from '@teach/ai';
 import { phase40AcceptanceRegistry } from './phase40.acceptance.registry.js';
 import { createGenerationFixture } from './phase40.acceptance.fixtures.js';
-import { prisma, processGenerationRun } from './index.js';
+import {
+  getGenerationResult,
+  prisma,
+  processGenerationRun,
+  requestQuestionRegeneration,
+} from './index.js';
 
 describe('G — distinct gateway outcomes through processGenerationRun', () => {
   it.each(phase40AcceptanceRegistry.G)('%s persists the exact gateway outcome', async (outcome) => {
     const fixture = await createGenerationFixture();
+    let runId = fixture.generationRunId;
+    if (outcome === 'valid-regeneration') {
+      const base = await processGenerationRun(
+        fixture.generationRunId,
+        prisma,
+        new DeterministicFakeModelGateway(),
+      );
+      const result = await getGenerationResult(fixture.context, fixture.generationRunId);
+      const question = result?.revision?.sections[0]?.questions[0];
+      if (!base?.outputRevisionId || !question) throw new Error('missing regeneration base');
+      const regeneration = await requestQuestionRegeneration(fixture.context, {
+        version: '1.0.0',
+        assessmentId: fixture.assessmentId,
+        baseRevisionId: base.outputRevisionId,
+        targetQuestionId: question.id,
+        idempotencyKey: `gateway-regeneration-${fixture.generationRunId}`,
+        instruction: 'ניסוח חלופי',
+        query: 'שלום',
+      });
+      runId = regeneration.id;
+    }
     const first =
       outcome === 'rate-limit-retry'
         ? 'rate-limit'
@@ -21,10 +47,10 @@ describe('G — distinct gateway outcomes through processGenerationRun', () => {
                 : outcome === 'schema-violation'
                   ? 'schema-violation'
                   : 'valid-draft';
-    const outcomes: Record<string, any> = { [`${fixture.generationRunId}:1`]: first };
+    const outcomes: Record<string, any> = { [`${runId}:1`]: first };
     if (outcome === 'transient-exhausted')
       for (let attempt = 2; attempt <= 5; attempt += 1)
-        outcomes[`${fixture.generationRunId}:${attempt}`] = 'transient';
+        outcomes[`${runId}:${attempt}`] = 'transient';
     const fake = new DeterministicFakeModelGateway(outcomes);
     const gateway: ModelGateway =
       outcome === 'budget-overrun'
@@ -44,7 +70,7 @@ describe('G — distinct gateway outcomes through processGenerationRun', () => {
             },
           }
         : fake;
-    const result = await processGenerationRun(fixture.generationRunId, prisma, gateway);
+    const result = await processGenerationRun(runId, prisma, gateway);
     if (
       ['valid-draft', 'valid-regeneration', 'replay', 'rate-limit-retry', 'timeout'].includes(
         outcome,
@@ -63,9 +89,9 @@ describe('G — distinct gateway outcomes through processGenerationRun', () => {
       await prisma.generationUsage.count({ where: { generationRunId: fixture.generationRunId } }),
     ).toBeGreaterThanOrEqual(0);
     if (outcome === 'replay')
-      expect(
-        (await processGenerationRun(fixture.generationRunId, prisma, fake))?.outputRevisionId,
-      ).toBe(result?.outputRevisionId);
+      expect((await processGenerationRun(runId, prisma, fake))?.outputRevisionId).toBe(
+        result?.outputRevisionId,
+      );
   });
 });
 
@@ -74,6 +100,7 @@ describe('O — distinct adversarial provider outputs through strict processing'
     '%s rejects or accepts only its exact output shape',
     async (kind) => {
       const fixture = await createGenerationFixture();
+      const foreign = kind === 'foreign-citation' ? await createGenerationFixture() : null;
       const valid = new DeterministicFakeModelGateway();
       const gateway: ModelGateway = {
         execute: async (request) => {
@@ -89,8 +116,10 @@ describe('O — distinct adversarial provider outputs through strict processing'
           if (kind === 'difficulty-mismatch') output.sections[0].questions[0].difficulty = 'HIGH';
           if (kind === 'score-mismatch') output.sections[0].questions[0].scoreUnits = 1;
           if (kind === 'missing-citation') output.sections[0].questions[0].citations = [];
-          if (kind === 'unknown-citation' || kind === 'foreign-citation')
+          if (kind === 'unknown-citation')
             output.sections[0].questions[0].citations = ['00000000-0000-4000-8000-000000000099'];
+          if (kind === 'foreign-citation')
+            output.sections[0].questions[0].citations = [foreign!.knowledgeItemId];
           return { ...response, output };
         },
       };
