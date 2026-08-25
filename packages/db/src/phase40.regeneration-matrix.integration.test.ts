@@ -11,6 +11,8 @@ import {
 } from './index.js';
 
 describe('Q — regeneration graph isolation and provenance', () => {
+  const missingQuestionId = '00000000-0000-4000-8000-000000000099';
+  const missingRevisionId = '00000000-0000-4000-8000-000000000098';
   it.each(phase40AcceptanceRegistry.Q)(
     '%s asserts the persisted base/output graph contract',
     async (kind) => {
@@ -30,10 +32,20 @@ describe('Q — regeneration graph isolation and provenance', () => {
         kind === 'target-outside-base' ||
         kind === 'foreign-base'
       ) {
-        let targetId =
-          kind === 'missing-target' || kind === 'foreign-target'
-            ? '00000000-0000-4000-8000-000000000099'
-            : target!.id;
+        let targetId = target!.id;
+        if (kind === 'missing-target') targetId = missingQuestionId;
+        if (kind === 'foreign-target') {
+          const foreign = await createGenerationFixture();
+          const foreignBase = await processGenerationRun(
+            foreign.generationRunId,
+            prisma,
+            new DeterministicFakeModelGateway(),
+          );
+          const foreignResult = await getGenerationResult(foreign.context, foreign.generationRunId);
+          if (!foreignBase?.outputRevisionId || !foreignResult?.revision?.sections[0]?.questions[0])
+            throw new Error('foreign target fixture missing');
+          targetId = foreignResult.revision.sections[0].questions[0].id;
+        }
         if (kind === 'target-outside-base') {
           const sourceRun = await prisma.generationRun.findUniqueOrThrow({
             where: { id: fixture.generationRunId },
@@ -58,8 +70,7 @@ describe('Q — regeneration graph isolation and provenance', () => {
           requestQuestionRegeneration(fixture.context, {
             version: '1.0.0',
             assessmentId: fixture.assessmentId,
-            baseRevisionId:
-              kind === 'foreign-base' ? '00000000-0000-4000-8000-000000000099' : base!.revision!.id,
+            baseRevisionId: kind === 'foreign-base' ? missingRevisionId : base!.revision!.id,
             targetQuestionId: targetId,
             idempotencyKey: `q-${kind}-${fixture.generationRunId}`,
             instruction: 'ניסוח',

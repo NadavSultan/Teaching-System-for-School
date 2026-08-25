@@ -389,8 +389,8 @@ export async function selectGenerationContext(
       JOIN source_versions sv ON sv.id = ki.source_version_id
       JOIN knowledge_sources ks ON ks.id = sv.source_id
       JOIN LATERAL (SELECT to_status FROM source_lifecycle_events WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) lifecycle ON true
-      JOIN LATERAL (SELECT decision FROM pedagogical_reviews WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) review ON true
-      JOIN LATERAL (SELECT decision, valid_until FROM usage_permissions WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) permission ON true
+      JOIN LATERAL (SELECT decision FROM pedagogical_reviews WHERE source_version_id = sv.id ORDER BY created_at DESC, CASE decision WHEN 'REJECTED' THEN 1 ELSE 0 END DESC, id DESC LIMIT 1) review ON true
+      JOIN LATERAL (SELECT decision, valid_until FROM usage_permissions WHERE source_version_id = sv.id ORDER BY created_at DESC, CASE decision WHEN 'DENIED' THEN 1 ELSE 0 END DESC, id DESC LIMIT 1) permission ON true
       JOIN curriculum_versions cv ON cv.id = link.curriculum_version_id
      WHERE ki.status = 'ACTIVE' AND lifecycle.to_status = 'ACTIVE' AND review.decision = 'APPROVED'
        AND permission.decision = 'ALLOWED' AND (permission.valid_until IS NULL OR permission.valid_until > NOW())
@@ -492,8 +492,8 @@ async function contextStillEligible(
     JOIN source_versions sv ON sv.id = ki.source_version_id
     JOIN knowledge_sources ks ON ks.id = sv.source_id
     JOIN LATERAL (SELECT to_status FROM source_lifecycle_events WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) lifecycle ON true
-    JOIN LATERAL (SELECT decision FROM pedagogical_reviews WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) review ON true
-    JOIN LATERAL (SELECT decision, valid_until FROM usage_permissions WHERE source_version_id = sv.id ORDER BY created_at DESC, id DESC LIMIT 1) permission ON true
+    JOIN LATERAL (SELECT decision FROM pedagogical_reviews WHERE source_version_id = sv.id ORDER BY created_at DESC, CASE decision WHEN 'REJECTED' THEN 1 ELSE 0 END DESC, id DESC LIMIT 1) review ON true
+    JOIN LATERAL (SELECT decision, valid_until FROM usage_permissions WHERE source_version_id = sv.id ORDER BY created_at DESC, CASE decision WHEN 'DENIED' THEN 1 ELSE 0 END DESC, id DESC LIMIT 1) permission ON true
     WHERE ki.id = ANY(${items.map((item) => item.knowledgeItemId)}::uuid[])
       AND ki.status = 'ACTIVE' AND lifecycle.to_status = 'ACTIVE' AND review.decision = 'APPROVED'
       AND permission.decision = 'ALLOWED' AND (permission.valid_until IS NULL OR permission.valid_until > NOW())

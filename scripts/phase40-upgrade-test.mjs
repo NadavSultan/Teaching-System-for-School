@@ -36,15 +36,14 @@ const pg = new EmbeddedPostgres({
 });
 const databaseUrl = `postgresql://phase40:phase40_local_only@127.0.0.1:${port}/teaching_upgrade?schema=public`;
 const cleanDatabase = 'teaching_upgrade_clean';
-const prismaPackage = readdirSync(resolve('node_modules/.pnpm')).find((name) =>
-  name.startsWith('prisma@'),
+const virtualStores = [resolve('node_modules/.pnpm'), resolve('../v')];
+const prismaStore = virtualStores.find((store) =>
+  readdirSync(store).some((name) => name.startsWith('prisma@')),
 );
+const prismaPackage =
+  prismaStore && readdirSync(prismaStore).find((name) => name.startsWith('prisma@'));
 if (!prismaPackage) throw new Error('Prisma CLI package is unavailable');
-const prismaCli = resolve(
-  'node_modules/.pnpm',
-  prismaPackage,
-  'node_modules/prisma/build/index.js',
-);
+const prismaCli = resolve(prismaStore, prismaPackage, 'node_modules/prisma/build/index.js');
 const runDeployFor = (database, schema) => {
   const env = {
     ...process.env,
@@ -73,6 +72,7 @@ try {
       '20260824004300_phase40_acceptance_closure',
       '20260824004400_phase40_complete_output_graph',
       '20260824004500_phase40_exact_output_graph',
+      '20260824004600_phase40_master_gate_closure',
     ].includes(name),
   ))
     rmSync(join(prismaCopy, 'migrations', migration), { recursive: true, force: true });
@@ -213,17 +213,25 @@ try {
     join(prismaCopy, 'migrations', '20260824004400_phase40_complete_output_graph'),
     { recursive: true },
   );
+  console.log('UPGRADE_STAGE=04400_START');
+  runDeploy(join(prismaCopy, 'schema.prisma'));
+  console.log('UPGRADE_STAGE=04400_APPLIED');
   cpSync(
     join(sourcePrisma, 'migrations', '20260824004500_phase40_exact_output_graph'),
     join(prismaCopy, 'migrations', '20260824004500_phase40_exact_output_graph'),
     { recursive: true },
   );
-  console.log('UPGRADE_STAGE=04400_START');
-  runDeploy(join(prismaCopy, 'schema.prisma'));
-  console.log('UPGRADE_STAGE=04400_APPLIED');
   console.log('UPGRADE_STAGE=04500_START');
   runDeploy(join(prismaCopy, 'schema.prisma'));
   console.log('UPGRADE_STAGE=04500_APPLIED');
+  cpSync(
+    join(sourcePrisma, 'migrations', '20260824004600_phase40_master_gate_closure'),
+    join(prismaCopy, 'migrations', '20260824004600_phase40_master_gate_closure'),
+    { recursive: true },
+  );
+  console.log('UPGRADE_STAGE=04600_START');
+  runDeploy(join(prismaCopy, 'schema.prisma'));
+  console.log('UPGRADE_STAGE=04600_APPLIED');
   const verify = pg.getPgClient('teaching_upgrade');
   await verify.connect();
   const checkSql = [
@@ -240,15 +248,48 @@ try {
   ];
   const checks = [];
   for (const sql of checkSql) checks.push(await verify.query(sql));
-  await verify.end();
   if (checks.some((check) => check.rowCount !== 1)) {
     throw new Error('Phase 40 upgrade assertions failed');
   }
+  const probeCount = async (sql) => Number((await verify.query(sql)).rows[0].count);
+  const sourceLinksBefore = await probeCount(
+    `SELECT count(*) FROM question_source_links WHERE generation_run_id='99999999-9999-4999-8999-999999999999'`,
+  );
+  if (sourceLinksBefore !== 1) throw new Error('multi-citation probe seed is not present');
+  const contextCount = await probeCount(
+    `SELECT count(*) FROM generation_context_items WHERE generation_run_id='99999999-9999-4999-8999-999999999999'`,
+  );
+  if (contextCount < 1) throw new Error('multi-citation context probe is not present');
+  console.log('UPGRADE_PROBE_MULTI_CITATION=PASS');
+  const carriedCount = await probeCount(
+    `SELECT count(*) FROM question_source_links WHERE generation_run_id='99999999-9999-4999-8999-999999999999' AND lineage='CARRIED_FORWARD'`,
+  );
+  if (carriedCount !== 0) throw new Error('exact carried-set probe failed');
+  console.log('UPGRADE_PROBE_EXACT_CARRIED_SET=PASS');
+  const unrelatedCount = await probeCount(
+    `SELECT count(*) FROM assessment_questions q JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id='14141414-1414-4141-8141-141414141414'`,
+  );
+  if (unrelatedCount !== 1) throw new Error('unrelated graph probe failed');
+  console.log('UPGRADE_PROBE_UNRELATED_GRAPH=PASS');
+  const beforeRollback = await probeCount(`SELECT count(*) FROM question_source_links`);
+  await verify.query('BEGIN');
+  try {
+    await verify.query(
+      `INSERT INTO question_source_links (assessment_question_id,generation_run_id,knowledge_item_id,source_version_id,locator,text_hash,curriculum_version_id,curriculum_node_id,lineage) VALUES ('16161616-1616-4161-8161-161616161616','99999999-9999-4999-8999-999999999999','12121212-1212-4121-8121-121212121212','88888888-8888-4888-8888-888888888888','bad',repeat('1',64),'55555555-5555-4555-8555-555555555555','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','CARRIED_FORWARD')`,
+    );
+    throw new Error('atomic rollback mutation unexpectedly succeeded');
+  } catch {
+    await verify.query('ROLLBACK');
+  }
+  const afterRollback = await probeCount(`SELECT count(*) FROM question_source_links`);
+  if (afterRollback !== beforeRollback) throw new Error('atomic rollback probe failed');
+  console.log('UPGRADE_PROBE_ATOMIC_ROLLBACK=PASS');
+  await verify.end();
   const migrations = readdirSync('packages/db/prisma/migrations').filter((name) =>
     /^\d+_/.test(name),
   );
   if (
-    migrations.length !== 13 ||
+    migrations.length !== 14 ||
     !existsSync(
       'packages/db/prisma/migrations/20260824004100_phase40_review_remediation/migration.sql',
     ) ||
@@ -263,6 +304,9 @@ try {
     ) ||
     !existsSync(
       'packages/db/prisma/migrations/20260824004500_phase40_exact_output_graph/migration.sql',
+    ) ||
+    !existsSync(
+      'packages/db/prisma/migrations/20260824004600_phase40_master_gate_closure/migration.sql',
     )
   )
     throw new Error('final migration count mismatch');
@@ -310,6 +354,7 @@ try {
     throw new Error('clean schema comparison did not execute');
   console.log('PHASE30_TO_PHASE40_UPGRADE=PASS');
   console.log('UPGRADE_03300_TO_04000_TO_04100_TO_04200_TO_04300_TO_04400_TO_04500=PASS');
+  console.log('UPGRADE_03300_TO_04000_TO_04100_TO_04200_TO_04300_TO_04400_TO_04500_TO_04600=PASS');
   console.log('DATA_PRESERVATION_CONTEXT_LINEAGE_SOURCE_LINK_ASSERTIONS=PASS');
   console.log(
     `SECOND_CLEAN_DATABASE_COMPARISON=PASS fingerprint=${upgradedFingerprint.fingerprint} rows=${upgradedFingerprint.rows}`,
