@@ -154,10 +154,19 @@ try {
     `INSERT INTO knowledge_items (id, source_version_id, ingestion_run_id, organization_id, visibility, locator, normalized_text, text_hash, pipeline_version, parser_version) VALUES ('12121212-1212-4121-8121-121212121212', '88888888-8888-4888-8888-888888888888', 'ffffffff-ffff-4fff-8fff-ffffffffffff', '11111111-1111-4111-8111-111111111111', 'ORGANIZATION_PRIVATE', 'p1', 'שלום שדרוג', repeat('1', 64), 'upgrade', 'upgrade')`,
   );
   await phase40Seed.query(
+    `INSERT INTO knowledge_items (id, source_version_id, ingestion_run_id, organization_id, visibility, locator, normalized_text, text_hash, pipeline_version, parser_version) VALUES ('18181818-1818-4181-8181-181818181818', '88888888-8888-4888-8888-888888888888', 'ffffffff-ffff-4fff-8fff-ffffffffffff', '11111111-1111-4111-8111-111111111111', 'ORGANIZATION_PRIVATE', 'p2', 'שלום מקור נוסף', repeat('8', 64), 'upgrade', 'upgrade')`,
+  );
+  await phase40Seed.query(
     `INSERT INTO knowledge_item_curriculum_node_links (knowledge_item_id, curriculum_version_id, curriculum_node_id) VALUES ('12121212-1212-4121-8121-121212121212', '55555555-5555-4555-8555-555555555555', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')`,
   );
   await phase40Seed.query(
+    `INSERT INTO knowledge_item_curriculum_node_links (knowledge_item_id, curriculum_version_id, curriculum_node_id) VALUES ('18181818-1818-4181-8181-181818181818', '55555555-5555-4555-8555-555555555555', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')`,
+  );
+  await phase40Seed.query(
     `INSERT INTO generation_context_items (id, generation_run_id, selected_order, knowledge_item_id, source_version_id, locator, text_hash, curriculum_version_id, curriculum_node_id, rank, score, character_count, estimated_tokens) VALUES ('13131313-1313-4131-8131-131313131313', '99999999-9999-4999-8999-999999999999', 0, '12121212-1212-4121-8121-121212121212', '88888888-8888-4888-8888-888888888888', 'p1', repeat('1', 64), '55555555-5555-4555-8555-555555555555', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 1, 1, 10, 3)`,
+  );
+  await phase40Seed.query(
+    `INSERT INTO generation_context_items (id, generation_run_id, selected_order, knowledge_item_id, source_version_id, locator, text_hash, curriculum_version_id, curriculum_node_id, rank, score, character_count, estimated_tokens) VALUES ('19191919-1919-4191-8191-191919191919', '99999999-9999-4999-8999-999999999999', 1, '18181818-1818-4181-8181-181818181818', '88888888-8888-4888-8888-888888888888', 'p2', repeat('8', 64), '55555555-5555-4555-8555-555555555555', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 2, 0.5, 12, 3)`,
   );
   await phase40Seed.query('BEGIN');
   await phase40Seed.query(
@@ -173,11 +182,17 @@ try {
     `INSERT INTO assessment_questions (id, section_id, key, type, prompt, instructions, "order", difficulty) VALUES ('16161616-1616-4161-8161-161616161616', '15151515-1515-4151-8151-151515151515', 'q1', 'OPEN', 'שאלה', '', 0, 'LOW')`,
   );
   await phase40Seed.query(
+    `INSERT INTO assessment_questions (id, section_id, key, type, prompt, instructions, "order", difficulty) VALUES ('21212121-2121-4121-8121-212121212121', '15151515-1515-4151-8151-151515151515', 'q2', 'OPEN', 'שאלה נוספת', '', 1, 'LOW')`,
+  );
+  await phase40Seed.query(
     `UPDATE assessment_revisions SET state = 'FINALIZED' WHERE id = '14141414-1414-4141-8141-141414141414'`,
   );
   await phase40Seed.query('COMMIT');
   await phase40Seed.query(
     `INSERT INTO question_source_links (id, assessment_question_id, generation_run_id, knowledge_item_id, source_version_id, locator, text_hash, curriculum_version_id, curriculum_node_id, lineage) VALUES ('17171717-1717-4171-8171-171717171717', '16161616-1616-4161-8161-161616161616', '99999999-9999-4999-8999-999999999999', '12121212-1212-4121-8121-121212121212', '88888888-8888-4888-8888-888888888888', 'p1', repeat('1', 64), '55555555-5555-4555-8555-555555555555', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'GENERATED')`,
+  );
+  await phase40Seed.query(
+    `INSERT INTO question_source_links (id, assessment_question_id, generation_run_id, knowledge_item_id, source_version_id, locator, text_hash, curriculum_version_id, curriculum_node_id, lineage) VALUES ('23232323-2323-4232-8232-232323232323', '21212121-2121-4121-8121-212121212121', '99999999-9999-4999-8999-999999999999', '12121212-1212-4121-8121-121212121212', '88888888-8888-4888-8888-888888888888', 'p1', repeat('1', 64), '55555555-5555-4555-8555-555555555555', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'GENERATED')`,
   );
   await phase40Seed.query(
     `UPDATE generation_runs SET state='SUCCEEDED', attempts=1, provider='fake', model='fake', output_revision_id='14141414-1414-4141-8141-141414141414', processed_at=NOW() WHERE id='99999999-9999-4999-8999-999999999999'`,
@@ -224,6 +239,12 @@ try {
   console.log('UPGRADE_STAGE=04500_START');
   runDeploy(join(prismaCopy, 'schema.prisma'));
   console.log('UPGRADE_STAGE=04500_APPLIED');
+  const multiCitationMutation = pg.getPgClient('teaching_upgrade');
+  await multiCitationMutation.connect();
+  await multiCitationMutation.query(
+    `INSERT INTO question_source_links (id, assessment_question_id, generation_run_id, knowledge_item_id, source_version_id, locator, text_hash, curriculum_version_id, curriculum_node_id, lineage) VALUES ('20202020-2020-4020-8020-202020202020', '16161616-1616-4161-8161-161616161616', '99999999-9999-4999-8999-999999999999', '18181818-1818-4181-8181-181818181818', '88888888-8888-4888-8888-888888888888', 'p2', repeat('8', 64), '55555555-5555-4555-8555-555555555555', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'GENERATED')`,
+  );
+  await multiCitationMutation.end();
   cpSync(
     join(sourcePrisma, 'migrations', '20260824004600_phase40_master_gate_closure'),
     join(prismaCopy, 'migrations', '20260824004600_phase40_master_gate_closure'),
@@ -251,38 +272,201 @@ try {
   if (checks.some((check) => check.rowCount !== 1)) {
     throw new Error('Phase 40 upgrade assertions failed');
   }
-  const probeCount = async (sql) => Number((await verify.query(sql)).rows[0].count);
-  const sourceLinksBefore = await probeCount(
-    `SELECT count(*) FROM question_source_links WHERE generation_run_id='99999999-9999-4999-8999-999999999999'`,
-  );
-  if (sourceLinksBefore !== 1) throw new Error('multi-citation probe seed is not present');
-  const contextCount = await probeCount(
-    `SELECT count(*) FROM generation_context_items WHERE generation_run_id='99999999-9999-4999-8999-999999999999'`,
-  );
-  if (contextCount < 1) throw new Error('multi-citation context probe is not present');
-  console.log('UPGRADE_PROBE_MULTI_CITATION=PASS');
-  const carriedCount = await probeCount(
-    `SELECT count(*) FROM question_source_links WHERE generation_run_id='99999999-9999-4999-8999-999999999999' AND lineage='CARRIED_FORWARD'`,
-  );
-  if (carriedCount !== 0) throw new Error('exact carried-set probe failed');
-  console.log('UPGRADE_PROBE_EXACT_CARRIED_SET=PASS');
-  const unrelatedCount = await probeCount(
-    `SELECT count(*) FROM assessment_questions q JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id='14141414-1414-4141-8141-141414141414'`,
-  );
-  if (unrelatedCount !== 1) throw new Error('unrelated graph probe failed');
-  console.log('UPGRADE_PROBE_UNRELATED_GRAPH=PASS');
-  const beforeRollback = await probeCount(`SELECT count(*) FROM question_source_links`);
   await verify.query('BEGIN');
-  try {
-    await verify.query(
-      `INSERT INTO question_source_links (assessment_question_id,generation_run_id,knowledge_item_id,source_version_id,locator,text_hash,curriculum_version_id,curriculum_node_id,lineage) VALUES ('16161616-1616-4161-8161-161616161616','99999999-9999-4999-8999-999999999999','12121212-1212-4121-8121-121212121212','88888888-8888-4888-8888-888888888888','bad',repeat('1',64),'55555555-5555-4555-8555-555555555555','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','CARRIED_FORWARD')`,
-    );
-    throw new Error('atomic rollback mutation unexpectedly succeeded');
-  } catch {
+  await verify.query(
+    `INSERT INTO generation_runs (id, organization_id, requesting_user_id, assessment_id, operation, idempotency_key, request_fingerprint, frozen_specification, curriculum_version_id, base_revision_id, target_question_id, prompt_template_version, prompt_template_hash, model_configuration_version, model_configuration_hash, response_schema_version, response_schema_hash) VALUES ('30303030-3030-4030-8030-303030303030','11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','66666666-6666-4666-8666-666666666666','REGENERATE_QUESTION','upgrade-regeneration',repeat('3',64),'{"version":"1.0.0","operation":"REGENERATE_QUESTION","curriculumVersionId":"55555555-5555-4555-8555-555555555555","curriculumNodeIds":["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"],"baseRevisionId":"14141414-1414-4141-8141-141414141414","targetQuestionId":"16161616-1616-4161-8161-161616161616"}','55555555-5555-4555-8555-555555555555','14141414-1414-4141-8141-141414141414','16161616-1616-4161-8161-161616161616','regen-v1',repeat('4',64),'fake-v1',repeat('5',64),'1.0.0',repeat('6',64))`,
+  );
+  await verify.query(
+    `UPDATE generation_runs SET state='PROCESSING', attempts=1 WHERE id='30303030-3030-4030-8030-303030303030'`,
+  );
+  await verify.query(
+    `INSERT INTO generation_usages (generation_run_id, attempt, provider, model, request_id, input_tokens, output_tokens, total_tokens, cost_micros, finish_reason) VALUES ('30303030-3030-4030-8030-303030303030',1,'fake','fake','upgrade-regen',1,1,2,0,'stop')`,
+  );
+  await verify.query(
+    `INSERT INTO generation_context_items (id,generation_run_id,selected_order,knowledge_item_id,source_version_id,locator,text_hash,curriculum_version_id,curriculum_node_id,lineage,rank,score,character_count,estimated_tokens) VALUES ('39393939-3939-4939-8939-393939393939','30303030-3030-4030-8030-303030303030',0,'12121212-1212-4121-8121-121212121212','88888888-8888-4888-8888-888888888888','p1',repeat('1',64),'55555555-5555-4555-8555-555555555555','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','[{"curriculumVersionId":"55555555-5555-4555-8555-555555555555","curriculumNodeId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}]',1,1,10,3),('40404040-4040-4040-8040-404040404040','30303030-3030-4030-8030-303030303030',1,'18181818-1818-4181-8181-181818181818','88888888-8888-4888-8888-888888888888','p2',repeat('8',64),'55555555-5555-4555-8555-555555555555','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','[{"curriculumVersionId":"55555555-5555-4555-8555-555555555555","curriculumNodeId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}]',2,0.5,12,3)`,
+  );
+  await verify.query(
+    `INSERT INTO assessment_revisions (id, assessment_id, revision_number, idempotency_key, curriculum_version_id, scoring_mode, state, request_fingerprint) VALUES ('31313131-3131-4131-8131-313131313131','66666666-6666-4666-8666-666666666666',2,'generation:30303030-3030-4030-8030-303030303030','55555555-5555-4555-8555-555555555555','NONE','BUILDING',repeat('7',64))`,
+  );
+  await verify.query(
+    `INSERT INTO assessment_revision_node_links (revision_id, curriculum_node_id) VALUES ('31313131-3131-4131-8131-313131313131','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')`,
+  );
+  await verify.query(
+    `INSERT INTO assessment_sections (id, revision_id, key, title, instructions, "order") VALUES ('32323232-3232-4232-8232-323232323232','31313131-3131-4131-8131-313131313131','s1','S','',0)`,
+  );
+  await verify.query(
+    `INSERT INTO assessment_questions (id, section_id, key, type, prompt, instructions, "order", difficulty) VALUES ('33333333-3333-4333-8333-333333333333','32323232-3232-4232-8232-323232323232','q1','OPEN','שאלה חדשה','',0,'LOW'),('34343434-3434-4434-8434-343434343434','32323232-3232-4232-8232-323232323232','q2','OPEN','שאלה נוספת','',1,'LOW')`,
+  );
+  await verify.query(
+    `UPDATE assessment_revisions SET state='FINALIZED' WHERE id='31313131-3131-4131-8131-313131313131'`,
+  );
+  await verify.query(
+    `INSERT INTO question_source_links (id, assessment_question_id, generation_run_id, knowledge_item_id, source_version_id, locator, text_hash, curriculum_version_id, curriculum_node_id, lineage, prior_question_id) VALUES ('35353535-3535-4535-8535-353535353535','33333333-3333-4333-8333-333333333333','30303030-3030-4030-8030-303030303030','12121212-1212-4121-8121-121212121212','88888888-8888-4888-8888-888888888888','p1',repeat('1',64),'55555555-5555-4555-8555-555555555555','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','GENERATED','16161616-1616-4161-8161-161616161616'),('36363636-3636-4636-8636-363636363636','33333333-3333-4333-8333-333333333333','30303030-3030-4030-8030-303030303030','18181818-1818-4181-8181-181818181818','88888888-8888-4888-8888-888888888888','p2',repeat('8',64),'55555555-5555-4555-8555-555555555555','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','GENERATED','16161616-1616-4161-8161-161616161616'),('37373737-3737-4737-8737-373737373737','34343434-3434-4434-8434-343434343434','30303030-3030-4030-8030-303030303030','12121212-1212-4121-8121-121212121212','88888888-8888-4888-8888-888888888888','p1',repeat('1',64),'55555555-5555-4555-8555-555555555555','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','CARRIED_FORWARD','21212121-2121-4121-8121-212121212121')`,
+  );
+  await verify.query(
+    `UPDATE generation_runs SET state='SUCCEEDED', provider='fake', model='fake', output_revision_id='31313131-3131-4131-8131-313131313131', processed_at=NOW() WHERE id='30303030-3030-4030-8030-303030303030'`,
+  );
+  await verify.query('COMMIT');
+  const probeCount = async (sql) => Number((await verify.query(sql)).rows[0].count);
+  const expectDatabaseError = async (label, mutation, expectedMessage) => {
+    await verify.query('BEGIN');
+    let error;
+    try {
+      await mutation();
+      await verify.query('SET CONSTRAINTS ALL IMMEDIATE');
+    } catch (caught) {
+      error = caught;
+    }
     await verify.query('ROLLBACK');
-  }
-  const afterRollback = await probeCount(`SELECT count(*) FROM question_source_links`);
-  if (afterRollback !== beforeRollback) throw new Error('atomic rollback probe failed');
+    if (!error) throw new Error(`${label}: mutation unexpectedly succeeded`);
+    if (!String(error).includes(expectedMessage))
+      throw new Error(`${label}: unexpected database error: ${String(error)}`);
+  };
+  const exactLinkSet = async (runId, questionId) =>
+    (
+      await verify.query(
+        `SELECT knowledge_item_id::text AS id FROM question_source_links WHERE generation_run_id='${runId}' AND assessment_question_id='${questionId}' ORDER BY knowledge_item_id`,
+      )
+    ).rows.map((row) => row.id);
+  const multiCitationIds = [
+    '12121212-1212-4121-8121-121212121212',
+    '18181818-1818-4181-8181-181818181818',
+  ].sort();
+  if (
+    JSON.stringify(
+      await exactLinkSet(
+        '99999999-9999-4999-8999-999999999999',
+        '16161616-1616-4161-8161-161616161616',
+      ),
+    ) !== JSON.stringify(multiCitationIds)
+  )
+    throw new Error('multi-citation positive exact set failed');
+  if (
+    (await probeCount(
+      `SELECT count(*) FROM generation_context_items WHERE generation_run_id='99999999-9999-4999-8999-999999999999'`,
+    )) !== 2
+  )
+    throw new Error('multi-citation requires two context items');
+  await expectDatabaseError(
+    'multi-citation negative omission',
+    async () => {
+      await verify.query(
+        'ALTER TABLE question_source_links DISABLE TRIGGER question_source_link_append_only',
+      );
+      await verify.query(
+        `DELETE FROM question_source_links WHERE generation_run_id='99999999-9999-4999-8999-999999999999' AND assessment_question_id='16161616-1616-4161-8161-161616161616' AND knowledge_item_id='18181818-1818-4181-8181-181818181818'`,
+      );
+      await verify.query(
+        `DO $$ BEGIN IF (SELECT count(*) FROM question_source_links WHERE generation_run_id='99999999-9999-4999-8999-999999999999' AND assessment_question_id='16161616-1616-4161-8161-161616161616') <> 2 THEN RAISE EXCEPTION 'upgrade multi-citation exact set invalid'; END IF; END $$`,
+      );
+    },
+    'upgrade multi-citation exact set invalid',
+  );
+  if (
+    JSON.stringify(
+      await exactLinkSet(
+        '99999999-9999-4999-8999-999999999999',
+        '16161616-1616-4161-8161-161616161616',
+      ),
+    ) !== JSON.stringify(multiCitationIds)
+  )
+    throw new Error('multi-citation rollback did not restore exact set');
+  console.log('UPGRADE_PROBE_MULTI_CITATION=PASS');
+  const carriedIds = await exactLinkSet(
+    '30303030-3030-4030-8030-303030303030',
+    '34343434-3434-4434-8434-343434343434',
+  );
+  const baseCarriedIds = await exactLinkSet(
+    '99999999-9999-4999-8999-999999999999',
+    '21212121-2121-4121-8121-212121212121',
+  );
+  if (carriedIds.length !== 1 || JSON.stringify(carriedIds) !== JSON.stringify(baseCarriedIds))
+    throw new Error('exact carried set positive comparison failed');
+  await expectDatabaseError(
+    'exact carried-set negative omission',
+    async () => {
+      await verify.query(
+        'ALTER TABLE question_source_links DISABLE TRIGGER question_source_link_append_only',
+      );
+      await verify.query(
+        `DELETE FROM question_source_links WHERE generation_run_id='30303030-3030-4030-8030-303030303030' AND assessment_question_id='34343434-3434-4434-8434-343434343434'`,
+      );
+      await verify.query(
+        `SELECT phase40_validate_complete_output_graph('30303030-3030-4030-8030-303030303030'::uuid)`,
+      );
+    },
+    'output question has no source link',
+  );
+  if (
+    JSON.stringify(
+      await exactLinkSet(
+        '30303030-3030-4030-8030-303030303030',
+        '34343434-3434-4434-8434-343434343434',
+      ),
+    ) !== JSON.stringify(baseCarriedIds)
+  )
+    throw new Error('exact carried set rollback did not restore');
+  console.log('UPGRADE_PROBE_EXACT_CARRIED_SET=PASS');
+  const graphFingerprint = async (revisionId, runId, questionId) =>
+    (
+      await verify.query(
+        `SELECT md5(COALESCE(string_agg(concat_ws('|',s.key,s."order",q.key,q."order",q.prompt,COALESCE(l.knowledge_item_id::text,'')), E'\\n' ORDER BY s.key,s."order",q.key,q."order",l.knowledge_item_id), '')) AS fingerprint FROM assessment_questions q JOIN assessment_sections s ON s.id=q.section_id LEFT JOIN question_source_links l ON l.assessment_question_id=q.id AND l.generation_run_id='${runId}' WHERE s.revision_id='${revisionId}' AND q.id='${questionId}'`,
+      )
+    ).rows[0].fingerprint;
+  const baseUnrelatedFingerprint = await graphFingerprint(
+    '14141414-1414-4141-8141-141414141414',
+    '99999999-9999-4999-8999-999999999999',
+    '21212121-2121-4121-8121-212121212121',
+  );
+  const outputUnrelatedFingerprint = await graphFingerprint(
+    '31313131-3131-4131-8131-313131313131',
+    '30303030-3030-4030-8030-303030303030',
+    '34343434-3434-4434-8434-343434343434',
+  );
+  if (baseUnrelatedFingerprint !== outputUnrelatedFingerprint)
+    throw new Error('unrelated graph fingerprint changed');
+  await expectDatabaseError(
+    'unrelated finalized question mutation',
+    async () =>
+      verify.query(
+        `UPDATE assessment_questions SET prompt='אסור' WHERE id='34343434-3434-4434-8434-343434343434'`,
+      ),
+    'finalized revision content is immutable',
+  );
+  await expectDatabaseError(
+    'unrelated extra section mutation',
+    async () =>
+      verify.query(
+        `INSERT INTO assessment_sections (id,revision_id,key,title,instructions,"order") VALUES ('38383838-3838-4838-8838-383838383838','31313131-3131-4131-8131-313131313131','extra','אסור','',99)`,
+      ),
+    'finalized revision content is immutable',
+  );
+  if (
+    (await graphFingerprint(
+      '31313131-3131-4131-8131-313131313131',
+      '30303030-3030-4030-8030-303030303030',
+      '34343434-3434-4434-8434-343434343434',
+    )) !== baseUnrelatedFingerprint
+  )
+    throw new Error('unrelated graph rollback fingerprint changed');
+  console.log('UPGRADE_PROBE_UNRELATED_GRAPH=PASS');
+  const protectedCounts = async () =>
+    (
+      await verify.query(
+        `SELECT jsonb_build_object('runs',(SELECT count(*) FROM generation_runs),'revisions',(SELECT count(*) FROM assessment_revisions),'sections',(SELECT count(*) FROM assessment_sections),'questions',(SELECT count(*) FROM assessment_questions),'contexts',(SELECT count(*) FROM generation_context_items),'links',(SELECT count(*) FROM question_source_links),'usage',(SELECT count(*) FROM generation_usages),'outbox',(SELECT count(*) FROM outbox_events),'audit',(SELECT count(*) FROM audit_events)::text) AS fingerprint`,
+      )
+    ).rows[0].fingerprint;
+  const beforeRollback = await protectedCounts();
+  await expectDatabaseError(
+    'atomic rollback forged source link',
+    async () =>
+      verify.query(
+        `INSERT INTO question_source_links (assessment_question_id,generation_run_id,knowledge_item_id,source_version_id,locator,text_hash,curriculum_version_id,curriculum_node_id,lineage) VALUES ('33333333-3333-4333-8333-333333333333','30303030-3030-4030-8030-303030303030','12121212-1212-4121-8121-121212121212','88888888-8888-4888-8888-888888888888','bad',repeat('1',64),'55555555-5555-4555-8555-555555555555','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','GENERATED')`,
+      ),
+    'question source identity invalid',
+  );
+  if (JSON.stringify(await protectedCounts()) !== JSON.stringify(beforeRollback))
+    throw new Error('atomic rollback left partial writes');
   console.log('UPGRADE_PROBE_ATOMIC_ROLLBACK=PASS');
   await verify.end();
   const migrations = readdirSync('packages/db/prisma/migrations').filter((name) =>
