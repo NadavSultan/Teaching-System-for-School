@@ -63,4 +63,27 @@ describe('Phase 40 evidence integrity master closure', () => {
       );
     }
   });
+
+  it('MG-24 rejects combined or masked D arrangements', () => {
+    const source = withoutComments(read(databaseFile));
+    expect(source).not.toMatch(/kind === 'run-identity'\s*\|\|\s*kind === 'forged-owner'/);
+    expect(source).not.toMatch(
+      /kind === 'forged-question-run'\s*\|\|\s*kind === 'forged-source-link'/,
+    );
+    expect(source).toContain("'generation run identity is immutable'");
+    expect(source).toContain("'success shape invalid'");
+    expect(source).toContain("'output revision identity invalid'");
+    expect(source).toContain("'question source assessment identity invalid'");
+    expect(source).toContain("'question source identity invalid'");
+    const duplicateIdempotencyStart = source.indexOf("kind === 'duplicate-idempotency'");
+    const terminalReopenStart = source.indexOf(
+      "kind === 'terminal-reopen'",
+      duplicateIdempotencyStart,
+    );
+    expect(duplicateIdempotencyStart).toBeGreaterThanOrEqual(0);
+    expect(terminalReopenStart).toBeGreaterThan(duplicateIdempotencyStart);
+    const duplicateIdempotency = source.slice(duplicateIdempotencyStart, terminalReopenStart);
+    expect(duplicateIdempotency).toContain('gen_random_uuid()');
+    expect(duplicateIdempotency).toContain('idempotency_key');
+  });
 });

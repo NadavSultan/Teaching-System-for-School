@@ -35,7 +35,7 @@ const protectedDigests = {
   'tests/phase40-exact-matrix-master-control.test.ts':
     '9004668f504c2fdcebe3cbd8d4642d0a3f4467227828dfbe6225406b674c2259',
   'tests/phase40-evidence-integrity-master-control.test.ts':
-    '24eb350adb90b9f3779c82cec799061f0a1bb388fe30e855bc381c6a2ce6604d',
+    '18182f5fea210a038557a72f38000511671837a5bbefd8d38dcef2f7636e776c',
   'scripts/verify-phase40-control.mjs':
     '12a9b40e0173d1062b3ba5794336235e14c7bd3d8a0b40fdb51da60760423715',
   'docs/phases/40-master-gate-baseline.md':
@@ -57,11 +57,11 @@ const protectedDigests = {
   'docs/phases/40-exact-matrix-closure-baseline.md':
     '9c424fc5916d008996b52cfdbe33ffd826cf87d6bd31a4453595cc6f1a453830',
   'docs/phases/40-evidence-integrity-control-pack.md':
-    'c97ab356ef5e2dcfe140f9e2f4cec2646692e6fb78ea96601a3c743c5227b08e',
+    '2d2c619286da35518f988e62ad43a04453ab7b945a97a9d67bfa66a5c0faf590',
   'docs/phases/40-evidence-integrity-executor-handoff.md':
-    '8b3be23053a4209836f6cabba73e0e86cf08b05db62ed567fe6ddd2db32e70b5',
+    '99ecbdcbb2a730732b061dea96a90153639cd1235c3ac2a4e7ee740e5b77baa4',
   'docs/phases/40-evidence-integrity-baseline.md':
-    '6d0b98c0935e6690b1af647da85527f5a054bb8f85fdb45a3848522d5692d057',
+    '1d6ac447c6577d1268cfd58eec1dedb5792909353f4101dbbc3e4f9672dff64b',
 };
 
 const frozenPhase40Migrations = {
@@ -131,7 +131,7 @@ const protectedSources = protectedFiles
   .filter((file) => file.endsWith('.test.ts'))
   .map((file) => readFileSync(file, 'utf8'))
   .join('\n');
-for (let index = 1; index <= 23; index += 1) {
+for (let index = 1; index <= 24; index += 1) {
   const id = `MG-${String(index).padStart(2, '0')}`;
   const occurrences = protectedSources.match(new RegExp(id, 'g'))?.length ?? 0;
   if (occurrences !== 1) {
@@ -149,6 +149,6 @@ execFileSync(process.execPath, ['scripts/verify-phase40-control.mjs'], {
 });
 
 console.log('PHASE40_MASTER_GATE=STRUCTURAL_PASS');
-console.log('PROTECTED_CASES=23');
+console.log('PROTECTED_CASES=24');
 console.log(`STARTING_COMMIT=${startingCommit}`);
 console.log(`MIGRATION_COUNT=${migrations.length}`);
