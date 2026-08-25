@@ -87,11 +87,12 @@ describe('Q — regeneration graph isolation and provenance', () => {
         ).toBe(before.revisions);
         return;
       }
-      if (
-        kind === 'missing-target' ||
-        kind === 'foreign-target' ||
-        kind === 'target-outside-base'
-      ) {
+      const isTargetBoundaryCase = new Set([
+        'missing-target',
+        'foreign-target',
+        'target-outside-base',
+      ]).has(kind);
+      if (isTargetBoundaryCase) {
         let targetId = target!.id;
         if (kind === 'missing-target') targetId = missingQuestionId;
         if (kind === 'foreign-target') {
@@ -239,8 +240,8 @@ describe('Q — regeneration graph isolation and provenance', () => {
         where: { generationRunId: regeneration.id },
       });
       expect(
-        links.some((link) => link.lineage === 'GENERATED' && link.priorQuestionId === target!.id),
-      ).toBe(true);
+        links.filter((link) => link.lineage === 'GENERATED' && link.priorQuestionId === target!.id),
+      ).toHaveLength(1);
       if (kind === 'unrelated-structure-equal' || kind === 'carried-forward-links') {
         expect(regenerated?.revision?.sections.length).toBe(base?.revision?.sections.length);
         expect(regenerated?.revision?.sections[1]?.questions[0]?.key).toBe(
@@ -248,7 +249,7 @@ describe('Q — regeneration graph isolation and provenance', () => {
         );
       }
       if (kind === 'carried-forward-links')
-        expect(links.some((link) => link.lineage === 'CARRIED_FORWARD')).toBe(true);
+        expect(links.filter((link) => link.lineage === 'CARRIED_FORWARD')).not.toHaveLength(0);
       if (kind === 'idempotent-retry') expect(retry.id).toBe(regeneration.id);
     },
   );

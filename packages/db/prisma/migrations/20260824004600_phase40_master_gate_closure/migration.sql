@@ -21,7 +21,49 @@ CREATE INDEX generation_expected_question_citations_run_idx
   ON generation_expected_question_citations (generation_run_id, assessment_question_id);
 
 CREATE OR REPLACE FUNCTION phase40_expected_citation_append_only() RETURNS trigger AS $$
+DECLARE run_row RECORD; question_row RECORD; context_ok BOOLEAN;
 BEGIN
+  IF TG_OP = 'INSERT' THEN
+    SELECT * INTO run_row FROM generation_runs WHERE id = NEW.generation_run_id FOR SHARE;
+    IF run_row.id IS NULL OR run_row.state <> 'PROCESSING' THEN
+      RAISE EXCEPTION 'generation expected citation set is closed';
+    END IF;
+    SELECT q.id, ar.id AS revision_id, ar.assessment_id, ar.idempotency_key
+      INTO question_row
+      FROM assessment_questions q
+      JOIN assessment_sections s ON s.id = q.section_id
+      JOIN assessment_revisions ar ON ar.id = s.revision_id
+      WHERE q.id = NEW.assessment_question_id;
+    IF question_row.id IS NULL
+       OR question_row.assessment_id <> run_row.assessment_id
+       OR question_row.idempotency_key <> 'generation:' || run_row.id
+       OR question_row.revision_id IS NULL THEN
+      RAISE EXCEPTION 'generation expected citation output identity is invalid';
+    END IF;
+    SELECT EXISTS (
+      SELECT 1 FROM generation_context_items c
+      WHERE c.generation_run_id = NEW.generation_run_id
+        AND c.knowledge_item_id = NEW.knowledge_item_id
+        AND c.source_version_id = NEW.source_version_id
+        AND c.locator = NEW.locator
+        AND c.text_hash = NEW.text_hash
+        AND c.curriculum_version_id = NEW.curriculum_version_id
+        AND c.curriculum_node_id = NEW.curriculum_node_id
+    ) INTO context_ok;
+    IF NOT context_ok THEN
+      RAISE EXCEPTION 'generation expected citation context identity is invalid';
+    END IF;
+    IF run_row.operation = 'DRAFT' AND (NEW.lineage <> 'GENERATED' OR NEW.prior_question_id IS NOT NULL) THEN
+      RAISE EXCEPTION 'generation expected citation lineage is invalid';
+    END IF;
+    IF run_row.operation = 'REGENERATE_QUESTION' AND (
+      (NEW.lineage = 'GENERATED' AND NEW.prior_question_id IS DISTINCT FROM run_row.target_question_id)
+      OR (NEW.lineage = 'CARRIED_FORWARD' AND NEW.prior_question_id IS NULL)
+    ) THEN
+      RAISE EXCEPTION 'generation expected citation lineage is invalid';
+    END IF;
+    RETURN NEW;
+  END IF;
   IF TG_OP <> 'INSERT' THEN
     RAISE EXCEPTION 'generation expected citation is append-only';
   END IF;
@@ -30,8 +72,11 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER generation_expected_question_citations_append_only
-  BEFORE UPDATE OR DELETE ON generation_expected_question_citations
+  BEFORE INSERT OR UPDATE OR DELETE ON generation_expected_question_citations
   FOR EACH ROW EXECUTE FUNCTION phase40_expected_citation_append_only();
+
+ALTER TABLE generation_expected_question_citations DISABLE TRIGGER generation_expected_question_citations_append_only;
+SET LOCAL session_replication_role = replica;
 
 INSERT INTO generation_expected_question_citations (
   generation_run_id, assessment_question_id, knowledge_item_id, source_version_id,
@@ -43,6 +88,9 @@ SELECT l.generation_run_id, l.assessment_question_id, l.knowledge_item_id, l.sou
 FROM question_source_links l
 JOIN generation_runs r ON r.id = l.generation_run_id
 WHERE r.state = 'SUCCEEDED';
+
+ALTER TABLE generation_expected_question_citations ENABLE TRIGGER generation_expected_question_citations_append_only;
+SET LOCAL session_replication_role = origin;
 
 CREATE OR REPLACE FUNCTION phase40_validate_complete_output_graph(run_id UUID) RETURNS void AS $$
 DECLARE r RECORD; output_question_count INTEGER; link_count INTEGER; base_question_count INTEGER;

@@ -78,12 +78,9 @@ describe('G — distinct gateway outcomes through processGenerationRun', () => {
     )
       expect(result?.state).toBe('SUCCEEDED');
     else expect(result?.state).toBe('FAILED');
-    if (
-      outcome === 'rate-limit-retry' ||
-      outcome === 'transient-exhausted' ||
-      outcome === 'timeout'
-    )
-      expect(result?.attempts).toBeGreaterThan(1);
+    if (outcome === 'rate-limit-retry') expect(result?.attempts).toBe(2);
+    if (outcome === 'transient-exhausted') expect(result?.attempts).toBe(3);
+    if (outcome === 'timeout') expect(result?.attempts).toBe(2);
     if (outcome === 'budget-overrun') expect(result?.failureCode).toBe('BUDGET_EXCEEDED');
     const usageCount = await prisma.generationUsage.count({ where: { generationRunId: runId } });
     const usageExpected = [

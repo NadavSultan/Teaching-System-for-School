@@ -182,10 +182,16 @@ try {
     `INSERT INTO assessment_sections (id, revision_id, key, title, instructions, "order") VALUES ('25252525-2525-4525-8525-252525252525', '14141414-1414-4141-8141-141414141414', 'empty', 'Empty', '', 1)`,
   );
   await phase40Seed.query(
+    `INSERT INTO assessment_sections (id, revision_id, key, title, instructions, "order") VALUES ('51515151-5151-4151-8151-515151515151', '14141414-1414-4141-8141-141414141414', 's2', 'Same key section', '', 2)`,
+  );
+  await phase40Seed.query(
     `INSERT INTO assessment_questions (id, section_id, key, type, prompt, instructions, "order", difficulty) VALUES ('16161616-1616-4161-8161-161616161616', '15151515-1515-4151-8151-151515151515', 'q1', 'OPEN', 'שאלה', '', 0, 'LOW')`,
   );
   await phase40Seed.query(
     `INSERT INTO assessment_questions (id, section_id, key, type, prompt, instructions, "order", difficulty) VALUES ('21212121-2121-4121-8121-212121212121', '15151515-1515-4151-8151-151515151515', 'q2', 'OPEN', 'שאלה נוספת', '', 1, 'LOW')`,
+  );
+  await phase40Seed.query(
+    `INSERT INTO assessment_questions (id, section_id, key, type, prompt, instructions, "order", difficulty) VALUES ('52525252-5252-4252-8252-525252525252', '51515151-5151-4151-8151-515151515151', 'q1', 'OPEN', 'אותו מפתח בסעיף אחר', '', 0, 'LOW')`,
   );
   await phase40Seed.query(
     `INSERT INTO assessment_sub_questions (id, question_id, key, prompt, "order", score_units) VALUES ('28282828-2828-4828-8828-282828282828','21212121-2121-4121-8121-212121212121','sub1','תת שאלה',0,NULL)`,
@@ -211,6 +217,9 @@ try {
   );
   await phase40Seed.query(
     `INSERT INTO question_source_links (id, assessment_question_id, generation_run_id, knowledge_item_id, source_version_id, locator, text_hash, curriculum_version_id, curriculum_node_id, lineage) VALUES ('23232323-2323-4232-8232-232323232323', '21212121-2121-4121-8121-212121212121', '99999999-9999-4999-8999-999999999999', '12121212-1212-4121-8121-121212121212', '88888888-8888-4888-8888-888888888888', 'p1', repeat('1', 64), '55555555-5555-4555-8555-555555555555', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'GENERATED')`,
+  );
+  await phase40Seed.query(
+    `INSERT INTO question_source_links (id, assessment_question_id, generation_run_id, knowledge_item_id, source_version_id, locator, text_hash, curriculum_version_id, curriculum_node_id, lineage) VALUES ('55555555-5555-4555-8555-555555555555', '52525252-5252-4252-8252-525252525252', '99999999-9999-4999-8999-999999999999', '12121212-1212-4121-8121-121212121212', '88888888-8888-4888-8888-888888888888', 'p1', repeat('1', 64), '55555555-5555-4555-8555-555555555555', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'GENERATED')`,
   );
   await phase40Seed.query(
     `UPDATE generation_runs SET state='SUCCEEDED', attempts=1, provider='fake', model='fake', output_revision_id='14141414-1414-4141-8141-141414141414', processed_at=NOW() WHERE id='99999999-9999-4999-8999-999999999999'`,
@@ -319,7 +328,13 @@ try {
     `INSERT INTO assessment_sections (id, revision_id, key, title, instructions, "order") VALUES ('50505050-5050-4050-8050-505050505050','31313131-3131-4131-8131-313131313131','empty','Empty','',1)`,
   );
   await verify.query(
+    `INSERT INTO assessment_sections (id, revision_id, key, title, instructions, "order") VALUES ('53535353-5353-4353-8353-535353535353','31313131-3131-4131-8131-313131313131','s2','Same key section','',2)`,
+  );
+  await verify.query(
     `INSERT INTO assessment_questions (id, section_id, key, type, prompt, instructions, "order", difficulty) VALUES ('33333333-3333-4333-8333-333333333333','32323232-3232-4232-8232-323232323232','q1','OPEN','שאלה חדשה','',0,'LOW'),('34343434-3434-4434-8434-343434343434','32323232-3232-4232-8232-323232323232','q2','OPEN','שאלה נוספת','',1,'LOW')`,
+  );
+  await verify.query(
+    `INSERT INTO assessment_questions (id, section_id, key, type, prompt, instructions, "order", difficulty) VALUES ('54545454-5454-4454-8454-545454545454','53535353-5353-4353-8353-535353535353','q1','OPEN','אותו מפתח בסעיף אחר','',0,'LOW')`,
   );
   await verify.query(
     `INSERT INTO assessment_sub_questions (id, question_id, key, prompt, "order", score_units) VALUES ('48484848-4848-4848-8848-484848484848','34343434-3434-4434-8434-343434343434','sub1','תת שאלה',0,NULL)`,
@@ -341,6 +356,9 @@ try {
   );
   await verify.query(
     `INSERT INTO question_source_links (id, assessment_question_id, generation_run_id, knowledge_item_id, source_version_id, locator, text_hash, curriculum_version_id, curriculum_node_id, lineage, prior_question_id) VALUES ('35353535-3535-4535-8535-353535353535','33333333-3333-4333-8333-333333333333','30303030-3030-4030-8030-303030303030','12121212-1212-4121-8121-121212121212','88888888-8888-4888-8888-888888888888','p1',repeat('1',64),'55555555-5555-4555-8555-555555555555','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','GENERATED','16161616-1616-4161-8161-161616161616'),('36363636-3636-4636-8636-363636363636','33333333-3333-4333-8333-333333333333','30303030-3030-4030-8030-303030303030','18181818-1818-4181-8181-181818181818','88888888-8888-4888-8888-888888888888','p2',repeat('8',64),'55555555-5555-4555-8555-555555555555','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','GENERATED','16161616-1616-4161-8161-161616161616'),('37373737-3737-4737-8737-373737373737','34343434-3434-4434-8434-343434343434','30303030-3030-4030-8030-303030303030','12121212-1212-4121-8121-121212121212','88888888-8888-4888-8888-888888888888','p1',repeat('1',64),'55555555-5555-4555-8555-555555555555','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','CARRIED_FORWARD','21212121-2121-4121-8121-212121212121'),('47474747-4747-4747-8474-474747474747','34343434-3434-4434-8434-343434343434','30303030-3030-4030-8030-303030303030','18181818-1818-4181-8181-181818181818','88888888-8888-4888-8888-888888888888','p2',repeat('8',64),'55555555-5555-4555-8555-555555555555','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','CARRIED_FORWARD','21212121-2121-4121-8121-212121212121')`,
+  );
+  await verify.query(
+    `INSERT INTO question_source_links (id, assessment_question_id, generation_run_id, knowledge_item_id, source_version_id, locator, text_hash, curriculum_version_id, curriculum_node_id, lineage, prior_question_id) VALUES ('56565656-5656-4565-8565-565656565656','54545454-5454-4454-8454-545454545454','30303030-3030-4030-8030-303030303030','12121212-1212-4121-8121-121212121212','88888888-8888-4888-8888-888888888888','p1',repeat('1',64),'55555555-5555-4555-8555-555555555555','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','CARRIED_FORWARD','52525252-5252-4252-8252-525252525252')`,
   );
   await verify.query(
     `INSERT INTO generation_expected_question_citations (generation_run_id, assessment_question_id, knowledge_item_id, source_version_id, locator, text_hash, curriculum_version_id, curriculum_node_id, lineage, prior_question_id) SELECT generation_run_id, assessment_question_id, knowledge_item_id, source_version_id, locator, text_hash, curriculum_version_id, curriculum_node_id, lineage, prior_question_id FROM question_source_links WHERE generation_run_id='30303030-3030-4030-8030-303030303030'`,
@@ -487,13 +505,13 @@ try {
       await verify.query(
         `SELECT jsonb_build_object(
           'sections', COALESCE((SELECT jsonb_agg(jsonb_build_object('key',s.key,'order',s."order",'title',s.title,'instructions',s.instructions,'scoreUnits',s.score_units) ORDER BY s.key,s."order") FROM assessment_sections s WHERE s.revision_id=$1::uuid), '[]'::jsonb),
-          'questions', COALESCE((SELECT jsonb_agg(jsonb_build_object('sectionKey',s.key,'sectionOrder',s."order",'key',q.key,'order',q."order",'type',q.type,'prompt',q.prompt,'instructions',q.instructions,'difficulty',q.difficulty,'scoreUnits',q.score_units) ORDER BY s.key,s."order",q.key,q."order") FROM assessment_questions q JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=$1::uuid AND q.key <> 'q1'), '[]'::jsonb),
-          'subQuestions', COALESCE((SELECT jsonb_agg(jsonb_build_object('sectionKey',s.key,'sectionOrder',s."order",'questionKey',q.key,'questionOrder',q."order",'key',sq.key,'order',sq."order",'prompt',sq.prompt,'scoreUnits',sq.score_units) ORDER BY s.key,s."order",q.key,q."order",sq.key,sq."order") FROM assessment_sub_questions sq JOIN assessment_questions q ON q.id=sq.question_id JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=$1::uuid AND q.key <> 'q1'), '[]'::jsonb),
-          'answers', COALESCE((SELECT jsonb_agg(jsonb_build_object('parent',q.key,'key',a.key,'order',a."order",'text',a.text,'explanation',a.explanation,'answerData',a.answer_data) ORDER BY q.key,a.key,a."order") FROM answers a JOIN assessment_questions q ON q.id=a.question_id JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=$1::uuid AND q.key <> 'q1'), '[]'::jsonb),
-          'subAnswers', COALESCE((SELECT jsonb_agg(jsonb_build_object('parent',q.key || '/' || sq.key,'key',a.key,'order',a."order",'text',a.text,'explanation',a.explanation,'answerData',a.answer_data) ORDER BY q.key,sq.key,a.key,a."order") FROM answers a JOIN assessment_sub_questions sq ON sq.id=a.sub_question_id JOIN assessment_questions q ON q.id=sq.question_id JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=$1::uuid AND q.key <> 'q1'), '[]'::jsonb),
-          'rubrics', COALESCE((SELECT jsonb_agg(jsonb_build_object('parent',q.key,'key',rc.key,'order',rc."order",'description',rc.description,'scoreUnits',rc.score_units) ORDER BY q.key,rc.key,rc."order") FROM rubric_criteria rc JOIN assessment_questions q ON q.id=rc.question_id JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=$1::uuid AND q.key <> 'q1'), '[]'::jsonb),
-          'subRubrics', COALESCE((SELECT jsonb_agg(jsonb_build_object('parent',q.key || '/' || sq.key,'key',rc.key,'order',rc."order",'description',rc.description,'scoreUnits',rc.score_units) ORDER BY q.key,sq.key,rc.key,rc."order") FROM rubric_criteria rc JOIN assessment_sub_questions sq ON sq.id=rc.sub_question_id JOIN assessment_questions q ON q.id=sq.question_id JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=$1::uuid AND q.key <> 'q1'), '[]'::jsonb),
-          'sources', COALESCE((SELECT jsonb_agg(jsonb_build_object('questionKey',q.key,'questionOrder',q."order",'knowledgeItemId',l.knowledge_item_id,'sourceVersionId',l.source_version_id,'locator',l.locator,'textHash',l.text_hash,'curriculumVersionId',l.curriculum_version_id,'curriculumNodeId',l.curriculum_node_id,'lineage',CASE WHEN l.lineage='GENERATED' THEN 'CARRIED_FORWARD' ELSE l.lineage END) ORDER BY q.key,q."order",l.knowledge_item_id) FROM question_source_links l JOIN assessment_questions q ON q.id=l.assessment_question_id JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=$1::uuid AND q.key <> 'q1' AND l.generation_run_id=$2::uuid), '[]'::jsonb)
+         'questions', COALESCE((SELECT jsonb_agg(jsonb_build_object('sectionKey',s.key,'sectionOrder',s."order",'key',q.key,'order',q."order",'type',q.type,'prompt',q.prompt,'instructions',q.instructions,'difficulty',q.difficulty,'scoreUnits',q.score_units) ORDER BY s.key,s."order",q.key,q."order") FROM assessment_questions q JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=$1::uuid AND NOT (s.key='s1' AND s."order"=0 AND q.key='q1' AND q."order"=0)), '[]'::jsonb),
+         'subQuestions', COALESCE((SELECT jsonb_agg(jsonb_build_object('sectionKey',s.key,'sectionOrder',s."order",'questionKey',q.key,'questionOrder',q."order",'key',sq.key,'order',sq."order",'prompt',sq.prompt,'scoreUnits',sq.score_units) ORDER BY s.key,s."order",q.key,q."order",sq.key,sq."order") FROM assessment_sub_questions sq JOIN assessment_questions q ON q.id=sq.question_id JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=$1::uuid AND NOT (s.key='s1' AND s."order"=0 AND q.key='q1' AND q."order"=0)), '[]'::jsonb),
+         'answers', COALESCE((SELECT jsonb_agg(jsonb_build_object('parent',q.key,'key',a.key,'order',a."order",'text',a.text,'explanation',a.explanation,'answerData',a.answer_data) ORDER BY q.key,a.key,a."order") FROM answers a JOIN assessment_questions q ON q.id=a.question_id JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=$1::uuid AND NOT (s.key='s1' AND s."order"=0 AND q.key='q1' AND q."order"=0)), '[]'::jsonb),
+         'subAnswers', COALESCE((SELECT jsonb_agg(jsonb_build_object('parent',q.key || '/' || sq.key,'key',a.key,'order',a."order",'text',a.text,'explanation',a.explanation,'answerData',a.answer_data) ORDER BY q.key,sq.key,a.key,a."order") FROM answers a JOIN assessment_sub_questions sq ON sq.id=a.sub_question_id JOIN assessment_questions q ON q.id=sq.question_id JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=$1::uuid AND NOT (s.key='s1' AND s."order"=0 AND q.key='q1' AND q."order"=0)), '[]'::jsonb),
+         'rubrics', COALESCE((SELECT jsonb_agg(jsonb_build_object('parent',q.key,'key',rc.key,'order',rc."order",'description',rc.description,'scoreUnits',rc.score_units) ORDER BY q.key,rc.key,rc."order") FROM rubric_criteria rc JOIN assessment_questions q ON q.id=rc.question_id JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=$1::uuid AND NOT (s.key='s1' AND s."order"=0 AND q.key='q1' AND q."order"=0)), '[]'::jsonb),
+         'subRubrics', COALESCE((SELECT jsonb_agg(jsonb_build_object('parent',q.key || '/' || sq.key,'key',rc.key,'order',rc."order",'description',rc.description,'scoreUnits',rc.score_units) ORDER BY q.key,sq.key,rc.key,rc."order") FROM rubric_criteria rc JOIN assessment_sub_questions sq ON sq.id=rc.sub_question_id JOIN assessment_questions q ON q.id=sq.question_id JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=$1::uuid AND NOT (s.key='s1' AND s."order"=0 AND q.key='q1' AND q."order"=0)), '[]'::jsonb),
+         'sources', COALESCE((SELECT jsonb_agg(jsonb_build_object('sectionKey',s.key,'sectionOrder',s."order",'questionKey',q.key,'questionOrder',q."order",'knowledgeItemId',l.knowledge_item_id,'sourceVersionId',l.source_version_id,'locator',l.locator,'textHash',l.text_hash,'curriculumVersionId',l.curriculum_version_id,'curriculumNodeId',l.curriculum_node_id,'lineage',CASE WHEN l.lineage='GENERATED' THEN 'CARRIED_FORWARD' ELSE l.lineage END) ORDER BY s.key,s."order",q.key,q."order",l.knowledge_item_id) FROM question_source_links l JOIN assessment_questions q ON q.id=l.assessment_question_id JOIN assessment_sections s ON s.id=q.section_id WHERE s.revision_id=$1::uuid AND NOT (s.key='s1' AND s."order"=0 AND q.key='q1' AND q."order"=0) AND l.generation_run_id=$2::uuid), '[]'::jsonb)
         ) AS graph`,
         [revisionId, runId],
       )
@@ -530,6 +548,21 @@ try {
       );
       await verify.query(
         `UPDATE assessment_questions SET prompt='אסור' WHERE id='34343434-3434-4434-8434-343434343434'`,
+      );
+      await verify.query(
+        `SELECT phase40_validate_complete_output_graph('30303030-3030-4030-8030-303030303030'::uuid)`,
+      );
+    },
+    'regeneration unrelated question graph mismatch',
+  );
+  await expectDatabaseError(
+    'same-key question in another section mutation',
+    async () => {
+      await verify.query(
+        'ALTER TABLE assessment_questions DISABLE TRIGGER finalized_question_immutable',
+      );
+      await verify.query(
+        `UPDATE assessment_questions SET prompt='אסור גם כאן' WHERE id='54545454-5454-4454-8454-545454545454'`,
       );
       await verify.query(
         `SELECT phase40_validate_complete_output_graph('30303030-3030-4030-8030-303030303030'::uuid)`,

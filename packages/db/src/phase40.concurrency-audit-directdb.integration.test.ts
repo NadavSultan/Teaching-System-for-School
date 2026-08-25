@@ -124,11 +124,8 @@ describe('C — real generation concurrency, lease, replay, and idempotency', ()
             new DeterministicFakeModelGateway(),
           ),
         ]);
-        expect(
-          results.some(
-            (result) => result.status === 'fulfilled' && result.value?.state === 'SUCCEEDED',
-          ),
-        ).toBe(true);
+        expect(results.map((result) => result.status)).toEqual(['fulfilled', 'rejected']);
+        expect(results[0]).toMatchObject({ status: 'fulfilled', value: { state: 'SUCCEEDED' } });
         expect(
           await prisma.assessmentRevision.count({ where: { assessmentId: fixture.assessmentId } }),
         ).toBe(1);
@@ -230,8 +227,10 @@ describe('A — persisted audit, outbox, redaction, and append-only evidence', (
             where: { id: usage.id },
             data: { requestId: 'changed' },
           }),
-        ).rejects.toThrow();
-        await expect(prisma.generationUsage.delete({ where: { id: usage.id } })).rejects.toThrow();
+        ).rejects.toThrow(/generation evidence is append-only/);
+        await expect(prisma.generationUsage.delete({ where: { id: usage.id } })).rejects.toThrow(
+          /generation evidence is append-only/,
+        );
       } else if (kind === 'context-append-only') {
         await processGenerationRun(
           fixture.generationRunId,
@@ -246,10 +245,10 @@ describe('A — persisted audit, outbox, redaction, and append-only evidence', (
             where: { id: context.id },
             data: { locator: 'changed' },
           }),
-        ).rejects.toThrow();
+        ).rejects.toThrow(/generation evidence is append-only/);
         await expect(
           prisma.generationContextItem.delete({ where: { id: context.id } }),
-        ).rejects.toThrow();
+        ).rejects.toThrow(/generation evidence is append-only/);
       } else if (kind === 'source-link-append-only') {
         await processGenerationRun(
           fixture.generationRunId,
@@ -264,10 +263,10 @@ describe('A — persisted audit, outbox, redaction, and append-only evidence', (
             where: { id: link.id },
             data: { locator: 'changed' },
           }),
-        ).rejects.toThrow();
-        await expect(
-          prisma.questionSourceLink.delete({ where: { id: link.id } }),
-        ).rejects.toThrow();
+        ).rejects.toThrow(/generation evidence is append-only/);
+        await expect(prisma.questionSourceLink.delete({ where: { id: link.id } })).rejects.toThrow(
+          /generation evidence is append-only/,
+        );
       } else if (kind === 'safe-worker-log') {
         const failed = await processGenerationRun(fixture.generationRunId, prisma, {
           execute: async () => {
@@ -327,7 +326,7 @@ describe('D — direct database adversarial invariants', () => {
             where: { id: fixture.generationRunId },
             data: { organizationId: '00000000-0000-4000-8000-000000000099' },
           }),
-        ).rejects.toThrow();
+        ).rejects.toThrow(/generation assessment owner invalid/);
       else if (kind === 'context-update' || kind === 'context-delete') {
         const context = await prisma.generationContextItem.findFirstOrThrow({
           where: { generationRunId: fixture.generationRunId },
@@ -338,11 +337,11 @@ describe('D — direct database adversarial invariants', () => {
               where: { id: context.id },
               data: { locator: 'forged' },
             }),
-          ).rejects.toThrow();
+          ).rejects.toThrow(/generation evidence is append-only/);
         else
           await expect(
             prisma.generationContextItem.delete({ where: { id: context.id } }),
-          ).rejects.toThrow();
+          ).rejects.toThrow(/generation evidence is append-only/);
       } else if (kind === 'usage-update' || kind === 'usage-delete') {
         const usage = await prisma.generationUsage.findFirstOrThrow({
           where: { generationRunId: fixture.generationRunId },
@@ -353,11 +352,11 @@ describe('D — direct database adversarial invariants', () => {
               where: { id: usage.id },
               data: { requestId: 'forged' },
             }),
-          ).rejects.toThrow();
+          ).rejects.toThrow(/generation evidence is append-only/);
         else
-          await expect(
-            prisma.generationUsage.delete({ where: { id: usage.id } }),
-          ).rejects.toThrow();
+          await expect(prisma.generationUsage.delete({ where: { id: usage.id } })).rejects.toThrow(
+            /generation evidence is append-only/,
+          );
       } else if (kind === 'source-link-update' || kind === 'source-link-delete') {
         const link = await prisma.questionSourceLink.findFirstOrThrow({
           where: { generationRunId: fixture.generationRunId },
@@ -368,11 +367,11 @@ describe('D — direct database adversarial invariants', () => {
               where: { id: link.id },
               data: { locator: 'forged' },
             }),
-          ).rejects.toThrow();
+          ).rejects.toThrow(/question source identity|generation evidence is append-only/);
         else
           await expect(
             prisma.questionSourceLink.delete({ where: { id: link.id } }),
-          ).rejects.toThrow();
+          ).rejects.toThrow(/question source identity|generation evidence is append-only/);
       } else if (
         kind === 'forged-context-item' ||
         kind === 'forged-context-lineage' ||
@@ -407,7 +406,9 @@ describe('D — direct database adversarial invariants', () => {
                   : ((context.lineage ?? []) as any),
             },
           }),
-        ).rejects.toThrow();
+        ).rejects.toThrow(
+          /generation context identity or eligibility invalid|generation context complete lineage invalid|Unique constraint failed/,
+        );
       } else if (kind === 'forged-question-run' || kind === 'forged-source-link') {
         const link = await prisma.questionSourceLink.findFirstOrThrow({
           where: { generationRunId: fixture.generationRunId },
@@ -420,7 +421,7 @@ describe('D — direct database adversarial invariants', () => {
                 ? { generationRunId: '00000000-0000-4000-8000-000000000099' }
                 : { sourceVersionId: '00000000-0000-4000-8000-000000000099' },
           }),
-        ).rejects.toThrow();
+        ).rejects.toThrow(/generation evidence is append-only/);
       } else if (kind === 'negative-usage')
         await expect(
           prisma.generationUsage.create({
@@ -437,7 +438,7 @@ describe('D — direct database adversarial invariants', () => {
               finishReason: 'stop',
             },
           }),
-        ).rejects.toThrow();
+        ).rejects.toThrow(/generation usage values invalid|constraint/i);
       else if (kind === 'duplicate-usage') {
         const usage = await prisma.generationUsage.findFirstOrThrow({
           where: { generationRunId: fixture.generationRunId },
@@ -457,41 +458,41 @@ describe('D — direct database adversarial invariants', () => {
               finishReason: usage.finishReason,
             },
           }),
-        ).rejects.toThrow();
+        ).rejects.toThrow(/constraint|Unique/i);
       } else if (kind === 'duplicate-idempotency')
         await expect(
           prisma.generationRun.create({
             data: { ...before, id: undefined, updatedAt: undefined, createdAt: undefined } as never,
           }),
-        ).rejects.toThrow();
+        ).rejects.toThrow(/constraint|Unique/i);
       else if (kind === 'terminal-reopen')
         await expect(
           prisma.generationRun.update({
             where: { id: fixture.generationRunId },
             data: { state: 'PENDING' },
           }),
-        ).rejects.toThrow();
+        ).rejects.toThrow(/invalid generation run transition|constraint/i);
       else if (kind === 'success-without-revision')
         await expect(
           prisma.generationRun.update({
             where: { id: fixture.generationRunId },
             data: { state: 'SUCCEEDED', processedAt: new Date() },
           }),
-        ).rejects.toThrow();
+        ).rejects.toThrow(/successful generation|constraint/i);
       else if (kind === 'orphan-identity')
         await expect(
           prisma.generationRun.update({
             where: { id: fixture.generationRunId },
             data: { assessmentId: '00000000-0000-4000-8000-000000000099' },
           }),
-        ).rejects.toThrow();
+        ).rejects.toThrow(/constraint|assessment|identity/i);
       else if (kind === 'wrong-assessment-revision')
         await expect(
           prisma.generationRun.update({
             where: { id: fixture.generationRunId },
             data: { outputRevisionId: '00000000-0000-4000-8000-000000000099' },
           }),
-        ).rejects.toThrow();
+        ).rejects.toThrow(/constraint|identity/i);
       else throw new Error(`unhandled direct-db case: ${kind}`);
       const after = await prisma.generationRun.findUniqueOrThrow({
         where: { id: fixture.generationRunId },
@@ -592,7 +593,10 @@ describe('L — PostgreSQL generation-run transition matrix', () => {
         processGenerationRun(fixture.generationRunId, prisma, new DeterministicFakeModelGateway()),
       ).resolves.toMatchObject({ state: 'SUCCEEDED' });
     else if (legal) await expect(action).resolves.toMatchObject({ state: to });
-    else await expect(action).rejects.toThrow();
+    else
+      await expect(action).rejects.toThrow(
+        /invalid generation run transition|successful generation/,
+      );
     const after = await prisma.generationRun.findUniqueOrThrow({
       where: { id: fixture.generationRunId },
     });

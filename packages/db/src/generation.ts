@@ -48,6 +48,18 @@ type ContextRow = {
   text: string;
 };
 
+type ExpectedCitation = {
+  assessmentQuestionId: string;
+  knowledgeItemId: string;
+  sourceVersionId: string;
+  locator: string;
+  textHash: string;
+  curriculumVersionId: string;
+  curriculumNodeId: string;
+  lineage: 'GENERATED' | 'CARRIED_FORWARD';
+  priorQuestionId: string | null;
+};
+
 function trustedContext(context: AccessContext, client: PrismaClient): Promise<AccessContext> {
   return resolveAccessContext(context.principal, context.organizationId, client).then(
     (resolved) => {
@@ -575,6 +587,7 @@ async function persistRevision(
   parsed: any,
   linksByQuestion: Map<string, string[]>,
 ) {
+  const expected: ExpectedCitation[] = [];
   const assessment = await tx.assessment.findUniqueOrThrow({ where: { id: run.assessmentId } });
   const locked = await tx.$queryRaw<
     Array<{ id: string }>
@@ -701,11 +714,22 @@ async function persistRevision(
             lineage: 'GENERATED',
           },
         });
+        expected.push({
+          assessmentQuestionId: savedQuestion.id,
+          knowledgeItemId: item.id,
+          sourceVersionId: item.sourceVersionId,
+          locator: item.locator,
+          textHash: item.textHash,
+          curriculumVersionId: lineage.curriculumVersionId,
+          curriculumNodeId: lineage.curriculumNodeId,
+          lineage: 'GENERATED',
+          priorQuestionId: null,
+        });
       }
     }
   }
   await tx.assessmentRevision.update({ where: { id: revision.id }, data: { state: 'FINALIZED' } });
-  return revision.id;
+  return { revisionId: revision.id, expected };
 }
 
 async function persistRegeneratedRevision(
@@ -714,6 +738,7 @@ async function persistRegeneratedRevision(
   output: any,
   selected: Array<ContextRow>,
 ) {
+  const expected: ExpectedCitation[] = [];
   const selectedIds = new Set(selected.map((item) => item.knowledgeItemId));
   const selectedLineage = new Map(selected.map((item) => [item.knowledgeItemId, item.lineage]));
   const assessment = await tx.assessment.findUniqueOrThrow({ where: { id: run.assessmentId } });
@@ -883,6 +908,17 @@ async function persistRegeneratedRevision(
         priorQuestionId: link.assessmentQuestionId,
       },
     });
+    expected.push({
+      assessmentQuestionId: newQuestionId,
+      knowledgeItemId: link.knowledgeItemId,
+      sourceVersionId: link.sourceVersionId,
+      locator: link.locator,
+      textHash: link.textHash,
+      curriculumVersionId: link.curriculumVersionId,
+      curriculumNodeId: link.curriculumNodeId,
+      lineage: 'CARRIED_FORWARD',
+      priorQuestionId: link.assessmentQuestionId,
+    });
   }
   for (const itemId of output.citations) {
     if (!selectedIds.has(itemId)) throw new Error('OUTPUT_INVALID');
@@ -908,21 +944,39 @@ async function persistRegeneratedRevision(
         priorQuestionId: target.id,
       },
     });
+    expected.push({
+      assessmentQuestionId: newQuestionIds.get(target.id)!,
+      knowledgeItemId: item.id,
+      sourceVersionId: item.sourceVersionId,
+      locator: item.locator,
+      textHash: item.textHash,
+      curriculumVersionId: lineage.curriculumVersionId,
+      curriculumNodeId: lineage.curriculumNodeId,
+      lineage: 'GENERATED',
+      priorQuestionId: target.id,
+    });
   }
   await tx.assessmentRevision.update({ where: { id: revision.id }, data: { state: 'FINALIZED' } });
-  return revision.id;
+  return { revisionId: revision.id, expected };
 }
 
-async function persistExpectedQuestionCitations(tx: GenerationTx, generationRunId: string) {
-  await tx.$executeRaw`
+async function persistExpectedQuestionCitations(
+  tx: GenerationTx,
+  generationRunId: string,
+  expected: ExpectedCitation[],
+) {
+  for (const row of expected)
+    await tx.$executeRaw`
     INSERT INTO generation_expected_question_citations (
       generation_run_id, assessment_question_id, knowledge_item_id, source_version_id,
       locator, text_hash, curriculum_version_id, curriculum_node_id, lineage, prior_question_id
     )
-    SELECT generation_run_id, assessment_question_id, knowledge_item_id, source_version_id,
-           locator, text_hash, curriculum_version_id, curriculum_node_id, lineage, prior_question_id
-    FROM question_source_links
-    WHERE generation_run_id = ${generationRunId}::uuid
+    VALUES (
+      ${generationRunId}::uuid, ${row.assessmentQuestionId}::uuid, ${row.knowledgeItemId}::uuid,
+      ${row.sourceVersionId}::uuid, ${row.locator}, ${row.textHash},
+      ${row.curriculumVersionId}::uuid, ${row.curriculumNodeId}::uuid,
+      ${row.lineage}::"GenerationLineage", ${row.priorQuestionId}::uuid
+    )
   `;
 }
 
@@ -1095,8 +1149,9 @@ export async function processGenerationRun(
         const succeeded = await client.$transaction(async (tx) => {
           if (!(await contextStillEligible(runId, selected, tx)))
             throw new Error('CONTEXT_INVALIDATED');
-          revisionId = await persistRevision(tx, run, revisionInput, linksByQuestion);
-          await persistExpectedQuestionCitations(tx, runId);
+          const persisted = await persistRevision(tx, run, revisionInput, linksByQuestion);
+          revisionId = persisted.revisionId;
+          await persistExpectedQuestionCitations(tx, runId, persisted.expected);
           const result = await tx.generationRun.update({
             where: { id: runId },
             data: {
@@ -1127,8 +1182,9 @@ export async function processGenerationRun(
         const succeeded = await client.$transaction(async (tx) => {
           if (!(await contextStillEligible(runId, selected, tx)))
             throw new Error('CONTEXT_INVALIDATED');
-          revisionId = await persistRegeneratedRevision(tx, run, output, selected);
-          await persistExpectedQuestionCitations(tx, runId);
+          const persisted = await persistRegeneratedRevision(tx, run, output, selected);
+          revisionId = persisted.revisionId;
+          await persistExpectedQuestionCitations(tx, runId, persisted.expected);
           const result = await tx.generationRun.update({
             where: { id: runId },
             data: {
