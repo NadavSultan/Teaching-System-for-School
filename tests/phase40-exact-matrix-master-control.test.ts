@@ -4,8 +4,8 @@ import { readFileSync } from 'node:fs';
 const read = (file: string) => readFileSync(file, 'utf8');
 const literalProperty = (id: string) =>
   /^[A-Za-z_$][\w$]*$/.test(id)
-    ? new RegExp(`(?:['\"]${id}['\"]|${id})\\s*:`)
-    : new RegExp(`['\"]${id}['\"]\\s*:`);
+    ? new RegExp(`(?:['"]${id}['"]|${id})\\s*:`)
+    : new RegExp(`['"]${id}['"]\\s*:`);
 
 const files = {
   tenant: 'packages/db/src/phase40.tenant-matrix.integration.test.ts',

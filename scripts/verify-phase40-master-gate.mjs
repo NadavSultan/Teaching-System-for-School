@@ -33,9 +33,9 @@ const protectedDigests = {
   'tests/phase40-master-control.test.ts':
     'deaa1ea2cbe9d819b14d6de91b130da1a11d44eac68592b4670b6c84b4dc6488',
   'tests/phase40-exact-matrix-master-control.test.ts':
-    '4034710b17b6e7284ffb2ca4fbe1122c2b96cf39c70d45671967e8176321e931',
+    '5cc57cc7c5183c73d2416ea9139de1b8a9f80c2260825e8412817c5383f84e32',
   'tests/phase40-evidence-integrity-master-control.test.ts':
-    'eb2a0eecc8981dde4857149555c5da1f92953bcae2a62ea88af0c6265849836c',
+    '8c1d990842c81802cc2093aeb6b16e779bb5822e4b94e76c04a4c53269a285de',
   'scripts/verify-phase40-control.mjs':
     '12a9b40e0173d1062b3ba5794336235e14c7bd3d8a0b40fdb51da60760423715',
   'docs/phases/40-master-gate-baseline.md':

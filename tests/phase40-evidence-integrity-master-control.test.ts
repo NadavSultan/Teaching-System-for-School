@@ -6,8 +6,8 @@ const withoutComments = (source: string) =>
   source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 const literalProperty = (id: string) =>
   /^[A-Za-z_$][\w$]*$/.test(id)
-    ? new RegExp(`(?:^|\\n)\\s*(?:['\"]${id}['\"]|${id})\\s*:\\s*\\{`)
-    : new RegExp(`(?:^|\\n)\\s*['\"]${id}['\"]\\s*:\\s*\\{`);
+    ? new RegExp(`(?:^|\\n)\\s*(?:['"]${id}['"]|${id})\\s*:\\s*\\{`)
+    : new RegExp(`(?:^|\\n)\\s*['"]${id}['"]\\s*:\\s*\\{`);
 
 const outputFile = 'packages/db/src/phase40.output-matrix.integration.test.ts';
 const eligibilityFile = 'packages/db/src/phase40.eligibility-matrix.integration.test.ts';
