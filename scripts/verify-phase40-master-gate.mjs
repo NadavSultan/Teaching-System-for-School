@@ -10,6 +10,7 @@ const allowedClosureMigration = '20260824004600_phase40_master_gate_closure';
 const protectedFiles = [
   'packages/db/src/phase40.master-gate.integration.test.ts',
   'tests/phase40-master-control.test.ts',
+  'tests/phase40-exact-matrix-master-control.test.ts',
   'scripts/verify-phase40-control.mjs',
   'docs/phases/40-master-gate-baseline.md',
   'docs/phases/40-final-remediation-control-pack.md',
@@ -17,6 +18,9 @@ const protectedFiles = [
   'docs/phases/40-final-closure-control-pack.md',
   'docs/phases/40-final-closure-executor-handoff.md',
   'docs/phases/40-final-closure-baseline.md',
+  'docs/phases/40-exact-matrix-closure-control-pack.md',
+  'docs/phases/40-exact-matrix-closure-executor-handoff.md',
+  'docs/phases/40-exact-matrix-closure-baseline.md',
 ];
 
 const protectedDigests = {
@@ -24,6 +28,8 @@ const protectedDigests = {
     '543eb28bcbe5cd2ddfa26e55980013bbad210dbe01be0f921f334a8225cc96b1',
   'tests/phase40-master-control.test.ts':
     'deaa1ea2cbe9d819b14d6de91b130da1a11d44eac68592b4670b6c84b4dc6488',
+  'tests/phase40-exact-matrix-master-control.test.ts':
+    '7f619d0e92e7f64c0fb52849b54de9ab8d41aff70516eb2f336371986763a7e1',
   'scripts/verify-phase40-control.mjs':
     '12a9b40e0173d1062b3ba5794336235e14c7bd3d8a0b40fdb51da60760423715',
   'docs/phases/40-master-gate-baseline.md':
@@ -38,6 +44,12 @@ const protectedDigests = {
     'd130857d85ed219f135438fd079b81acb0ab2b50fe106fe28431abc8070014e0',
   'docs/phases/40-final-closure-baseline.md':
     '2c940da43a489840eb123bd270c567e323937867c57625cab258eb4c7f4098e3',
+  'docs/phases/40-exact-matrix-closure-control-pack.md':
+    '491b2e6d8b29333aee79bbc3cc88bc2b896eb1e4564d422d294757eb76e57e81',
+  'docs/phases/40-exact-matrix-closure-executor-handoff.md':
+    'db114ba6196f71cab65689e4950f53c829a7810f4af2ef43a655282a21df60a7',
+  'docs/phases/40-exact-matrix-closure-baseline.md':
+    '9c424fc5916d008996b52cfdbe33ffd826cf87d6bd31a4453595cc6f1a453830',
 };
 
 const frozenPhase40Migrations = {
@@ -107,7 +119,7 @@ const protectedSources = protectedFiles
   .filter((file) => file.endsWith('.test.ts'))
   .map((file) => readFileSync(file, 'utf8'))
   .join('\n');
-for (let index = 1; index <= 16; index += 1) {
+for (let index = 1; index <= 20; index += 1) {
   const id = `MG-${String(index).padStart(2, '0')}`;
   const occurrences = protectedSources.match(new RegExp(id, 'g'))?.length ?? 0;
   if (occurrences !== 1) {
@@ -125,6 +137,6 @@ execFileSync(process.execPath, ['scripts/verify-phase40-control.mjs'], {
 });
 
 console.log('PHASE40_MASTER_GATE=STRUCTURAL_PASS');
-console.log('PROTECTED_CASES=16');
+console.log('PROTECTED_CASES=20');
 console.log(`STARTING_COMMIT=${startingCommit}`);
 console.log(`MIGRATION_COUNT=${migrations.length}`);
