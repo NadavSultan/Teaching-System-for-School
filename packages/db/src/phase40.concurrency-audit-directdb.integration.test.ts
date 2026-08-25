@@ -4,6 +4,38 @@ import { phase40AcceptanceRegistry } from './phase40.acceptance.registry.js';
 import { createGenerationFixture } from './phase40.acceptance.fixtures.js';
 import { prisma, processGenerationRun, requestDraftGeneration } from './index.js';
 
+async function expectExactDatabaseError(
+  action: () => Promise<unknown>,
+  expectedMessage: string,
+  expectedSqlState: string,
+): Promise<void> {
+  let error: unknown;
+  let completed = false;
+  try {
+    await action();
+    completed = true;
+  } catch (caught) {
+    error = caught;
+  }
+  expect(completed).toBe(false);
+  const diagnostic = error instanceof Error ? error.message : String(error);
+  const sqlState =
+    (error as { meta?: { code?: unknown } } | undefined)?.meta?.code ??
+    (error as { code?: unknown } | undefined)?.code ??
+    diagnostic.match(/code:\s*["']([0-9A-Z]{5})["']/)?.[1] ??
+    diagnostic.match(new RegExp(`\\b${expectedSqlState}\\b`))?.[0];
+  expect(sqlState).toBe(expectedSqlState);
+  expect(diagnostic).toContain(expectedMessage);
+}
+async function expectedCitationCount(runId: string): Promise<number> {
+  const rows = await prisma.$queryRaw<Array<{ count: bigint }>>`
+    SELECT count(*)::bigint AS count
+    FROM generation_expected_question_citations
+    WHERE generation_run_id = ${runId}::uuid
+  `;
+  return Number(rows[0]!.count);
+}
+
 describe('C — real generation concurrency, lease, replay, and idempotency', () => {
   it.each(phase40AcceptanceRegistry.C)(
     '%s preserves exactly-once processing state',
@@ -19,13 +51,32 @@ describe('C — real generation concurrency, lease, replay, and idempotency', ()
             leaseExpiresAt: new Date(Date.now() + 60_000),
           },
         });
-        await expect(
-          processGenerationRun(
+        let leaseError: unknown;
+        try {
+          await processGenerationRun(
             fixture.generationRunId,
             prisma,
             new DeterministicFakeModelGateway(),
-          ),
-        ).rejects.toThrow('GENERATION_LEASE_ACTIVE');
+          );
+        } catch (error) {
+          leaseError = error;
+        }
+        expect(leaseError).toBeInstanceOf(Error);
+        expect((leaseError as Error).message).toBe('GENERATION_LEASE_ACTIVE');
+        expect(
+          await prisma.assessmentRevision.count({ where: { assessmentId: fixture.assessmentId } }),
+        ).toBe(0);
+        expect(
+          await prisma.generationUsage.count({
+            where: { generationRunId: fixture.generationRunId },
+          }),
+        ).toBe(0);
+        expect(
+          await prisma.questionSourceLink.count({
+            where: { generationRunId: fixture.generationRunId },
+          }),
+        ).toBe(0);
+        expect(await expectedCitationCount(fixture.generationRunId)).toBe(0);
         return;
       }
       if (kind === 'duplicate-request') {
@@ -77,18 +128,26 @@ describe('C — real generation concurrency, lease, replay, and idempotency', ()
             leaseExpiresAt: new Date(Date.now() + 60_000),
           },
         });
-        await expect(
-          processGenerationRun(
+        let leaseError: unknown;
+        try {
+          await processGenerationRun(
             fixture.generationRunId,
             prisma,
             new DeterministicFakeModelGateway(),
-          ),
-        ).rejects.toThrow('GENERATION_LEASE_ACTIVE');
+          );
+        } catch (error) {
+          leaseError = error;
+        }
+        expect(leaseError).toBeInstanceOf(Error);
+        expect((leaseError as Error).message).toBe('GENERATION_LEASE_ACTIVE');
         expect(
-          await prisma.outboxEvent.findFirstOrThrow({
-            where: { idempotencyKey: `generation:${fixture.generationRunId}` },
+          await prisma.generationRun.findUniqueOrThrow({ where: { id: fixture.generationRunId } }),
+        ).toMatchObject({ state: 'PROCESSING', attempts: 1, outputRevisionId: null });
+        expect(
+          await prisma.generationUsage.count({
+            where: { generationRunId: fixture.generationRunId },
           }),
-        ).toMatchObject({ publishedAt: null });
+        ).toBe(0);
         return;
       }
       if (kind === 'crash-after-context') {
@@ -109,10 +168,38 @@ describe('C — real generation concurrency, lease, replay, and idempotency', ()
             where: { generationRunId: fixture.generationRunId },
           }),
         ).toBe(contextCount);
+        expect(
+          await prisma.assessmentRevision.count({ where: { assessmentId: fixture.assessmentId } }),
+        ).toBe(0);
+        expect(
+          await prisma.questionSourceLink.count({
+            where: { generationRunId: fixture.generationRunId },
+          }),
+        ).toBe(0);
+        expect(await expectedCitationCount(fixture.generationRunId)).toBe(0);
         return;
       }
       if (kind === 'concurrent-processing') {
-        const results = await Promise.allSettled([
+        const concurrentEvidenceBefore = {
+          revisions: await prisma.assessmentRevision.count({
+            where: { assessmentId: fixture.assessmentId },
+          }),
+          usages: await prisma.generationUsage.count({
+            where: { generationRunId: fixture.generationRunId },
+          }),
+          contexts: await prisma.generationContextItem.count({
+            where: { generationRunId: fixture.generationRunId },
+          }),
+          links: await prisma.questionSourceLink.count({
+            where: { generationRunId: fixture.generationRunId },
+          }),
+          expectedLinks: await expectedCitationCount(fixture.generationRunId),
+          outbox: await prisma.outboxEvent.count({
+            where: { organizationId: fixture.context.organizationId },
+          }),
+          audit: await prisma.auditEvent.count({ where: { targetId: fixture.generationRunId } }),
+        };
+        const rawResults = await Promise.allSettled([
           processGenerationRun(
             fixture.generationRunId,
             prisma,
@@ -124,11 +211,62 @@ describe('C — real generation concurrency, lease, replay, and idempotency', ()
             new DeterministicFakeModelGateway(),
           ),
         ]);
-        expect(results.map((result) => result.status)).toEqual(['fulfilled', 'rejected']);
-        expect(results[0]).toMatchObject({ status: 'fulfilled', value: { state: 'SUCCEEDED' } });
+        const results = [...rawResults].sort(
+          (left, right) =>
+            Number(right.status === 'fulfilled') - Number(left.status === 'fulfilled'),
+        );
+        const firstResult = results[0];
+        const secondResult = results[1];
+        if (!firstResult || !secondResult) throw new Error('concurrent result vector incomplete');
+        expect(firstResult).toMatchObject({
+          status: 'fulfilled',
+          value: { state: 'SUCCEEDED', failureCode: null, outputRevisionId: expect.any(String) },
+        });
+        expect(secondResult.status).toBe('rejected');
+        if (secondResult.status === 'rejected')
+          expect((secondResult.reason as Error).message).toBe('GENERATION_LEASE_ACTIVE');
         expect(
           await prisma.assessmentRevision.count({ where: { assessmentId: fixture.assessmentId } }),
         ).toBe(1);
+        expect(
+          await prisma.generationUsage.count({
+            where: { generationRunId: fixture.generationRunId },
+          }),
+        ).toBe(1);
+        expect(
+          await prisma.questionSourceLink.count({
+            where: { generationRunId: fixture.generationRunId },
+          }),
+        ).toBe(1);
+        expect(await expectedCitationCount(fixture.generationRunId)).toBe(1);
+        const concurrentEvidenceAfter = {
+          revisions: await prisma.assessmentRevision.count({
+            where: { assessmentId: fixture.assessmentId },
+          }),
+          usages: await prisma.generationUsage.count({
+            where: { generationRunId: fixture.generationRunId },
+          }),
+          contexts: await prisma.generationContextItem.count({
+            where: { generationRunId: fixture.generationRunId },
+          }),
+          links: await prisma.questionSourceLink.count({
+            where: { generationRunId: fixture.generationRunId },
+          }),
+          expectedLinks: await expectedCitationCount(fixture.generationRunId),
+          outbox: await prisma.outboxEvent.count({
+            where: { organizationId: fixture.context.organizationId },
+          }),
+          audit: await prisma.auditEvent.count({ where: { targetId: fixture.generationRunId } }),
+        };
+        expect(concurrentEvidenceAfter).toEqual({
+          revisions: concurrentEvidenceBefore.revisions + 1,
+          usages: 1,
+          contexts: 1,
+          links: 1,
+          expectedLinks: 1,
+          outbox: concurrentEvidenceBefore.outbox,
+          audit: concurrentEvidenceBefore.audit + 1,
+        });
         return;
       }
       const first = await processGenerationRun(
@@ -150,6 +288,7 @@ describe('C — real generation concurrency, lease, replay, and idempotency', ()
         const counts = await Promise.all([
           prisma.generationUsage.count({ where: { generationRunId: fixture.generationRunId } }),
           prisma.questionSourceLink.count({ where: { generationRunId: fixture.generationRunId } }),
+          expectedCitationCount(fixture.generationRunId),
           prisma.auditEvent.count({ where: { targetId: fixture.generationRunId } }),
         ]);
         await processGenerationRun(
@@ -163,6 +302,7 @@ describe('C — real generation concurrency, lease, replay, and idempotency', ()
             prisma.questionSourceLink.count({
               where: { generationRunId: fixture.generationRunId },
             }),
+            expectedCitationCount(fixture.generationRunId),
             prisma.auditEvent.count({ where: { targetId: fixture.generationRunId } }),
           ]),
         ).toEqual(counts);
@@ -222,14 +362,19 @@ describe('A — persisted audit, outbox, redaction, and append-only evidence', (
         const usage = await prisma.generationUsage.findFirstOrThrow({
           where: { generationRunId: fixture.generationRunId },
         });
-        await expect(
-          prisma.generationUsage.update({
-            where: { id: usage.id },
-            data: { requestId: 'changed' },
-          }),
-        ).rejects.toThrow(/generation evidence is append-only/);
-        await expect(prisma.generationUsage.delete({ where: { id: usage.id } })).rejects.toThrow(
-          /generation evidence is append-only/,
+        await expectExactDatabaseError(
+          () =>
+            prisma.generationUsage.update({
+              where: { id: usage.id },
+              data: { requestId: 'changed' },
+            }),
+          'generation evidence is append-only',
+          'P0001',
+        );
+        await expectExactDatabaseError(
+          () => prisma.generationUsage.delete({ where: { id: usage.id } }),
+          'generation evidence is append-only',
+          'P0001',
         );
       } else if (kind === 'context-append-only') {
         await processGenerationRun(
@@ -240,15 +385,20 @@ describe('A — persisted audit, outbox, redaction, and append-only evidence', (
         const context = await prisma.generationContextItem.findFirstOrThrow({
           where: { generationRunId: fixture.generationRunId },
         });
-        await expect(
-          prisma.generationContextItem.update({
-            where: { id: context.id },
-            data: { locator: 'changed' },
-          }),
-        ).rejects.toThrow(/generation evidence is append-only/);
-        await expect(
-          prisma.generationContextItem.delete({ where: { id: context.id } }),
-        ).rejects.toThrow(/generation evidence is append-only/);
+        await expectExactDatabaseError(
+          () =>
+            prisma.generationContextItem.update({
+              where: { id: context.id },
+              data: { locator: 'changed' },
+            }),
+          'generation evidence is append-only',
+          'P0001',
+        );
+        await expectExactDatabaseError(
+          () => prisma.generationContextItem.delete({ where: { id: context.id } }),
+          'generation evidence is append-only',
+          'P0001',
+        );
       } else if (kind === 'source-link-append-only') {
         await processGenerationRun(
           fixture.generationRunId,
@@ -258,14 +408,19 @@ describe('A — persisted audit, outbox, redaction, and append-only evidence', (
         const link = await prisma.questionSourceLink.findFirstOrThrow({
           where: { generationRunId: fixture.generationRunId },
         });
-        await expect(
-          prisma.questionSourceLink.update({
-            where: { id: link.id },
-            data: { locator: 'changed' },
-          }),
-        ).rejects.toThrow(/generation evidence is append-only/);
-        await expect(prisma.questionSourceLink.delete({ where: { id: link.id } })).rejects.toThrow(
-          /generation evidence is append-only/,
+        await expectExactDatabaseError(
+          () =>
+            prisma.questionSourceLink.update({
+              where: { id: link.id },
+              data: { locator: 'changed' },
+            }),
+          'generation evidence is append-only',
+          'P0001',
+        );
+        await expectExactDatabaseError(
+          () => prisma.questionSourceLink.delete({ where: { id: link.id } }),
+          'generation evidence is append-only',
+          'P0001',
         );
       } else if (kind === 'safe-worker-log') {
         const failed = await processGenerationRun(fixture.generationRunId, prisma, {
@@ -321,57 +476,75 @@ describe('D — direct database adversarial invariants', () => {
         where: { id: fixture.generationRunId },
       });
       if (kind === 'run-identity' || kind === 'forged-owner')
-        await expect(
-          prisma.generationRun.update({
-            where: { id: fixture.generationRunId },
-            data: { organizationId: '00000000-0000-4000-8000-000000000099' },
-          }),
-        ).rejects.toThrow(/generation assessment owner invalid/);
+        await expectExactDatabaseError(
+          () =>
+            prisma.generationRun.update({
+              where: { id: fixture.generationRunId },
+              data: { organizationId: '00000000-0000-4000-8000-000000000099' },
+            }),
+          'generation assessment owner invalid',
+          'P0001',
+        );
       else if (kind === 'context-update' || kind === 'context-delete') {
         const context = await prisma.generationContextItem.findFirstOrThrow({
           where: { generationRunId: fixture.generationRunId },
         });
         if (kind === 'context-update')
-          await expect(
-            prisma.generationContextItem.update({
-              where: { id: context.id },
-              data: { locator: 'forged' },
-            }),
-          ).rejects.toThrow(/generation evidence is append-only/);
+          await expectExactDatabaseError(
+            () =>
+              prisma.generationContextItem.update({
+                where: { id: context.id },
+                data: { locator: 'forged' },
+              }),
+            'generation evidence is append-only',
+            'P0001',
+          );
         else
-          await expect(
-            prisma.generationContextItem.delete({ where: { id: context.id } }),
-          ).rejects.toThrow(/generation evidence is append-only/);
+          await expectExactDatabaseError(
+            () => prisma.generationContextItem.delete({ where: { id: context.id } }),
+            'generation evidence is append-only',
+            'P0001',
+          );
       } else if (kind === 'usage-update' || kind === 'usage-delete') {
         const usage = await prisma.generationUsage.findFirstOrThrow({
           where: { generationRunId: fixture.generationRunId },
         });
         if (kind === 'usage-update')
-          await expect(
-            prisma.generationUsage.update({
-              where: { id: usage.id },
-              data: { requestId: 'forged' },
-            }),
-          ).rejects.toThrow(/generation evidence is append-only/);
+          await expectExactDatabaseError(
+            () =>
+              prisma.generationUsage.update({
+                where: { id: usage.id },
+                data: { requestId: 'forged' },
+              }),
+            'generation evidence is append-only',
+            'P0001',
+          );
         else
-          await expect(prisma.generationUsage.delete({ where: { id: usage.id } })).rejects.toThrow(
-            /generation evidence is append-only/,
+          await expectExactDatabaseError(
+            () => prisma.generationUsage.delete({ where: { id: usage.id } }),
+            'generation evidence is append-only',
+            'P0001',
           );
       } else if (kind === 'source-link-update' || kind === 'source-link-delete') {
         const link = await prisma.questionSourceLink.findFirstOrThrow({
           where: { generationRunId: fixture.generationRunId },
         });
         if (kind === 'source-link-update')
-          await expect(
-            prisma.questionSourceLink.update({
-              where: { id: link.id },
-              data: { locator: 'forged' },
-            }),
-          ).rejects.toThrow(/question source identity|generation evidence is append-only/);
+          await expectExactDatabaseError(
+            () =>
+              prisma.questionSourceLink.update({
+                where: { id: link.id },
+                data: { locator: 'forged' },
+              }),
+            'generation evidence is append-only',
+            'P0001',
+          );
         else
-          await expect(
-            prisma.questionSourceLink.delete({ where: { id: link.id } }),
-          ).rejects.toThrow(/question source identity|generation evidence is append-only/);
+          await expectExactDatabaseError(
+            () => prisma.questionSourceLink.delete({ where: { id: link.id } }),
+            'generation evidence is append-only',
+            'P0001',
+          );
       } else if (
         kind === 'forged-context-item' ||
         kind === 'forged-context-lineage' ||
@@ -380,119 +553,137 @@ describe('D — direct database adversarial invariants', () => {
         const context = await prisma.generationContextItem.findFirstOrThrow({
           where: { generationRunId: fixture.generationRunId },
         });
-        await expect(
-          prisma.generationContextItem.create({
-            data: {
-              generationRunId: context.generationRunId,
-              selectedOrder: kind === 'duplicate-context-order' ? context.selectedOrder : 99,
-              knowledgeItemId: context.knowledgeItemId,
-              sourceVersionId: context.sourceVersionId,
-              locator: kind === 'forged-context-item' ? 'forged' : context.locator,
-              textHash: context.textHash,
-              curriculumVersionId: context.curriculumVersionId,
-              curriculumNodeId: context.curriculumNodeId,
-              rank: context.rank,
-              score: context.score,
-              characterCount: context.characterCount,
-              estimatedTokens: context.estimatedTokens,
-              lineage:
-                kind === 'forged-context-lineage'
-                  ? [
-                      {
-                        curriculumVersionId: '00000000-0000-4000-8000-000000000099',
-                        curriculumNodeId: context.curriculumNodeId,
-                      },
-                    ]
-                  : ((context.lineage ?? []) as any),
-            },
-          }),
-        ).rejects.toThrow(
-          /generation context identity or eligibility invalid|generation context complete lineage invalid|Unique constraint failed/,
-        );
+        const contextMessage =
+          kind === 'forged-context-item'
+            ? 'generation context identity or eligibility invalid'
+            : kind === 'forged-context-lineage'
+              ? 'generation context complete lineage invalid'
+              : 'Key (';
+        const contextSqlState = kind === 'duplicate-context-order' ? '23505' : 'P0001';
+        const contextAction =
+          kind === 'duplicate-context-order'
+            ? () =>
+                prisma.$executeRaw`INSERT INTO generation_context_items (id, generation_run_id, selected_order, knowledge_item_id, source_version_id, locator, text_hash, curriculum_version_id, curriculum_node_id, rank, score, character_count, estimated_tokens, lineage) SELECT gen_random_uuid(), generation_run_id, selected_order, knowledge_item_id, source_version_id, locator, text_hash, curriculum_version_id, curriculum_node_id, rank, score, character_count, estimated_tokens, lineage FROM generation_context_items WHERE id = ${context.id}::uuid`
+            : () =>
+                prisma.generationContextItem.create({
+                  data: {
+                    generationRunId: context.generationRunId,
+                    selectedOrder: 99,
+                    knowledgeItemId: context.knowledgeItemId,
+                    sourceVersionId: context.sourceVersionId,
+                    locator: kind === 'forged-context-item' ? 'forged' : context.locator,
+                    textHash: context.textHash,
+                    curriculumVersionId: context.curriculumVersionId,
+                    curriculumNodeId: context.curriculumNodeId,
+                    rank: context.rank,
+                    score: context.score,
+                    characterCount: context.characterCount,
+                    estimatedTokens: context.estimatedTokens,
+                    lineage:
+                      kind === 'forged-context-lineage'
+                        ? [
+                            {
+                              curriculumVersionId: '00000000-0000-4000-8000-000000000099',
+                              curriculumNodeId: context.curriculumNodeId,
+                            },
+                          ]
+                        : ((context.lineage ?? []) as any),
+                  },
+                });
+        await expectExactDatabaseError(contextAction, contextMessage, contextSqlState);
       } else if (kind === 'forged-question-run' || kind === 'forged-source-link') {
         const link = await prisma.questionSourceLink.findFirstOrThrow({
           where: { generationRunId: fixture.generationRunId },
         });
-        await expect(
-          prisma.questionSourceLink.update({
-            where: { id: link.id },
-            data:
-              kind === 'forged-question-run'
-                ? { generationRunId: '00000000-0000-4000-8000-000000000099' }
-                : { sourceVersionId: '00000000-0000-4000-8000-000000000099' },
-          }),
-        ).rejects.toThrow(/generation evidence is append-only/);
+        await expectExactDatabaseError(
+          () =>
+            prisma.questionSourceLink.update({
+              where: { id: link.id },
+              data:
+                kind === 'forged-question-run'
+                  ? { generationRunId: '00000000-0000-4000-8000-000000000099' }
+                  : { sourceVersionId: '00000000-0000-4000-8000-000000000099' },
+            }),
+          'generation evidence is append-only',
+          'P0001',
+        );
       } else if (kind === 'negative-usage')
-        await expect(
-          prisma.generationUsage.create({
-            data: {
-              generationRunId: fixture.generationRunId,
-              attempt: 1,
-              provider: 'x',
-              model: 'x',
-              requestId: 'd',
-              inputTokens: -1,
-              outputTokens: 0,
-              totalTokens: 0,
-              costMicros: 0,
-              finishReason: 'stop',
-            },
-          }),
-        ).rejects.toThrow(/generation usage values invalid|constraint/i);
+        await expectExactDatabaseError(
+          () =>
+            prisma.generationUsage.create({
+              data: {
+                generationRunId: fixture.generationRunId,
+                attempt: 1,
+                provider: 'x',
+                model: 'x',
+                requestId: 'd',
+                inputTokens: -1,
+                outputTokens: 0,
+                totalTokens: 0,
+                costMicros: 0,
+                finishReason: 'stop',
+              },
+            }),
+          'generation usage values invalid',
+          'P0001',
+        );
       else if (kind === 'duplicate-usage') {
         const usage = await prisma.generationUsage.findFirstOrThrow({
           where: { generationRunId: fixture.generationRunId },
         });
-        await expect(
-          prisma.generationUsage.create({
-            data: {
-              generationRunId: fixture.generationRunId,
-              attempt: usage.attempt,
-              provider: usage.provider,
-              model: usage.model,
-              requestId: `${usage.requestId}-duplicate`,
-              inputTokens: usage.inputTokens,
-              outputTokens: usage.outputTokens,
-              totalTokens: usage.totalTokens,
-              costMicros: usage.costMicros,
-              finishReason: usage.finishReason,
-            },
-          }),
-        ).rejects.toThrow(/constraint|Unique/i);
+        await expectExactDatabaseError(
+          () =>
+            prisma.$executeRaw`INSERT INTO generation_usages (id, generation_run_id, attempt, provider, model, request_id, input_tokens, output_tokens, total_tokens, cost_micros, finish_reason) SELECT gen_random_uuid(), generation_run_id, attempt, provider, model, request_id, input_tokens, output_tokens, total_tokens, cost_micros, finish_reason FROM generation_usages WHERE id = ${usage.id}::uuid`,
+          'Key (',
+          '23505',
+        );
       } else if (kind === 'duplicate-idempotency')
-        await expect(
-          prisma.generationRun.create({
-            data: { ...before, id: undefined, updatedAt: undefined, createdAt: undefined } as never,
-          }),
-        ).rejects.toThrow(/constraint|Unique/i);
+        await expectExactDatabaseError(
+          () =>
+            prisma.$executeRaw`INSERT INTO generation_runs SELECT * FROM generation_runs WHERE id = ${fixture.generationRunId}::uuid`,
+          'Key (',
+          '23505',
+        );
       else if (kind === 'terminal-reopen')
-        await expect(
-          prisma.generationRun.update({
-            where: { id: fixture.generationRunId },
-            data: { state: 'PENDING' },
-          }),
-        ).rejects.toThrow(/invalid generation run transition|constraint/i);
+        await expectExactDatabaseError(
+          () =>
+            prisma.generationRun.update({
+              where: { id: fixture.generationRunId },
+              data: { state: 'PENDING' },
+            }),
+          'invalid generation run transition',
+          'P0001',
+        );
       else if (kind === 'success-without-revision')
-        await expect(
-          prisma.generationRun.update({
-            where: { id: fixture.generationRunId },
-            data: { state: 'SUCCEEDED', processedAt: new Date() },
-          }),
-        ).rejects.toThrow(/successful generation|constraint/i);
+        await expectExactDatabaseError(
+          () =>
+            prisma.generationRun.update({
+              where: { id: fixture.generationRunId },
+              data: { state: 'SUCCEEDED', processedAt: new Date() },
+            }),
+          'invalid generation run transition',
+          'P0001',
+        );
       else if (kind === 'orphan-identity')
-        await expect(
-          prisma.generationRun.update({
-            where: { id: fixture.generationRunId },
-            data: { assessmentId: '00000000-0000-4000-8000-000000000099' },
-          }),
-        ).rejects.toThrow(/constraint|assessment|identity/i);
+        await expectExactDatabaseError(
+          () =>
+            prisma.generationRun.update({
+              where: { id: fixture.generationRunId },
+              data: { assessmentId: '00000000-0000-4000-8000-000000000099' },
+            }),
+          'generation assessment owner invalid',
+          'P0001',
+        );
       else if (kind === 'wrong-assessment-revision')
-        await expect(
-          prisma.generationRun.update({
-            where: { id: fixture.generationRunId },
-            data: { outputRevisionId: '00000000-0000-4000-8000-000000000099' },
-          }),
-        ).rejects.toThrow(/constraint|identity/i);
+        await expectExactDatabaseError(
+          () =>
+            prisma.generationRun.update({
+              where: { id: fixture.generationRunId },
+              data: { outputRevisionId: '00000000-0000-4000-8000-000000000099' },
+            }),
+          'invalid generation run transition',
+          'P0001',
+        );
       else throw new Error(`unhandled direct-db case: ${kind}`);
       const after = await prisma.generationRun.findUniqueOrThrow({
         where: { id: fixture.generationRunId },
@@ -559,44 +750,42 @@ describe('L — PostgreSQL generation-run transition matrix', () => {
       (from === 'PENDING' && to === 'PROCESSING') ||
       (from === 'PROCESSING' &&
         ['PENDING', 'SUCCEEDED', 'INSUFFICIENT_CONTEXT', 'FAILED'].includes(to));
-    const action = prisma.generationRun.update({
-      where: { id: fixture.generationRunId },
-      data:
-        legal && to === 'PROCESSING'
-          ? {
-              state: 'PROCESSING',
-              attempts: 1,
-              processingStartedAt: new Date(),
-              leaseExpiresAt: new Date(Date.now() + 5000),
-            }
-          : legal && to === 'PENDING'
-            ? { state: 'PENDING', leaseExpiresAt: null }
-            : legal && to === 'SUCCEEDED'
-              ? {
-                  state: 'SUCCEEDED',
-                  provider: 'fake',
-                  model: 'fake',
-                  outputRevisionId: before.outputRevisionId,
-                  processedAt: new Date(),
-                }
-              : legal
+    const action = () =>
+      prisma.generationRun.update({
+        where: { id: fixture.generationRunId },
+        data:
+          legal && to === 'PROCESSING'
+            ? {
+                state: 'PROCESSING',
+                attempts: 1,
+                processingStartedAt: new Date(),
+                leaseExpiresAt: new Date(Date.now() + 5000),
+              }
+            : legal && to === 'PENDING'
+              ? { state: 'PENDING', leaseExpiresAt: null }
+              : legal && to === 'SUCCEEDED'
                 ? {
-                    state: to as never,
-                    failureCode: 'CONTEXT_EMPTY',
+                    state: 'SUCCEEDED',
+                    provider: 'fake',
+                    model: 'fake',
+                    outputRevisionId: before.outputRevisionId,
                     processedAt: new Date(),
-                    leaseExpiresAt: null,
                   }
-                : { state: to as never },
-    });
+                : legal
+                  ? {
+                      state: to as never,
+                      failureCode: 'CONTEXT_EMPTY',
+                      processedAt: new Date(),
+                      leaseExpiresAt: null,
+                    }
+                  : { state: to as never },
+      });
     if (legal && from === 'PROCESSING' && to === 'SUCCEEDED')
       await expect(
         processGenerationRun(fixture.generationRunId, prisma, new DeterministicFakeModelGateway()),
       ).resolves.toMatchObject({ state: 'SUCCEEDED' });
-    else if (legal) await expect(action).resolves.toMatchObject({ state: to });
-    else
-      await expect(action).rejects.toThrow(
-        /invalid generation run transition|successful generation/,
-      );
+    else if (legal) await expect(action()).resolves.toMatchObject({ state: to });
+    else await expectExactDatabaseError(action, 'invalid generation run transition', 'P0001');
     const after = await prisma.generationRun.findUniqueOrThrow({
       where: { id: fixture.generationRunId },
     });

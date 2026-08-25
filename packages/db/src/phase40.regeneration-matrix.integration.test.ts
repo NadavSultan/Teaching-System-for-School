@@ -10,6 +10,14 @@ import {
   requestDraftGeneration,
   requestQuestionRegeneration,
 } from './index.js';
+async function expectedCitationCount(runId: string): Promise<number> {
+  const rows = await prisma.$queryRaw<Array<{ count: bigint }>>`
+    SELECT count(*)::bigint AS count
+    FROM generation_expected_question_citations
+    WHERE generation_run_id = ${runId}::uuid
+  `;
+  return Number(rows[0]!.count);
+}
 
 describe('Q — regeneration graph isolation and provenance', () => {
   const missingQuestionId = '00000000-0000-4000-8000-000000000099';
@@ -180,6 +188,22 @@ describe('Q — regeneration graph isolation and provenance', () => {
         return;
       }
       if (kind === 'concurrent-sequential-revisions') {
+        const concurrentEvidenceBefore = {
+          revisions: await prisma.assessmentRevision.count({
+            where: { assessmentId: fixture.assessmentId },
+          }),
+          usages: await prisma.generationUsage.count({
+            where: { generationRunId: fixture.generationRunId },
+          }),
+          links: await prisma.questionSourceLink.count({
+            where: { generationRunId: fixture.generationRunId },
+          }),
+          expectedLinks: await expectedCitationCount(fixture.generationRunId),
+          outbox: await prisma.outboxEvent.count({
+            where: { organizationId: fixture.context.organizationId },
+          }),
+          audit: 0,
+        };
         const [a, b] = await Promise.all([
           requestQuestionRegeneration(fixture.context, {
             version: '1.0.0',
@@ -204,8 +228,37 @@ describe('Q — regeneration graph isolation and provenance', () => {
           processGenerationRun(a.id, prisma, new DeterministicFakeModelGateway()),
           processGenerationRun(b.id, prisma, new DeterministicFakeModelGateway()),
         ]);
-        expect(results.every((result) => result?.state === 'SUCCEEDED')).toBe(true);
-        expect(new Set(results.map((result) => result?.outputRevisionId)).size).toBe(2);
+        expect(
+          results.map((result) => ({ state: result?.state, failureCode: result?.failureCode })),
+        ).toEqual([
+          { state: 'SUCCEEDED', failureCode: null },
+          { state: 'SUCCEEDED', failureCode: null },
+        ]);
+        expect(results[0]?.outputRevisionId).not.toBe(results[1]?.outputRevisionId);
+        const concurrentEvidenceAfter = {
+          revisions: await prisma.assessmentRevision.count({
+            where: { assessmentId: fixture.assessmentId },
+          }),
+          usages: await prisma.generationUsage.count({
+            where: { generationRunId: { in: [a.id, b.id] } },
+          }),
+          links: await prisma.questionSourceLink.count({
+            where: { generationRunId: { in: [a.id, b.id] } },
+          }),
+          expectedLinks: (await expectedCitationCount(a.id)) + (await expectedCitationCount(b.id)),
+          outbox: await prisma.outboxEvent.count({
+            where: { organizationId: fixture.context.organizationId },
+          }),
+          audit: await prisma.auditEvent.count({ where: { targetId: { in: [a.id, b.id] } } }),
+        };
+        expect(concurrentEvidenceAfter).toEqual({
+          revisions: concurrentEvidenceBefore.revisions + 2,
+          usages: 2,
+          links: concurrentEvidenceBefore.links * 2,
+          expectedLinks: concurrentEvidenceBefore.expectedLinks * 2,
+          outbox: concurrentEvidenceBefore.outbox + 2,
+          audit: concurrentEvidenceBefore.audit + 4,
+        });
         return;
       }
       const regeneration = await requestQuestionRegeneration(fixture.context, {
@@ -239,6 +292,38 @@ describe('Q — regeneration graph isolation and provenance', () => {
       const links = await prisma.questionSourceLink.findMany({
         where: { generationRunId: regeneration.id },
       });
+      const baseQuestionIds = base!
+        .revision!.sections.flatMap((section) => section.questions)
+        .filter((question) => question.id !== target!.id)
+        .map((question) => question.id);
+      const normalizeLink = (link: (typeof links)[number]) => ({
+        knowledgeItemId: link.knowledgeItemId,
+        sourceVersionId: link.sourceVersionId,
+        locator: link.locator,
+        textHash: link.textHash,
+        curriculumVersionId: link.curriculumVersionId,
+        curriculumNodeId: link.curriculumNodeId,
+        lineage: link.lineage,
+        priorQuestionId: link.priorQuestionId,
+      });
+      const carriedBaseLinks = (
+        await prisma.questionSourceLink.findMany({
+          where: { assessmentQuestionId: { in: baseQuestionIds } },
+          orderBy: [{ knowledgeItemId: 'asc' }, { assessmentQuestionId: 'asc' }],
+        })
+      ).map(normalizeLink);
+      const carriedOutputLinks = links
+        .filter((link) => link.lineage === 'CARRIED_FORWARD')
+        .map(normalizeLink)
+        .sort((a, b) => a.knowledgeItemId.localeCompare(b.knowledgeItemId));
+      expect(carriedOutputLinks).toEqual(
+        carriedBaseLinks.map((link) => ({
+          ...link,
+          lineage: 'CARRIED_FORWARD',
+          priorQuestionId: expect.any(String),
+        })),
+      );
+      expect(carriedOutputLinks).toHaveLength(carriedBaseLinks.length);
       expect(
         links.filter((link) => link.lineage === 'GENERATED' && link.priorQuestionId === target!.id),
       ).toHaveLength(1);
@@ -249,7 +334,7 @@ describe('Q — regeneration graph isolation and provenance', () => {
         );
       }
       if (kind === 'carried-forward-links')
-        expect(links.filter((link) => link.lineage === 'CARRIED_FORWARD')).not.toHaveLength(0);
+        expect(carriedOutputLinks.length).toBe(carriedBaseLinks.length);
       if (kind === 'idempotent-retry') expect(retry.id).toBe(regeneration.id);
     },
   );

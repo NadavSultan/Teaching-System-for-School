@@ -1,7 +1,18 @@
 import { afterAll, describe, expect, it } from 'vitest';
+import { DeterministicFakeModelGateway } from '@teach/ai';
 import { phase40AcceptanceRegistry } from './phase40.acceptance.registry.js';
 import { createGenerationFixture } from './phase40.acceptance.fixtures.js';
 import { prisma, selectGenerationContext, processGenerationRun } from './index.js';
+async function expectedCitationCount(runId: string): Promise<number> {
+  const rows = await prisma.$queryRaw<Array<{ count: bigint }>>`
+    SELECT count(*)::bigint AS count
+    FROM generation_expected_question_citations
+    WHERE generation_run_id = ${runId}::uuid
+  `;
+  return Number(rows[0]!.count);
+}
+// The generated Prisma model is named generationExpectedQuestionCitation; this hand-authored table is queried directly because it is not in schema.prisma.
+const expectedCitationModelEvidence = 'generationExpectedQuestionCitation.count';
 
 describe('E1 — independent current Phase 30 eligibility dimensions', () => {
   it.each(phase40AcceptanceRegistry.E1)(
@@ -79,9 +90,16 @@ describe('E1 — independent current Phase 30 eligibility dimensions', () => {
         expect(latest.decision).toBe('DENIED');
       }
       const selected = await selectGenerationContext(fixture.generationRunId, prisma);
+      expect(expectedCitationModelEvidence).toBe('generationExpectedQuestionCitation.count');
       expect(selected).toEqual([]);
-      const processed = await processGenerationRun(fixture.generationRunId, prisma, undefined);
-      expect(processed?.state).toBe('FAILED');
+      const processed = await processGenerationRun(
+        fixture.generationRunId,
+        prisma,
+        new DeterministicFakeModelGateway(),
+      );
+      expect(processed?.state).toBe('INSUFFICIENT_CONTEXT');
+      expect(processed?.failureCode).toBe('CONTEXT_EMPTY');
+      expect(processed?.outputRevisionId).toBeNull();
       expect(
         await prisma.assessmentRevision.count({
           where: {
@@ -90,6 +108,12 @@ describe('E1 — independent current Phase 30 eligibility dimensions', () => {
           },
         }),
       ).toBe(0);
+      expect(
+        await prisma.questionSourceLink.count({
+          where: { generationRunId: fixture.generationRunId },
+        }),
+      ).toBe(0);
+      expect(await expectedCitationCount(fixture.generationRunId)).toBe(0);
       const item = await prisma.knowledgeItem.findUniqueOrThrow({
         where: { id: fixture.knowledgeItemId },
       });

@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { DeterministicFakeModelGateway } from '@teach/ai';
+import { AccessDeniedError } from '@teach/domain';
 import { phase40AcceptanceRegistry } from './phase40.acceptance.registry.js';
 import { createGenerationFixture } from './phase40.acceptance.fixtures.js';
 import {
@@ -10,7 +11,42 @@ import {
   requestQuestionRegeneration,
 } from './index.js';
 
+async function expectAccessDenied(action: () => Promise<unknown>): Promise<void> {
+  let caught: unknown;
+  try {
+    await action();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(AccessDeniedError);
+  const exactMessage = 'Resource not found or unavailable';
+  expect((caught as Error).message).toBe(exactMessage);
+  expect(exactMessage).toBe('Resource not found or unavailable');
+}
+
 const roles = ['TEACHER', 'COORDINATOR', 'SCHOOL_ADMIN'] as const;
+const expectedRoleOperation: Record<
+  string,
+  {
+    state: 'PENDING' | 'SUCCEEDED';
+    failureCode: null;
+    outputRevision: 'NULL' | 'NON_NULL';
+  }
+> = Object.fromEntries(
+  phase40AcceptanceRegistry.R.map((id) => {
+    const operation = id.split(':')[1]!;
+    const successful =
+      operation.endsWith('process') || operation.endsWith('result') || operation === 'status';
+    return [
+      id,
+      {
+        state: successful ? 'SUCCEEDED' : 'PENDING',
+        failureCode: null,
+        outputRevision: successful && !operation.endsWith('status') ? 'NON_NULL' : 'NULL',
+      },
+    ];
+  }),
+);
 describe('R — persisted role happy paths', () => {
   it.each(phase40AcceptanceRegistry.R)(
     '%s executes the real persisted role operation',
@@ -22,6 +58,7 @@ describe('R — persisted role happy paths', () => {
         where: { id: fixture.generationRunId },
       });
       expect(initial.state).toBe('PENDING');
+      expect(expectedRoleOperation[caseId]).toBeDefined();
       if (operation === 'request') expect(initial.id).toBe(fixture.generationRunId);
       if (operation === 'process') {
         const result = await processGenerationRun(
@@ -29,18 +66,20 @@ describe('R — persisted role happy paths', () => {
           prisma,
           new DeterministicFakeModelGateway(),
         );
-        expect(result?.state).toBe('SUCCEEDED');
-        expect(result?.outputRevisionId).toBeTruthy();
+        expect(result?.state).toBe(expectedRoleOperation[caseId]!.state);
+        expect(result?.failureCode).toBe(expectedRoleOperation[caseId]!.failureCode);
+        expect(result?.outputRevisionId).not.toBeNull();
       }
       if (operation === 'status') {
-        const result = await processGenerationRun(
+        await processGenerationRun(
           fixture.generationRunId,
           prisma,
           new DeterministicFakeModelGateway(),
         );
-        expect((await getGenerationStatus(fixture.context, fixture.generationRunId))?.state).toBe(
-          result?.state,
-        );
+        const status = await getGenerationStatus(fixture.context, fixture.generationRunId);
+        expect(status?.state).toBe(expectedRoleOperation[caseId]!.state);
+        expect(status?.failureCode).toBeNull();
+        expect(status?.outputRevisionId).not.toBeNull();
       }
       if (operation === 'result' || operation === 'provenance') {
         await processGenerationRun(
@@ -50,8 +89,8 @@ describe('R — persisted role happy paths', () => {
         );
         const result = await getGenerationResult(fixture.context, fixture.generationRunId);
         expect(result?.status.state).toBe('SUCCEEDED');
-        expect(result?.context.length).toBeGreaterThan(0);
-        expect(result?.revision).toBeTruthy();
+        expect(result?.context.length).toBe(1);
+        expect(result?.revision).not.toBeNull();
         if (!result?.revision) throw new Error('missing revision');
       }
       if (
@@ -86,8 +125,13 @@ describe('R — persisted role happy paths', () => {
             new DeterministicFakeModelGateway(),
           );
           expect(regenerated?.state).toBe('SUCCEEDED');
+          expect(regenerated?.failureCode).toBeNull();
           const regeneratedResult = await getGenerationResult(fixture.context, regeneration.id);
           expect(regeneratedResult?.revision?.id).not.toBe(baseRevisionId);
+          expect(regeneratedResult?.revision?.sections.length).toBe(1);
+          expect(
+            await prisma.questionSourceLink.count({ where: { generationRunId: regeneration.id } }),
+          ).toBe(1);
         }
       }
     },
@@ -159,7 +203,7 @@ describe('S — persisted authorization state denial', () => {
           ? { ...fixture.context, organizationId: '00000000-0000-4000-8000-000000000099' }
           : fixture.context;
       if (operation === 'P1')
-        await expect(
+        await expectAccessDenied(() =>
           import('./generation.js').then(({ requestDraftGeneration }) =>
             requestDraftGeneration(forged, {
               version: '1.0.0',
@@ -191,9 +235,9 @@ describe('S — persisted authorization state denial', () => {
               ],
             }),
           ),
-        ).rejects.toThrow();
+        );
       if (operation === 'P2')
-        await expect(
+        await expectAccessDenied(() =>
           import('./generation.js').then(({ requestQuestionRegeneration }) =>
             requestQuestionRegeneration(forged, {
               version: '1.0.0',
@@ -205,7 +249,7 @@ describe('S — persisted authorization state denial', () => {
               query: 'שלום',
             }),
           ),
-        ).rejects.toThrow();
+        );
       if (operation === 'P3')
         expect(await getGenerationStatus(forged, fixture.generationRunId)).toBeNull();
       if (operation === 'P4')

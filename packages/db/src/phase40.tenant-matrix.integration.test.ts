@@ -42,6 +42,19 @@ const draftRequest = (foreign: Awaited<ReturnType<typeof createGenerationFixture
   ],
 });
 
+async function expectAccessDenied(action: () => Promise<unknown>): Promise<void> {
+  let caught: unknown;
+  try {
+    await action();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(AccessDeniedError);
+  const exactMessage = 'Resource not found or unavailable';
+  expect((caught as Error).message).toBe(exactMessage);
+  expect(exactMessage).toBe('Resource not found or unavailable');
+}
+
 describe('T — persisted bidirectional tenant matrix', () => {
   it.each(phase40AcceptanceRegistry.T)(
     '%s denies or discloses nothing across tenant ownership',
@@ -67,11 +80,11 @@ describe('T — persisted bidirectional tenant matrix', () => {
       if (!foreignBase?.outputRevisionId || !foreignQuestion)
         throw new Error('foreign finalized graph missing');
       if (operation === 'P1')
-        await expect(
+        await expectAccessDenied(() =>
           requestDraftGeneration(caller.context, draftRequest(target)),
-        ).rejects.toBeInstanceOf(AccessDeniedError);
+        );
       if (operation === 'P2')
-        await expect(
+        await expectAccessDenied(() =>
           requestQuestionRegeneration(caller.context, {
             version: '1.0.0',
             assessmentId: target.assessmentId,
@@ -81,19 +94,21 @@ describe('T — persisted bidirectional tenant matrix', () => {
             instruction: 'ניסוח',
             query: 'שלום',
           }),
-        ).rejects.toMatchObject({
-          constructor: AccessDeniedError,
-          message: 'Resource not found or unavailable',
-        });
+        );
       if (operation === 'P3')
         expect(await getGenerationStatus(caller.context, target.generationRunId)).toBeNull();
       if (operation === 'P4')
         expect(await getGenerationResult(caller.context, target.generationRunId)).toBeNull();
       expect(
         await prisma.generationRun.count({
-          where: { organizationId: target.context.organizationId },
+          where: { organizationId: foreign.context.organizationId },
         }),
-      ).toBe(direction === 'A->B' ? foreignRunCount : ownerRunCount);
+      ).toBe(foreignRunCount);
+      expect(
+        await prisma.generationRun.count({
+          where: { organizationId: owner.context.organizationId },
+        }),
+      ).toBe(ownerRunCount);
     },
   );
 });
