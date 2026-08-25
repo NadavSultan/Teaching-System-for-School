@@ -19,7 +19,6 @@ type Expected = {
   expectedCitationCount: number;
 };
 
-// prettier-ignore
 const gatewayExpectedByOutcome: Record<string, Expected> = {
   'valid-draft': {
     state: 'SUCCEEDED',
@@ -39,7 +38,7 @@ const gatewayExpectedByOutcome: Record<string, Expected> = {
     sourceLinkCount: 1,
     expectedCitationCount: 1,
   },
-  'malformed': {
+  malformed: {
     state: 'FAILED',
     failureCode: 'SCHEMA_INVALID',
     attempts: 1,
@@ -57,7 +56,7 @@ const gatewayExpectedByOutcome: Record<string, Expected> = {
     sourceLinkCount: 0,
     expectedCitationCount: 0,
   },
-  'timeout': {
+  timeout: {
     state: 'SUCCEEDED',
     failureCode: null,
     attempts: 2,
@@ -102,7 +101,7 @@ const gatewayExpectedByOutcome: Record<string, Expected> = {
     sourceLinkCount: 0,
     expectedCitationCount: 0,
   },
-  'replay': {
+  replay: {
     state: 'SUCCEEDED',
     failureCode: null,
     attempts: 1,
@@ -113,7 +112,6 @@ const gatewayExpectedByOutcome: Record<string, Expected> = {
   },
 };
 
-// prettier-ignore
 const adversarialExpectedByKind: Record<string, Expected> = {
   'valid-planned-draft': {
     state: 'SUCCEEDED',
