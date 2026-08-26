@@ -1,20 +1,20 @@
 # Project State
 
-Last updated: 2026-08-24
+Last updated: 2026-08-26
 
-| Field                     | State                                                                                                                                                                  |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Current Phase             | 40 — Generation Engine implementation authorized and in progress                                                                                                       |
-| Completed Phases          | 00 — Product Control & System Architecture; 10 — Secure Foundation and Contracts; 20 — Curriculum and Assessment Domain; 30 — Source Registry and Controlled Knowledge |
-| Next Phase                | Phase 50 remains blocked pending independent Phase 40 approval                                                                                                         |
-| Architecture Version      | 1.0                                                                                                                                                                    |
-| Curriculum Schema Version | 1.0.0 established by approved Phase 20                                                                                                                                 |
-| Knowledge Schema Version  | 1.0.0 established by approved Phase 30                                                                                                                                 |
-| Assessment Schema Version | 1.0.0 established by approved Phase 20                                                                                                                                 |
-| Open ADRs                 | None; ADR-001 through ADR-007 are APPROVED                                                                                                                             |
-| Technical Debt            | TD-001–TD-006 and TD-008–TD-013 closed; TD-007 intentionally deferred                                                                                                  |
-| Known Risks               | R-001 through R-014 in risk register                                                                                                                                   |
-| Blocking Issues           | Phase 50 is blocked until independent Phase 40 approval; live provider evaluation requires owner approval and provider decision                                        |
+| Field                     | State                                                                                                                                                                                          |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Current Phase             | 50 — Validation Engine authorized for implementation                                                                                                                                           |
+| Completed Phases          | 00 — Product Control & System Architecture; 10 — Secure Foundation and Contracts; 20 — Curriculum and Assessment Domain; 30 — Source Registry and Controlled Knowledge; 40 — Generation Engine |
+| Next Phase                | Phase 60 remains blocked pending independent Phase 50 approval                                                                                                                                 |
+| Architecture Version      | 1.0                                                                                                                                                                                            |
+| Curriculum Schema Version | 1.0.0 established by approved Phase 20                                                                                                                                                         |
+| Knowledge Schema Version  | 1.0.0 established by approved Phase 30                                                                                                                                                         |
+| Assessment Schema Version | 1.0.0 established by approved Phase 20                                                                                                                                                         |
+| Open ADRs                 | None; ADR-001 through ADR-007 are APPROVED                                                                                                                                                     |
+| Technical Debt            | TD-001–TD-006 and TD-008–TD-013 closed; TD-007 intentionally deferred                                                                                                                          |
+| Known Risks               | R-001 through R-014 in risk register                                                                                                                                                           |
+| Blocking Issues           | Phase 60 is blocked until independent Phase 50 approval; live provider/evaluator activation requires owner approval and provider decision                                                      |
 
 ## Architectural invariants
 
