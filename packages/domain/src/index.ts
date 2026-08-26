@@ -1,4 +1,5 @@
 import type { AuthenticatedPrincipal } from '@teach/contracts';
+export * from './validation.js';
 
 export type MembershipRole = 'TEACHER' | 'COORDINATOR' | 'SCHOOL_ADMIN' | 'PLATFORM_ADMIN';
 export type WorkspaceType = 'PERSONAL' | 'SCHOOL';

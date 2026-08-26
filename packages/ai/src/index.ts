@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+export * from './semantic-evaluator.js';
 
 export type GatewayOutcome =
   | 'valid-draft'
