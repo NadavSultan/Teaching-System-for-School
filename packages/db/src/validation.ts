@@ -85,9 +85,21 @@ async function ownedRun(context: AccessContext, runId: string, client: Db) {
  * link metadata.
  */
 function toValidationSnapshot(revision: any) {
-  const outputRun = revision.outputGenerationRuns?.find(
-    (run: any) => run.state === 'SUCCEEDED' && run.outputRevisionId === revision.id,
+  const linkedRuns = revision.sections.flatMap((section: any) =>
+    section.questions.flatMap((question: any) =>
+      question.questionSourceLinks.map((link: any) => link.generationRunId),
+    ),
   );
+  const linkedRunIds = [...new Set(linkedRuns)];
+  const outputRun =
+    linkedRunIds.length === 1
+      ? revision.outputGenerationRuns?.find(
+          (run: any) =>
+            run.id === linkedRunIds[0] &&
+            run.state === 'SUCCEEDED' &&
+            run.outputRevisionId === revision.id,
+        )
+      : undefined;
   const specification = outputRun?.frozenSpecification as any;
   const frozenPlan = specification?.sections
     ? {
@@ -107,10 +119,7 @@ function toValidationSnapshot(revision: any) {
     const sourceVersion = link.sourceVersion;
     const source = sourceVersion.source;
     const review = latest(sourceVersion.reviews ?? [], () => true);
-    const permission = latest(
-      sourceVersion.permissions ?? [],
-      (row) => row.validUntil === null || row.validUntil > new Date(),
-    );
+    const permission = latest(sourceVersion.permissions ?? [], () => true);
     const run = link.generationRun;
     return {
       questionId: question.id,
@@ -128,7 +137,9 @@ function toValidationSnapshot(revision: any) {
       },
       eligibility: {
         pedagogicalApproved: review?.decision === 'APPROVED',
-        usageAllowed: permission?.decision === 'ALLOWED',
+        usageAllowed:
+          permission?.decision === 'ALLOWED' &&
+          (permission.validUntil === null || permission.validUntil > new Date()),
         sourceLifecycle: source.lifecycleEvents?.[0]?.toStatus ?? sourceVersion.lifecycle,
         itemLifecycle: link.knowledgeItem.status,
         visibilityPermitted:
@@ -519,7 +530,10 @@ export async function processValidationRun(validationRunId: string, client: Pris
                       include: {
                         source: {
                           include: {
-                            lifecycleEvents: { orderBy: { createdAt: 'desc' }, take: 1 },
+                            lifecycleEvents: {
+                              orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+                              take: 1,
+                            },
                           },
                         },
                         reviews: { orderBy: { createdAt: 'desc' } },
@@ -576,11 +590,7 @@ export async function processValidationRun(validationRunId: string, client: Pris
           : [];
       }),
     );
-    const evaluator = new DeterministicFakeSemanticEvaluator({
-      version: '1.0.0',
-      revisionId: claimed.assessmentRevisionId,
-      findings: [],
-    });
+    const evaluator = new DeterministicFakeSemanticEvaluator();
     parseSemanticEvaluatorOutput(
       await evaluator.evaluate({
         revisionId: claimed.assessmentRevisionId,

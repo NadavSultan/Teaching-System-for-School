@@ -84,6 +84,18 @@ export const snapshot = () => ({
   ],
 });
 const result = (value: unknown) => evaluateDeterministicRules(value);
+const expectAllPass = (value: unknown) => {
+  const rows = result(value);
+  expect(rows).toHaveLength(11);
+  expect(rows.map((row) => row.ruleId)).toEqual(validationRules);
+  expect(rows.map((row) => row.ruleVersion)).toEqual(Array(11).fill('1.0.0'));
+  expect(rows.map((row) => row.outcome)).toEqual(Array(11).fill('PASS'));
+  expect(rows.map((row) => row.finding)).toEqual(Array(11).fill(undefined));
+  for (const row of rows) {
+    expect(row.evidence).toMatchObject({ ruleId: row.ruleId });
+    expect(Object.isFrozen(row.evidence)).toBe(true);
+  }
+};
 const expectFails = (value: unknown, ids: string[]) => {
   const rows = result(value);
   expect(rows).toHaveLength(11);
@@ -95,10 +107,54 @@ const expectFails = (value: unknown, ids: string[]) => {
     expect(Object.isFrozen(row.evidence)).toBe(true);
   }
 };
+const withSubQuestion = (changes: Record<string, unknown> = {}) => {
+  const base = snapshot();
+  const question = base.sections[0]!.questions[0]!;
+  return {
+    ...base,
+    sections: [
+      {
+        ...base.sections[0]!,
+        questions: [
+          {
+            ...question,
+            subQuestions: [
+              {
+                id: 'sq1',
+                key: 'sq1',
+                prompt: 'תת שאלה',
+                instructions: '',
+                order: 0,
+                scoreUnits: null,
+                answers: [{ ownerType: 'SUBQUESTION', ownerId: 'sq1', text: 'תשובת משנה' }],
+                rubrics: [{ ownerType: 'SUBQUESTION', ownerId: 'sq1', scoreUnits: null }],
+                subQuestions: [],
+                questionSourceLinks: [],
+                ...changes,
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+};
 describe('Package 1B deterministic matrix', () => {
   it('D01 valid WORKSHEET revision has all eleven ordered executions PASS', () =>
-    expect(result(snapshot()).every((r) => r.outcome === 'PASS')).toBe(true));
+    expectAllPass(snapshot()));
   it('D02 valid TEST revision has exact 10000-unit scoring and all eleven executions PASS', () => {
+    const subQuestion = {
+      id: 'sq1',
+      key: 'sq1',
+      prompt: 'תת שאלה',
+      instructions: '',
+      order: 0,
+      scoreUnits: 10000,
+      answers: [{ ownerType: 'SUBQUESTION', ownerId: 'sq1', text: 'תשובת משנה' }],
+      rubrics: [{ ownerType: 'SUBQUESTION', ownerId: 'sq1', scoreUnits: 10000 }],
+      subQuestions: [],
+      questionSourceLinks: [],
+    };
     const s = {
       ...snapshot(),
       assessmentType: 'TEST' as const,
@@ -108,16 +164,26 @@ describe('Package 1B deterministic matrix', () => {
         {
           ...snapshot().sections[0]!,
           scoreUnits: 10000,
-          questions: [{ ...snapshot().sections[0]!.questions[0]!, scoreUnits: 10000 }],
+          questions: [
+            {
+              ...snapshot().sections[0]!.questions[0]!,
+              scoreUnits: 10000,
+              rubrics: [],
+              subQuestions: [subQuestion],
+            },
+          ],
         },
       ],
     };
-    expect(result(s).every((r) => r.outcome === 'PASS')).toBe(true);
+    expectAllPass(s);
   });
-  it('D03 persisted graph that cannot map to the strict revision contract is rejected', () =>
-    expectFails({}, ['STRICT_REVISION_CONTRACT']));
-  it('D04 required revision ownership field absent fails the intended blocking rule', () =>
-    expectFails({ ...snapshot(), ownerOrganizationId: 'other' }, ['REVISION_FINALIZED_AND_OWNED']));
+  it('D03 persisted graph that cannot map to the strict revision contract is rejected', () => {
+    expectFails({}, [...validationRules]);
+  });
+  it('D04 required revision field absent fails strict contract', () => {
+    const { ownerOrganizationId: _ownerOrganizationId, ...withoutOwner } = snapshot();
+    expectFails(withoutOwner, [...validationRules]);
+  });
   it('missing strict field fails closed at contract boundary', () => {
     expectFails(
       {
@@ -129,10 +195,10 @@ describe('Package 1B deterministic matrix', () => {
           },
         ],
       },
-      ['STRICT_REVISION_CONTRACT'],
+      [...validationRules],
     );
-    expectFails({ ...snapshot(), assessmentType: 'ALIEN' }, ['STRICT_REVISION_CONTRACT']);
-    expectFails({ ...snapshot(), scoringMode: 'ALIEN' }, ['STRICT_REVISION_CONTRACT']);
+    expectFails({ ...snapshot(), assessmentType: 'ALIEN' }, [...validationRules]);
+    expectFails({ ...snapshot(), scoringMode: 'ALIEN' }, [...validationRules]);
   });
   it('D05 frozen-plan question count differs and fails only the plan rule', () =>
     expectFails({ ...snapshot(), frozenPlan: { questions: [] } }, ['PLAN_COUNT_KEY_ORDER']));
@@ -148,9 +214,31 @@ describe('Package 1B deterministic matrix', () => {
       },
       ['CURRICULUM_SCOPE_PUBLISHED'],
     ));
-  it('D07 unknown or cross-version curriculum node fails curriculum scope', () =>
-    expectFails({ ...snapshot(), curriculumNodeIds: ['unknown'] }, ['CURRICULUM_SCOPE_PUBLISHED']));
-  it('D09 required question and subquestion answers are independently required', () =>
+  it('D07 unknown or cross-version curriculum node fails curriculum scope', () => {
+    expectFails({ ...snapshot(), curriculumNodeIds: ['unknown'] }, ['CURRICULUM_SCOPE_PUBLISHED']);
+    const crossVersion = snapshot();
+    expectFails(
+      {
+        ...crossVersion,
+        curriculumVersion: { id: 'cv2', status: 'PUBLISHED' as const, nodeIds: ['n2'] },
+        sections: [
+          {
+            ...crossVersion.sections[0]!,
+            questions: [
+              {
+                ...crossVersion.sections[0]!.questions[0]!,
+                questionSourceLinks: [
+                  { ...link(), provenance: { ...link().provenance, curriculumVersionId: 'cv2' } },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      ['CURRICULUM_SCOPE_PUBLISHED'],
+    );
+  });
+  it('D09 required question and subquestion answers are independently required', () => {
     expectFails(
       {
         ...snapshot(),
@@ -162,7 +250,9 @@ describe('Package 1B deterministic matrix', () => {
         ],
       },
       ['ANSWER_COMPLETENESS_AND_TARGETS'],
-    ));
+    );
+    expectFails(withSubQuestion({ answers: [] }), ['ANSWER_COMPLETENESS_AND_TARGETS']);
+  });
   it('D10 question and subquestion answer or rubric owner type and ID must match', () => {
     expectFails(
       {
@@ -193,32 +283,130 @@ describe('Package 1B deterministic matrix', () => {
       },
       ['ANSWER_COMPLETENESS_AND_TARGETS'],
     );
-  });
-  it('D11 assessment section question and subquestion score totals use the approved score tree', () =>
     expectFails(
       {
-        ...snapshot(),
-        scoringMode: 'POINTS' as const,
-        assessmentType: 'TEST' as const,
-        totalScoreUnits: 10,
-      },
-      ['EXACT_SCORE_TREE'],
-    ));
-  it('D12 rubric allocation incomplete or internally inconsistent fails scoring', () =>
-    expectFails(
-      {
-        ...snapshot(),
-        scoringMode: 'POINTS' as const,
-        assessmentType: 'TEST' as const,
-        totalScoreUnits: 100,
+        ...withSubQuestion(),
         sections: [
           {
-            ...snapshot().sections[0]!,
-            scoreUnits: 100,
+            ...withSubQuestion().sections[0]!,
             questions: [
               {
-                ...snapshot().sections[0]!.questions[0]!,
+                ...withSubQuestion().sections[0]!.questions[0]!,
+                rubrics: [{ ownerType: 'QUESTION', ownerId: 'wrong', scoreUnits: null }],
+              },
+            ],
+          },
+        ],
+      },
+      ['ANSWER_COMPLETENESS_AND_TARGETS'],
+    );
+    expectFails(
+      withSubQuestion({ answers: [{ ownerType: 'QUESTION', ownerId: 'q1', text: 'x' }] }),
+      ['ANSWER_COMPLETENESS_AND_TARGETS'],
+    );
+    expectFails(
+      withSubQuestion({
+        rubrics: [{ ownerType: 'SUBQUESTION', ownerId: 'wrong', scoreUnits: null }],
+      }),
+      ['ANSWER_COMPLETENESS_AND_TARGETS'],
+    );
+  });
+  it('D11 assessment section question and subquestion score totals use the approved score tree', () => {
+    const base = withSubQuestion();
+    const sub = base.sections[0]!.questions[0]!.subQuestions[0]!;
+    const valid = {
+      ...base,
+      assessmentType: 'TEST' as const,
+      scoringMode: 'POINTS' as const,
+      totalScoreUnits: 10000,
+      sections: [
+        {
+          ...base.sections[0]!,
+          scoreUnits: 10000,
+          questions: [
+            {
+              ...base.sections[0]!.questions[0]!,
+              scoreUnits: 10000,
+              subQuestions: [
+                {
+                  ...sub,
+                  scoreUnits: 10000,
+                  rubrics: [{ ownerType: 'SUBQUESTION', ownerId: 'sq1', scoreUnits: 10000 }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    expectFails({ ...valid, totalScoreUnits: 9999 }, ['EXACT_SCORE_TREE']);
+    expectFails({ ...valid, sections: [{ ...valid.sections[0]!, scoreUnits: 9999 }] }, [
+      'EXACT_SCORE_TREE',
+    ]);
+    expectFails(
+      {
+        ...valid,
+        sections: [
+          {
+            ...valid.sections[0]!,
+            questions: [{ ...valid.sections[0]!.questions[0]!, scoreUnits: 9999 }],
+          },
+        ],
+      },
+      ['EXACT_SCORE_TREE'],
+    );
+    expectFails(
+      {
+        ...valid,
+        sections: [
+          {
+            ...valid.sections[0]!,
+            questions: [
+              {
+                ...valid.sections[0]!.questions[0]!,
+                subQuestions: [{ ...sub, scoreUnits: 9999 }],
+              },
+            ],
+          },
+        ],
+      },
+      ['EXACT_SCORE_TREE'],
+    );
+  });
+  it('D12 rubric allocation incomplete or internally inconsistent fails scoring', () => {
+    const base = withSubQuestion();
+    const q = base.sections[0]!.questions[0]!;
+    const valid = {
+      ...base,
+      assessmentType: 'TEST' as const,
+      scoringMode: 'POINTS' as const,
+      totalScoreUnits: 100,
+      sections: [
+        {
+          ...base.sections[0]!,
+          scoreUnits: 100,
+          questions: [
+            {
+              ...q,
+              scoreUnits: 100,
+              subQuestions: [],
+              rubrics: [{ ownerType: 'QUESTION', ownerId: 'q1', scoreUnits: 100 }],
+            },
+          ],
+        },
+      ],
+    };
+    expectFails(
+      {
+        ...valid,
+        sections: [
+          {
+            ...valid.sections[0]!,
+            questions: [
+              {
+                ...q,
                 scoreUnits: 100,
+                subQuestions: [],
                 rubrics: [{ ownerType: 'QUESTION', ownerId: 'q1', scoreUnits: 50 }],
               },
             ],
@@ -226,8 +414,29 @@ describe('Package 1B deterministic matrix', () => {
         ],
       },
       ['EXACT_SCORE_TREE'],
-    ));
-  it('D13 duplicate stable question and subquestion IDs fail identity', () =>
+    );
+    expectFails(
+      {
+        ...valid,
+        sections: [
+          {
+            ...valid.sections[0]!,
+            questions: [
+              {
+                ...valid.sections[0]!.questions[0]!,
+                rubrics: [
+                  { ownerType: 'QUESTION', ownerId: 'q1', scoreUnits: 60 },
+                  { ownerType: 'QUESTION', ownerId: 'q1', scoreUnits: 60 },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      ['EXACT_SCORE_TREE'],
+    );
+  });
+  it('D13 duplicate stable question and subquestion IDs fail identity', () => {
     expectFails(
       {
         ...snapshot(),
@@ -255,8 +464,28 @@ describe('Package 1B deterministic matrix', () => {
         },
       },
       ['STABLE_ID_AND_EXACT_DUPLICATE'],
-    ));
-  it('D14 exact normalized duplicate question text fails identity', () =>
+    );
+    const base = withSubQuestion();
+    const sub = base.sections[0]!.questions[0]!.subQuestions[0]!;
+    expectFails(
+      {
+        ...base,
+        sections: [
+          {
+            ...base.sections[0]!,
+            questions: [
+              {
+                ...base.sections[0]!.questions[0]!,
+                subQuestions: [sub, { ...sub }],
+              },
+            ],
+          },
+        ],
+      },
+      ['STABLE_ID_AND_EXACT_DUPLICATE'],
+    );
+  });
+  it('D14 exact normalized duplicate question text fails identity', () => {
     expectFails(
       {
         ...snapshot(),
@@ -291,7 +520,46 @@ describe('Package 1B deterministic matrix', () => {
         },
       },
       ['STABLE_ID_AND_EXACT_DUPLICATE'],
-    ));
+    );
+    const duplicate = (first: string, second: string) =>
+      expectFails(
+        {
+          ...snapshot(),
+          sections: [
+            {
+              ...snapshot().sections[0]!,
+              questions: [
+                { ...snapshot().sections[0]!.questions[0]!, prompt: first },
+                {
+                  ...snapshot().sections[0]!.questions[0]!,
+                  id: 'q2',
+                  key: 'q2',
+                  order: 1,
+                  prompt: second,
+                  answers: [{ ownerType: 'QUESTION', ownerId: 'q2', text: 'תגובה' }],
+                  questionSourceLinks: [
+                    {
+                      ...link(),
+                      questionId: 'q2',
+                      provenance: { ...link().provenance, questionId: 'q2' },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+          frozenPlan: {
+            questions: [
+              { key: 'q1', order: 0 },
+              { key: 'q2', order: 1 },
+            ],
+          },
+        },
+        ['STABLE_ID_AND_EXACT_DUPLICATE'],
+      );
+    duplicate('Ａ ב', 'A ב');
+    duplicate('ש\u00a0אלה', 'ש אלה');
+  });
   it('near match remains distinct', () =>
     expect(
       result({
@@ -360,7 +628,11 @@ describe('Package 1B deterministic matrix', () => {
           },
         ],
       },
-      ['SOURCE_LINK_COMPLETENESS_AND_IDENTITY'],
+      [
+        'SOURCE_LINK_COMPLETENESS_AND_IDENTITY',
+        'CURRENT_SOURCE_ELIGIBILITY',
+        'GENERATION_REVISION_PROVENANCE',
+      ],
     );
     for (const change of [{ locator: '' }, { contentHash: '' }])
       expectFails(
@@ -399,10 +671,14 @@ describe('Package 1B deterministic matrix', () => {
           },
         ],
       },
-      ['SOURCE_LINK_COMPLETENESS_AND_IDENTITY'],
+      [
+        'SOURCE_LINK_COMPLETENESS_AND_IDENTITY',
+        'CURRENT_SOURCE_ELIGIBILITY',
+        'GENERATION_REVISION_PROVENANCE',
+      ],
     );
   });
-  it('D17 wrong non-empty canonical locator or content hash fails source identity only', () => {
+  it('wrong non-empty canonical locator or content hash fails source identity only', () => {
     const base = snapshot();
     for (const change of [{ locator: 'paragraph:99' }, { contentHash: 'f'.repeat(64) }])
       expectFails(
@@ -489,6 +765,8 @@ describe('Package 1B deterministic matrix', () => {
     mutate({ modelConfigurationHash: 'other' });
     mutate({ responseSchemaHash: 'other' });
     mutate({ questionId: 'other' });
+    mutate({ sourceVersionId: 'other' });
     mutate({ knowledgeItemId: 'other' });
+    mutate({ curriculumVersionId: 'other' });
   });
 });

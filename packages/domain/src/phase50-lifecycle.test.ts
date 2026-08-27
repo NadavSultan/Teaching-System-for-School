@@ -83,12 +83,13 @@ describe('Package 1B lifecycle matrix', () => {
         ),
       }),
     ).toMatchObject({ allowed: false, reason: 'SUCCESS_SHAPE_INVALID' });
+    const duplicate = [...executions.slice(0, 10), executions[9]!];
     expect(
       decideValidationRunTransition({
         from: 'PROCESSING',
         to: 'SUCCEEDED',
         ...success,
-        completeRuleIds: validationRules,
+        completeExecutions: duplicate,
       }),
     ).toMatchObject({ allowed: false, reason: 'SUCCESS_SHAPE_INVALID' });
   });

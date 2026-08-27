@@ -2,12 +2,20 @@ import { afterAll, describe, expect, it } from 'vitest';
 import {
   createPersonalWorkspace,
   createAssessmentRevision,
+  createKnowledgeSource,
   getRevisionValidationReadiness,
   getValidationStatus,
   publishCurriculumVersion,
+  processValidationRun,
+  recordPedagogicalReview,
+  recordUsagePermission,
+  registerSourceVersion,
   prisma,
+  requestIngestion,
   requestRevisionValidation,
   resolveAccessContext,
+  runIngestion,
+  setSourceLifecycle,
 } from './index.js';
 
 const principal = (userId: string) => ({
@@ -80,7 +88,7 @@ async function fixture() {
       },
     ],
   });
-  return { workspace, assessment, revision, context };
+  return { workspace, assessment, revision, context, node };
 }
 
 describe('Phase 50 persisted validation operations', () => {
@@ -170,6 +178,184 @@ describe('Phase 50 persisted validation operations', () => {
       reasonCode: 'VALIDATION_PENDING',
       validationRunId: newest.id,
     });
+  });
+
+  it('D17 persisted canonical source snapshot rejects a forged locator and hash', async () => {
+    const f = await fixture();
+    const source = await createKnowledgeSource(f.context, {
+      version: '1.0.0',
+      title: 'Canonical source',
+      visibility: 'ORGANIZATION_PRIVATE',
+      origin: 'phase50-d17',
+    });
+    const sourceVersion = await registerSourceVersion(f.context, {
+      version: '1.0.0',
+      sourceId: source.id,
+      idempotencyKey: 'd17-version',
+      content: 'canonical persisted text',
+      contentReference: 'fixture://phase50-d17',
+      contentMimeType: 'text/plain',
+      curriculumVersionId: f.revision.curriculumVersionId,
+      curriculumNodeIds: [f.node.id],
+    });
+    await recordPedagogicalReview(f.context, {
+      version: '1.0.0',
+      sourceVersionId: sourceVersion.id,
+      decision: 'APPROVED',
+      reason: 'phase50 fixture',
+    });
+    await recordUsagePermission(f.context, {
+      version: '1.0.0',
+      sourceVersionId: sourceVersion.id,
+      decision: 'ALLOWED',
+      evidenceReference: 'phase50 fixture',
+      scope: 'AI_GENERATION',
+    });
+    await setSourceLifecycle(f.context, sourceVersion.id, 'ACTIVE', 'phase50 fixture');
+    const ingestion = await requestIngestion(f.context, {
+      version: '1.0.0',
+      sourceVersionId: sourceVersion.id,
+      pipelineVersion: 'plain-v1',
+    });
+    await runIngestion(ingestion.id);
+    const item = await prisma.knowledgeItem.findFirstOrThrow({
+      where: { sourceVersionId: sourceVersion.id },
+    });
+    const run = await prisma.generationRun.create({
+      data: {
+        organizationId: f.workspace.organization.id,
+        requestingUserId: f.workspace.user.id,
+        assessmentId: f.assessment.id,
+        operation: 'DRAFT',
+        idempotencyKey: 'd17-generation',
+        requestFingerprint: 'a'.repeat(64),
+        frozenSpecification: { curriculumNodeIds: [f.node.id] },
+        curriculumVersionId: f.revision.curriculumVersionId,
+        promptTemplateVersion: 'd17-prompt',
+        promptTemplateHash: 'b'.repeat(64),
+        modelConfigurationVersion: 'd17-model',
+        modelConfigurationHash: 'c'.repeat(64),
+        responseSchemaVersion: '1.0.0',
+        responseSchemaHash: 'd'.repeat(64),
+      },
+    });
+    const output = await createAssessmentRevision(f.context, {
+      version: '1.0.0',
+      assessmentId: f.assessment.id,
+      idempotencyKey: `generation:${run.id}`,
+      curriculumVersionId: f.revision.curriculumVersionId,
+      curriculumNodeIds: [f.node.id],
+      scoringMode: 'NONE',
+      sections: [
+        {
+          key: 's1',
+          title: 'Section',
+          order: 0,
+          questions: [
+            {
+              key: 'q1',
+              type: 'SHORT_TEXT',
+              prompt: 'Question',
+              order: 0,
+              answers: [{ key: 'a1', order: 0, text: 'Answer' }],
+              rubrics: [],
+              subQuestions: [],
+            },
+          ],
+        },
+      ],
+    });
+    await prisma.generationContextItem.create({
+      data: {
+        generationRunId: run.id,
+        selectedOrder: 0,
+        knowledgeItemId: item.id,
+        sourceVersionId: sourceVersion.id,
+        locator: item.locator,
+        textHash: item.textHash,
+        curriculumVersionId: f.revision.curriculumVersionId,
+        curriculumNodeId: f.node.id,
+        rank: 1,
+        score: 1,
+        characterCount: 1,
+        estimatedTokens: 1,
+        lineage: [
+          { curriculumVersionId: f.revision.curriculumVersionId, curriculumNodeId: f.node.id },
+        ],
+      },
+    });
+    const question = await prisma.assessmentQuestion.findFirstOrThrow({
+      where: { section: { revisionId: output.id } },
+    });
+    await prisma.generationRun.update({
+      where: { id: run.id },
+      data: {
+        state: 'PROCESSING',
+        attempts: 1,
+        processingStartedAt: new Date(),
+        leaseExpiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
+      await tx.$executeRaw`
+      INSERT INTO generation_expected_question_citations
+        (generation_run_id, assessment_question_id, knowledge_item_id, source_version_id,
+         locator, text_hash, curriculum_version_id, curriculum_node_id, lineage)
+      VALUES
+        (${run.id}::uuid, ${question.id}::uuid, ${item.id}::uuid, ${sourceVersion.id}::uuid,
+         ${item.locator}, ${item.textHash}, ${f.revision.curriculumVersionId}::uuid,
+         ${f.node.id}::uuid, 'GENERATED'::"GenerationLineage")
+      `;
+      await tx.questionSourceLink.create({
+        data: {
+          assessmentQuestionId: question.id,
+          generationRunId: run.id,
+          knowledgeItemId: item.id,
+          sourceVersionId: sourceVersion.id,
+          locator: item.locator,
+          textHash: item.textHash,
+          curriculumVersionId: f.revision.curriculumVersionId,
+          curriculumNodeId: f.node.id,
+          lineage: 'GENERATED',
+        },
+      });
+      await tx.$executeRaw`
+        UPDATE question_source_links
+        SET locator = ${'wrong-non-empty-locator'}, text_hash = ${'e'.repeat(64)}
+        WHERE generation_run_id = ${run.id}::uuid AND assessment_question_id = ${question.id}::uuid
+      `;
+      await tx.$executeRaw`
+        UPDATE generation_expected_question_citations
+        SET locator = ${'wrong-non-empty-locator'}, text_hash = ${'e'.repeat(64)}
+        WHERE generation_run_id = ${run.id}::uuid AND assessment_question_id = ${question.id}::uuid
+      `;
+      await tx.generationRun.update({
+        where: { id: run.id },
+        data: {
+          state: 'SUCCEEDED',
+          outputRevisionId: output.id,
+          provider: 'local',
+          model: 'phase50-fixture',
+          processedAt: new Date(),
+        },
+      });
+    });
+    const requested = await requestRevisionValidation(f.context, {
+      version: '1.0.0',
+      assessmentId: f.assessment.id,
+      assessmentRevisionId: output.id,
+      idempotencyKey: 'd17-validation',
+    });
+    const processed = await processValidationRun(requested.id);
+    expect(processed?.state).toBe('FAILED');
+    const findings = await prisma.validationFinding.findMany({
+      where: { validationRunId: requested.id },
+      select: { code: true, severity: true },
+    });
+    expect(findings).toEqual([
+      { code: 'SOURCE_LINK_COMPLETENESS_AND_IDENTITY', severity: 'BLOCKING' },
+    ]);
   });
 
   it('rejects a direct run insert with mismatched assessment and revision identity', async () => {

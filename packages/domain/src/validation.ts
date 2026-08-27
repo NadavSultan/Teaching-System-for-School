@@ -485,21 +485,17 @@ export function evaluateDeterministicRules(input: unknown): DeterministicRuleRes
     return defs.map((d) =>
       Object.freeze({
         ...d,
-        outcome: d.ruleId === 'STRICT_REVISION_CONTRACT' ? ('FAIL' as const) : ('PASS' as const),
+        outcome: 'FAIL' as const,
         path: 'snapshot',
-        ...(d.ruleId === 'STRICT_REVISION_CONTRACT' ? { messageKey: `${d.ruleId}_FAILED` } : {}),
+        messageKey: `${d.ruleId}_FAILED`,
         evidence: ev(d.ruleId, 'trusted snapshot rejected', 0),
-        ...(d.ruleId === 'STRICT_REVISION_CONTRACT'
-          ? {
-              finding: Object.freeze({
-                code: `${d.ruleId}_FAILED`,
-                category: d.category,
-                severity: 'BLOCKING' as const,
-                path: 'snapshot',
-                messageKey: `${d.ruleId}_FAILED`,
-              }),
-            }
-          : {}),
+        finding: Object.freeze({
+          code: `${d.ruleId}_FAILED`,
+          category: d.category,
+          severity: 'BLOCKING' as const,
+          path: 'snapshot',
+          messageKey: `${d.ruleId}_FAILED`,
+        }),
       }),
     );
   const q = questions(s),
@@ -569,7 +565,7 @@ export function evaluateDeterministicRules(input: unknown): DeterministicRuleRes
       q.length > 0 &&
       q.every(
         (x) =>
-          (x.questionSourceLinks as R[]).length === 0 ||
+          (x.questionSourceLinks as R[]).length > 0 &&
           (x.questionSourceLinks as R[]).every((l) =>
             isEligibleKnowledgeItem(l.eligibility as EligibilityInput),
           ),
@@ -578,7 +574,7 @@ export function evaluateDeterministicRules(input: unknown): DeterministicRuleRes
       q.length > 0 &&
       q.every(
         (x) =>
-          (x.questionSourceLinks as R[]).length === 0 ||
+          (x.questionSourceLinks as R[]).length > 0 &&
           (x.questionSourceLinks as R[]).every((l) => {
             const p = l.provenance as R;
             return (
