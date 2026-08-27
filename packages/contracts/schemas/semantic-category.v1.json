@@ -1,0 +1,18 @@
+{
+  "$ref": "#/definitions/SemanticCategoryV1",
+  "definitions": {
+    "SemanticCategoryV1": {
+      "type": "string",
+      "enum": [
+        "HEBREW_CORRECTNESS",
+        "AMBIGUITY",
+        "ANSWER_VALIDITY",
+        "DIFFICULTY_FIT",
+        "CURRICULUM_FIT",
+        "DUPLICATION",
+        "ANSWER_LEAKAGE"
+      ]
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

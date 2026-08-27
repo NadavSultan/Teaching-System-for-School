@@ -1,0 +1,35 @@
+{
+  "$ref": "#/definitions/ValidationRequestV1",
+  "definitions": {
+    "ValidationRequestV1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "assessmentId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "assessmentRevisionId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        }
+      },
+      "required": [
+        "version",
+        "assessmentId",
+        "assessmentRevisionId",
+        "idempotencyKey"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

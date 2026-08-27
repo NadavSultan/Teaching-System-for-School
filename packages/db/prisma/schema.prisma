@@ -86,21 +86,51 @@ enum GenerationLineage {
   CARRIED_FORWARD
 }
 
+enum ValidationRunState {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+}
+
+enum ValidationRuleOutcome {
+  PASS
+  FAIL
+}
+
+enum ValidationFindingKind {
+  DETERMINISTIC
+  SEMANTIC
+}
+
+enum ValidationSeverity {
+  BLOCKING
+  WARNING
+  INFO
+}
+
+enum SemanticEvaluationState {
+  SUCCEEDED
+  FAILED
+}
+
 model User {
-  id                    String                 @id @default(uuid()) @db.Uuid
-  normalizedEmail       String                 @unique @map("normalized_email") @db.VarChar(320)
-  displayName           String?                @map("display_name") @db.VarChar(200)
-  status                LifecycleStatus        @default(ACTIVE)
-  platformAdmin         Boolean                @default(false) @map("platform_admin")
-  createdAt             DateTime               @default(now()) @map("created_at")
-  updatedAt             DateTime               @updatedAt @map("updated_at")
-  memberships           Membership[]
-  identityMappings      IdentityMapping[]
-  auditEvents           AuditEvent[]           @relation("AuditActor")
-  pedagogicalReviews    PedagogicalReview[]
-  usagePermissions      UsagePermission[]
-  sourceLifecycleEvents SourceLifecycleEvent[]
-  generationRuns        GenerationRun[]
+  id                         String                             @id @default(uuid()) @db.Uuid
+  normalizedEmail            String                             @unique @map("normalized_email") @db.VarChar(320)
+  displayName                String?                            @map("display_name") @db.VarChar(200)
+  status                     LifecycleStatus                    @default(ACTIVE)
+  platformAdmin              Boolean                            @default(false) @map("platform_admin")
+  createdAt                  DateTime                           @default(now()) @map("created_at")
+  updatedAt                  DateTime                           @updatedAt @map("updated_at")
+  memberships                Membership[]
+  identityMappings           IdentityMapping[]
+  auditEvents                AuditEvent[]                       @relation("AuditActor")
+  pedagogicalReviews         PedagogicalReview[]
+  usagePermissions           UsagePermission[]
+  sourceLifecycleEvents      SourceLifecycleEvent[]
+  generationRuns             GenerationRun[]
+  validationRuns             ValidationRun[]
+  validationAcknowledgements ValidationFindingAcknowledgement[]
 
   @@map("users")
 }
@@ -118,19 +148,22 @@ model IdentityMapping {
 }
 
 model Organization {
-  id                String                 @id @default(uuid()) @db.Uuid
-  name              String                 @db.VarChar(200)
-  workspaceType     WorkspaceType          @map("workspace_type")
-  status            LifecycleStatus        @default(ACTIVE)
-  createdAt         DateTime               @default(now()) @map("created_at")
-  updatedAt         DateTime               @updatedAt @map("updated_at")
-  memberships       Membership[]
-  auditEvents       AuditEvent[]
-  outboxEvents      OutboxEvent[]
-  assessments       Assessment[]
-  generationRuns    GenerationRun[]
-  knowledgeSources  KnowledgeSource[]
-  auditSourceEvents SourceLifecycleEvent[]
+  id                         String                             @id @default(uuid()) @db.Uuid
+  name                       String                             @db.VarChar(200)
+  workspaceType              WorkspaceType                      @map("workspace_type")
+  status                     LifecycleStatus                    @default(ACTIVE)
+  createdAt                  DateTime                           @default(now()) @map("created_at")
+  updatedAt                  DateTime                           @updatedAt @map("updated_at")
+  memberships                Membership[]
+  auditEvents                AuditEvent[]
+  outboxEvents               OutboxEvent[]
+  assessments                Assessment[]
+  generationRuns             GenerationRun[]
+  validationRuns             ValidationRun[]
+  validationFindings         ValidationFinding[]
+  validationAcknowledgements ValidationFindingAcknowledgement[]
+  knowledgeSources           KnowledgeSource[]
+  auditSourceEvents          SourceLifecycleEvent[]
 
   @@map("organizations")
 }
@@ -489,6 +522,7 @@ model Assessment {
   organization    Organization         @relation(fields: [organizationId], references: [id])
   revisions       AssessmentRevision[]
   generationRuns  GenerationRun[]
+  validationRuns  ValidationRun[]
 
   @@map("assessments")
 }
@@ -510,10 +544,145 @@ model AssessmentRevision {
   nodeLinks            AssessmentRevisionNodeLink[]
   baseGenerationRuns   GenerationRun[]              @relation("GenerationBaseRevision")
   outputGenerationRuns GenerationRun[]              @relation("GenerationOutputRevision")
+  validationRuns       ValidationRun[]
+  validationFindings   ValidationFinding[]
 
   @@unique([assessmentId, revisionNumber])
   @@unique([assessmentId, idempotencyKey])
   @@map("assessment_revisions")
+}
+
+model ValidationRuleDefinition {
+  id                 String                    @id @default(uuid()) @db.Uuid
+  rulesetVersion     String                    @map("ruleset_version") @db.VarChar(40)
+  ruleId             String                    @map("rule_id") @db.VarChar(120)
+  ruleVersion        String                    @map("rule_version") @db.VarChar(40)
+  category           String                    @db.VarChar(120)
+  defaultSeverity    ValidationSeverity        @map("default_severity")
+  deterministicOrder Int                       @map("deterministic_order")
+  createdAt          DateTime                  @default(now()) @map("created_at")
+  executions         ValidationRuleExecution[]
+
+  @@unique([rulesetVersion, ruleId, ruleVersion])
+  @@unique([rulesetVersion, deterministicOrder])
+  @@map("validation_rule_definitions")
+}
+
+model ValidationRun {
+  id                     String                    @id @default(uuid()) @db.Uuid
+  organizationId         String                    @map("organization_id") @db.Uuid
+  assessmentId           String                    @map("assessment_id") @db.Uuid
+  assessmentRevisionId   String                    @map("assessment_revision_id") @db.Uuid
+  requestingUserId       String                    @map("requesting_user_id") @db.Uuid
+  operation              String                    @default("VALIDATE") @db.VarChar(40)
+  rulesetVersion         String                    @map("ruleset_version") @db.VarChar(40)
+  evaluatorVersion       String                    @map("evaluator_version") @db.VarChar(40)
+  revisionSequence       Int                       @map("revision_sequence")
+  idempotencyKey         String                    @map("idempotency_key") @db.VarChar(255)
+  requestFingerprint     String                    @map("request_fingerprint") @db.Char(64)
+  state                  ValidationRunState        @default(PENDING)
+  attempts               Int                       @default(0)
+  failureCode            String?                   @map("failure_code") @db.VarChar(80)
+  leaseExpiresAt         DateTime?                 @map("lease_expires_at")
+  processingStartedAt    DateTime?                 @map("processing_started_at")
+  completedAt            DateTime?                 @map("completed_at")
+  deterministicPassCount Int                       @default(0) @map("deterministic_pass_count")
+  deterministicFailCount Int                       @default(0) @map("deterministic_fail_count")
+  semanticFindingCount   Int                       @default(0) @map("semantic_finding_count")
+  createdAt              DateTime                  @default(now()) @map("created_at")
+  updatedAt              DateTime                  @updatedAt @map("updated_at")
+  organization           Organization              @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  assessment             Assessment                @relation(fields: [assessmentId], references: [id], onDelete: Restrict)
+  assessmentRevision     AssessmentRevision        @relation(fields: [assessmentRevisionId], references: [id], onDelete: Restrict)
+  requestingUser         User                      @relation(fields: [requestingUserId], references: [id], onDelete: Restrict)
+  executions             ValidationRuleExecution[]
+  semanticEvaluation     SemanticEvaluation?
+  findings               ValidationFinding[]
+
+  @@unique([organizationId, assessmentRevisionId, revisionSequence])
+  @@unique([organizationId, assessmentRevisionId, idempotencyKey])
+  @@index([organizationId, assessmentRevisionId, revisionSequence])
+  @@index([state, leaseExpiresAt])
+  @@map("validation_runs")
+}
+
+model ValidationRuleExecution {
+  id               String                   @id @default(uuid()) @db.Uuid
+  validationRunId  String                   @map("validation_run_id") @db.Uuid
+  ruleDefinitionId String                   @map("rule_definition_id") @db.Uuid
+  outcome          ValidationRuleOutcome
+  evidence         Json                     @default("{}")
+  createdAt        DateTime                 @default(now()) @map("created_at")
+  validationRun    ValidationRun            @relation(fields: [validationRunId], references: [id], onDelete: Restrict)
+  ruleDefinition   ValidationRuleDefinition @relation(fields: [ruleDefinitionId], references: [id], onDelete: Restrict)
+  finding          ValidationFinding?
+
+  @@unique([validationRunId, ruleDefinitionId])
+  @@map("validation_rule_executions")
+}
+
+model SemanticEvaluation {
+  id                        String                  @id @default(uuid()) @db.Uuid
+  validationRunId           String                  @unique @map("validation_run_id") @db.Uuid
+  evaluatorVersion          String                  @map("evaluator_version") @db.VarChar(40)
+  promptVersion             String                  @map("prompt_version") @db.VarChar(40)
+  modelConfigurationVersion String                  @map("model_configuration_version") @db.VarChar(40)
+  schemaVersion             String                  @map("schema_version") @db.VarChar(40)
+  state                     SemanticEvaluationState
+  failureCode               String?                 @map("failure_code") @db.VarChar(80)
+  latencyMs                 Int?                    @map("latency_ms")
+  usage                     Json                    @default("{}")
+  createdAt                 DateTime                @default(now()) @map("created_at")
+  validationRun             ValidationRun           @relation(fields: [validationRunId], references: [id], onDelete: Restrict)
+  findings                  ValidationFinding[]
+
+  @@map("semantic_evaluations")
+}
+
+model ValidationFinding {
+  id                    String                             @id @default(uuid()) @db.Uuid
+  organizationId        String                             @map("organization_id") @db.Uuid
+  validationRunId       String                             @map("validation_run_id") @db.Uuid
+  assessmentRevisionId  String                             @map("assessment_revision_id") @db.Uuid
+  executionId           String?                            @unique @map("execution_id") @db.Uuid
+  semanticEvaluationId  String?                            @map("semantic_evaluation_id") @db.Uuid
+  kind                  ValidationFindingKind
+  code                  String                             @db.VarChar(120)
+  category              String                             @db.VarChar(120)
+  severity              ValidationSeverity
+  path                  String                             @db.VarChar(500)
+  messageKey            String                             @map("message_key") @db.VarChar(160)
+  evidence              Json                               @default("{}")
+  confidenceBasisPoints Int?                               @map("confidence_basis_points")
+  ruleVersion           String?                            @map("rule_version") @db.VarChar(40)
+  evaluatorVersion      String?                            @map("evaluator_version") @db.VarChar(40)
+  createdAt             DateTime                           @default(now()) @map("created_at")
+  organization          Organization                       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  validationRun         ValidationRun                      @relation(fields: [validationRunId], references: [id], onDelete: Restrict)
+  assessmentRevision    AssessmentRevision                 @relation(fields: [assessmentRevisionId], references: [id], onDelete: Restrict)
+  execution             ValidationRuleExecution?           @relation(fields: [executionId], references: [id], onDelete: Restrict)
+  semanticEvaluation    SemanticEvaluation?                @relation(fields: [semanticEvaluationId], references: [id], onDelete: Restrict)
+  acknowledgements      ValidationFindingAcknowledgement[]
+
+  @@index([organizationId, validationRunId, createdAt])
+  @@map("validation_findings")
+}
+
+model ValidationFindingAcknowledgement {
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String            @map("organization_id") @db.Uuid
+  findingId      String            @map("finding_id") @db.Uuid
+  actorUserId    String            @map("actor_user_id") @db.Uuid
+  idempotencyKey String            @map("idempotency_key") @db.VarChar(255)
+  reason         String            @db.VarChar(1000)
+  reasonHash     String            @map("reason_hash") @db.Char(64)
+  createdAt      DateTime          @default(now()) @map("created_at")
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  finding        ValidationFinding @relation(fields: [findingId], references: [id], onDelete: Restrict)
+  actor          User              @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, findingId, idempotencyKey])
+  @@map("validation_finding_acknowledgements")
 }
 
 model AssessmentRevisionNodeLink {

@@ -1,0 +1,291 @@
+{
+  "$ref": "#/definitions/ValidationStatusV1",
+  "definitions": {
+    "ValidationStatusV1": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "const": "1.0.0"
+            },
+            "id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "assessmentId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "assessmentRevisionId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "revisionSequence": {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            "rulesetVersion": {
+              "type": "string",
+              "minLength": 1
+            },
+            "evaluatorVersion": {
+              "type": "string",
+              "minLength": 1
+            },
+            "attempts": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "deterministicPassCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "deterministicFailCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "semanticFindingCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "state": {
+              "type": "string",
+              "const": "PENDING"
+            },
+            "failureCode": {
+              "type": "null"
+            },
+            "completedAt": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "version",
+            "id",
+            "assessmentId",
+            "assessmentRevisionId",
+            "revisionSequence",
+            "rulesetVersion",
+            "evaluatorVersion",
+            "attempts",
+            "deterministicPassCount",
+            "deterministicFailCount",
+            "semanticFindingCount",
+            "state",
+            "failureCode",
+            "completedAt"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "version": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/version"
+            },
+            "id": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/id"
+            },
+            "assessmentId": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/assessmentId"
+            },
+            "assessmentRevisionId": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/assessmentRevisionId"
+            },
+            "revisionSequence": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/revisionSequence"
+            },
+            "rulesetVersion": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/rulesetVersion"
+            },
+            "evaluatorVersion": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/evaluatorVersion"
+            },
+            "attempts": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/attempts"
+            },
+            "deterministicPassCount": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/deterministicPassCount"
+            },
+            "deterministicFailCount": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/deterministicFailCount"
+            },
+            "semanticFindingCount": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/semanticFindingCount"
+            },
+            "state": {
+              "type": "string",
+              "const": "PROCESSING"
+            },
+            "failureCode": {
+              "type": "null"
+            },
+            "completedAt": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "version",
+            "id",
+            "assessmentId",
+            "assessmentRevisionId",
+            "revisionSequence",
+            "rulesetVersion",
+            "evaluatorVersion",
+            "attempts",
+            "deterministicPassCount",
+            "deterministicFailCount",
+            "semanticFindingCount",
+            "state",
+            "failureCode",
+            "completedAt"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "version": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/version"
+            },
+            "id": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/id"
+            },
+            "assessmentId": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/assessmentId"
+            },
+            "assessmentRevisionId": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/assessmentRevisionId"
+            },
+            "revisionSequence": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/revisionSequence"
+            },
+            "rulesetVersion": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/rulesetVersion"
+            },
+            "evaluatorVersion": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/evaluatorVersion"
+            },
+            "attempts": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/attempts"
+            },
+            "deterministicPassCount": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/deterministicPassCount"
+            },
+            "deterministicFailCount": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/deterministicFailCount"
+            },
+            "semanticFindingCount": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/semanticFindingCount"
+            },
+            "state": {
+              "type": "string",
+              "const": "SUCCEEDED"
+            },
+            "failureCode": {
+              "type": "null"
+            },
+            "completedAt": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "version",
+            "id",
+            "assessmentId",
+            "assessmentRevisionId",
+            "revisionSequence",
+            "rulesetVersion",
+            "evaluatorVersion",
+            "attempts",
+            "deterministicPassCount",
+            "deterministicFailCount",
+            "semanticFindingCount",
+            "state",
+            "failureCode",
+            "completedAt"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "version": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/version"
+            },
+            "id": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/id"
+            },
+            "assessmentId": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/assessmentId"
+            },
+            "assessmentRevisionId": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/assessmentRevisionId"
+            },
+            "revisionSequence": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/revisionSequence"
+            },
+            "rulesetVersion": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/rulesetVersion"
+            },
+            "evaluatorVersion": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/evaluatorVersion"
+            },
+            "attempts": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/attempts"
+            },
+            "deterministicPassCount": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/deterministicPassCount"
+            },
+            "deterministicFailCount": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/deterministicFailCount"
+            },
+            "semanticFindingCount": {
+              "$ref": "#/definitions/ValidationStatusV1/anyOf/0/properties/semanticFindingCount"
+            },
+            "state": {
+              "type": "string",
+              "const": "FAILED"
+            },
+            "failureCode": {
+              "type": "string",
+              "enum": [
+                "RULESET_INTEGRITY",
+                "DETERMINISTIC_RULE_FAILED",
+                "TIMEOUT",
+                "TRANSIENT_EXHAUSTED",
+                "PERMANENT_EVALUATOR_ERROR",
+                "OUTPUT_INVALID"
+              ]
+            },
+            "completedAt": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "version",
+            "id",
+            "assessmentId",
+            "assessmentRevisionId",
+            "revisionSequence",
+            "rulesetVersion",
+            "evaluatorVersion",
+            "attempts",
+            "deterministicPassCount",
+            "deterministicFailCount",
+            "semanticFindingCount",
+            "state",
+            "failureCode",
+            "completedAt"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

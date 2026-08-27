@@ -1,0 +1,406 @@
+import { createHash } from 'node:crypto';
+import type { Prisma, PrismaClient } from '@prisma/client';
+import {
+  validationAcknowledgementSchema,
+  validationReadinessSchema,
+  validationRequestSchema,
+  validationResultSchema,
+  validationStatusSchema,
+} from '@teach/contracts';
+import { authorizeWorkspace, evaluateDeterministicRules, type AccessContext } from '@teach/domain';
+import { DeterministicFakeSemanticEvaluator, parseSemanticEvaluatorOutput } from '@teach/ai';
+import { IdempotencyConflictError, prisma } from './index.js';
+
+const RULESET_VERSION = 'v1';
+const EVALUATOR_VERSION = 'v1';
+type Db = PrismaClient | Prisma.TransactionClient;
+
+function fingerprint(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function status(run: any) {
+  return validationStatusSchema.parse({
+    version: '1.0.0',
+    id: run.id,
+    assessmentId: run.assessmentId,
+    assessmentRevisionId: run.assessmentRevisionId,
+    revisionSequence: run.revisionSequence,
+    rulesetVersion: run.rulesetVersion,
+    evaluatorVersion: run.evaluatorVersion,
+    state: run.state,
+    attempts: run.attempts,
+    failureCode: run.failureCode,
+  });
+}
+
+async function ownedRun(context: AccessContext, runId: string, client: Db) {
+  return client.validationRun.findFirst({
+    where: { id: runId, organizationId: context.organizationId },
+    include: {
+      executions: {
+        include: { ruleDefinition: true },
+        orderBy: { ruleDefinition: { deterministicOrder: 'asc' } },
+      },
+      findings: { orderBy: [{ path: 'asc' }, { id: 'asc' }] },
+      semanticEvaluation: true,
+    },
+  });
+}
+
+export async function requestRevisionValidation(
+  context: AccessContext,
+  input: unknown,
+  client: PrismaClient = prisma,
+) {
+  authorizeWorkspace(context, context.organizationId, 'CREATE_ASSESSMENT_REVISION');
+  const parsed = validationRequestSchema.parse(input);
+  const requestFingerprint = fingerprint({
+    assessmentId: parsed.assessmentId,
+    assessmentRevisionId: parsed.assessmentRevisionId,
+  });
+  return client.$transaction(
+    async (tx) => {
+      const revisionRows = await tx.$queryRaw<
+        Array<{ id: string }>
+      >`SELECT r.id FROM assessment_revisions r JOIN assessments a ON a.id = r.assessment_id WHERE r.id = ${parsed.assessmentRevisionId}::uuid AND r.assessment_id = ${parsed.assessmentId}::uuid AND a.organization_id = ${context.organizationId}::uuid AND r.state = 'FINALIZED' FOR UPDATE`;
+      if (!revisionRows[0]) throw new Error('Resource not found or unavailable');
+      const existing = await tx.validationRun.findUnique({
+        where: {
+          organizationId_assessmentRevisionId_idempotencyKey: {
+            organizationId: context.organizationId,
+            assessmentRevisionId: parsed.assessmentRevisionId,
+            idempotencyKey: parsed.idempotencyKey,
+          },
+        },
+      });
+      if (existing) {
+        if (existing.requestFingerprint !== requestFingerprint)
+          throw new IdempotencyConflictError();
+        return status(existing);
+      }
+      const sequence =
+        (
+          await tx.validationRun.aggregate({
+            where: {
+              organizationId: context.organizationId,
+              assessmentRevisionId: parsed.assessmentRevisionId,
+            },
+            _max: { revisionSequence: true },
+          })
+        )._max.revisionSequence ?? 0;
+      const run = await tx.validationRun.create({
+        data: {
+          organizationId: context.organizationId,
+          assessmentId: parsed.assessmentId,
+          assessmentRevisionId: parsed.assessmentRevisionId,
+          requestingUserId: context.principal.userId,
+          rulesetVersion: RULESET_VERSION,
+          evaluatorVersion: EVALUATOR_VERSION,
+          revisionSequence: sequence + 1,
+          idempotencyKey: parsed.idempotencyKey,
+          requestFingerprint,
+        },
+      });
+      await tx.outboxEvent.create({
+        data: {
+          organizationId: context.organizationId,
+          eventType: 'validation.requested',
+          payload: { validationRunId: run.id },
+          idempotencyKey: `validation:${run.id}`,
+        },
+      });
+      await tx.auditEvent.create({
+        data: {
+          actorUserId: context.principal.userId,
+          organizationId: context.organizationId,
+          eventType: 'validation.requested',
+          targetType: 'validation_run',
+          targetId: run.id,
+          metadata: { rulesetVersion: RULESET_VERSION, evaluatorVersion: EVALUATOR_VERSION },
+        },
+      });
+      return status(run);
+    },
+    { isolationLevel: 'Serializable' },
+  );
+}
+
+export async function getValidationStatus(
+  context: AccessContext,
+  runId: string,
+  client: PrismaClient = prisma,
+) {
+  authorizeWorkspace(context, context.organizationId, 'READ_ASSESSMENT');
+  const run = await client.validationRun.findFirst({
+    where: { id: runId, organizationId: context.organizationId },
+  });
+  return run ? status(run) : null;
+}
+
+export async function getValidationResult(
+  context: AccessContext,
+  runId: string,
+  client: PrismaClient = prisma,
+) {
+  authorizeWorkspace(context, context.organizationId, 'READ_ASSESSMENT');
+  const run = await ownedRun(context, runId, client);
+  if (!run) return null;
+  return validationResultSchema.parse({
+    version: '1.0.0',
+    status: status(run),
+    executions: run.executions.map((row) => ({
+      ruleId: row.ruleDefinition.ruleId,
+      ruleVersion: row.ruleDefinition.ruleVersion,
+      outcome: row.outcome,
+      evidence: row.evidence,
+    })),
+    findings: run.findings.map((finding) => ({
+      id: finding.id,
+      kind: finding.kind,
+      code: finding.code,
+      category: finding.category,
+      severity: finding.severity,
+      path: finding.path,
+      messageKey: finding.messageKey,
+      evidence: finding.evidence,
+    })),
+    semanticEvaluation: run.semanticEvaluation
+      ? {
+          state: run.semanticEvaluation.state,
+          evaluatorVersion: run.semanticEvaluation.evaluatorVersion,
+          schemaVersion: run.semanticEvaluation.schemaVersion,
+          findingCount: run.findings.filter((finding) => finding.kind === 'SEMANTIC').length,
+        }
+      : null,
+  });
+}
+
+export async function acknowledgeSemanticWarning(
+  context: AccessContext,
+  input: unknown,
+  client: PrismaClient = prisma,
+) {
+  authorizeWorkspace(context, context.organizationId, 'CREATE_ASSESSMENT_REVISION');
+  const parsed = validationAcknowledgementSchema.parse(input);
+  const reasonHash = createHash('sha256').update(parsed.reason).digest('hex');
+  return client.$transaction(async (tx) => {
+    const finding = await tx.validationFinding.findFirst({
+      where: { id: parsed.findingId, organizationId: context.organizationId },
+    });
+    if (!finding) throw new Error('Resource not found or unavailable');
+    const existing = await tx.validationFindingAcknowledgement.findUnique({
+      where: {
+        organizationId_findingId_idempotencyKey: {
+          organizationId: context.organizationId,
+          findingId: finding.id,
+          idempotencyKey: parsed.idempotencyKey,
+        },
+      },
+    });
+    if (existing) {
+      if (existing.reasonHash !== reasonHash) throw new IdempotencyConflictError();
+      return existing;
+    }
+    return tx.validationFindingAcknowledgement.create({
+      data: {
+        organizationId: context.organizationId,
+        findingId: finding.id,
+        actorUserId: context.principal.userId,
+        idempotencyKey: parsed.idempotencyKey,
+        reason: parsed.reason,
+        reasonHash,
+      },
+    });
+  });
+}
+
+export async function getRevisionValidationReadiness(
+  context: AccessContext,
+  assessmentId: string,
+  assessmentRevisionId: string,
+  client: PrismaClient = prisma,
+) {
+  authorizeWorkspace(context, context.organizationId, 'READ_ASSESSMENT');
+  const run = await client.validationRun.findFirst({
+    where: { organizationId: context.organizationId, assessmentId, assessmentRevisionId },
+    orderBy: { revisionSequence: 'desc' },
+    include: { findings: { include: { acknowledgements: true } } },
+  });
+  let reasonCode: string | null = null;
+  if (!run) reasonCode = 'VALIDATION_REQUIRED';
+  else if (run.state !== 'SUCCEEDED')
+    reasonCode =
+      run.state === 'FAILED'
+        ? 'VALIDATION_FAILED'
+        : run.state === 'PENDING'
+          ? 'VALIDATION_PENDING'
+          : 'VALIDATION_PROCESSING';
+  else if (run.rulesetVersion !== RULESET_VERSION || run.evaluatorVersion !== EVALUATOR_VERSION)
+    reasonCode = 'VALIDATION_VERSION_STALE';
+  else if (
+    run.findings.some(
+      (finding) =>
+        finding.severity === 'BLOCKING' ||
+        (finding.severity === 'WARNING' && finding.acknowledgements.length === 0),
+    )
+  )
+    reasonCode = run.findings.some((finding) => finding.kind === 'DETERMINISTIC')
+      ? 'DETERMINISTIC_BLOCKER'
+      : run.findings.some((finding) => finding.severity === 'BLOCKING')
+        ? 'SEMANTIC_BLOCKER'
+        : 'WARNING_ACKNOWLEDGEMENT_REQUIRED';
+  return validationReadinessSchema.parse({
+    version: '1.0.0',
+    status: reasonCode ? 'BLOCKED' : 'READY',
+    reasonCode,
+    validationRunId: run?.id ?? null,
+  });
+}
+
+export async function assertRevisionApprovable(
+  organizationId: string,
+  assessmentRevisionId: string,
+  client: PrismaClient = prisma,
+) {
+  const rows = await client.$queryRaw<
+    Array<{ assert_revision_approvable: string }>
+  >`SELECT assert_revision_approvable(${organizationId}::uuid, ${assessmentRevisionId}::uuid)`;
+  return rows[0]?.assert_revision_approvable;
+}
+
+export async function processValidationRun(validationRunId: string, client: PrismaClient = prisma) {
+  return client.$transaction(async (tx) => {
+    const run = await tx.validationRun.findUnique({ where: { id: validationRunId } });
+    if (!run || run.state === 'SUCCEEDED' || run.state === 'FAILED')
+      return run ? status(run) : null;
+    const claimed = await tx.validationRun.update({
+      where: { id: run.id },
+      data: {
+        state: 'PROCESSING',
+        attempts: { increment: 1 },
+        processingStartedAt: new Date(),
+        leaseExpiresAt: new Date(Date.now() + 30_000),
+      },
+    });
+    const rules = await tx.validationRuleDefinition.findMany({
+      where: { rulesetVersion: claimed.rulesetVersion },
+      orderBy: { deterministicOrder: 'asc' },
+    });
+    if (rules.length !== 11)
+      return status(
+        await tx.validationRun.update({
+          where: { id: claimed.id },
+          data: { state: 'FAILED', failureCode: 'RULESET_INTEGRITY', completedAt: new Date() },
+        }),
+      );
+    const revision = await tx.assessmentRevision.findUnique({
+      where: { id: claimed.assessmentRevisionId },
+      include: {
+        curriculumVersion: true,
+        nodeLinks: true,
+        sections: {
+          include: {
+            questions: {
+              include: {
+                answers: true,
+                questionSourceLinks: {
+                  include: {
+                    knowledgeItem: true,
+                    generationRun: true,
+                    sourceVersion: {
+                      include: {
+                        source: {
+                          include: {
+                            lifecycleEvents: { orderBy: { createdAt: 'desc' }, take: 1 },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    const results = evaluateDeterministicRules(revision);
+    const byRule = new Map(results.map((result) => [result.ruleId, result]));
+    const executions = await Promise.all(
+      rules.map((rule) =>
+        tx.validationRuleExecution.create({
+          data: {
+            validationRunId: claimed.id,
+            ruleDefinitionId: rule.id,
+            outcome: byRule.get(rule.ruleId as never)?.outcome ?? 'FAIL',
+            evidence: (byRule.get(rule.ruleId as never)?.evidence ?? {
+              missingRuleResult: true,
+            }) as Prisma.InputJsonValue,
+          },
+        }),
+      ),
+    );
+    await Promise.all(
+      executions.flatMap((execution) => {
+        const rule = rules.find((definition) => definition.id === execution.ruleDefinitionId)!;
+        const result = byRule.get(rule.ruleId as never);
+        return result?.outcome === 'FAIL'
+          ? [
+              tx.validationFinding.create({
+                data: {
+                  organizationId: claimed.organizationId,
+                  validationRunId: claimed.id,
+                  assessmentRevisionId: claimed.assessmentRevisionId,
+                  executionId: execution.id,
+                  kind: 'DETERMINISTIC',
+                  code: rule.ruleId,
+                  category: rule.category,
+                  severity: 'BLOCKING',
+                  path: result.path,
+                  messageKey: result.messageKey!,
+                  evidence: result.evidence as Prisma.InputJsonValue,
+                  ruleVersion: rule.ruleVersion,
+                },
+              }),
+            ]
+          : [];
+      }),
+    );
+    const evaluator = new DeterministicFakeSemanticEvaluator({
+      version: '1.0.0',
+      revisionId: claimed.assessmentRevisionId,
+      findings: [],
+    });
+    parseSemanticEvaluatorOutput(
+      await evaluator.evaluate({
+        revisionId: claimed.assessmentRevisionId,
+        operationId: claimed.id,
+      }),
+      claimed.assessmentRevisionId,
+    );
+    await tx.semanticEvaluation.create({
+      data: {
+        validationRunId: claimed.id,
+        evaluatorVersion: claimed.evaluatorVersion,
+        promptVersion: 'v1',
+        modelConfigurationVersion: 'fake-v1',
+        schemaVersion: 'v1',
+        state: 'SUCCEEDED',
+      },
+    });
+    const failed = results.filter((result) => result.outcome === 'FAIL').length;
+    const complete = await tx.validationRun.update({
+      where: { id: claimed.id },
+      data: {
+        state: failed ? 'FAILED' : 'SUCCEEDED',
+        failureCode: failed ? 'DETERMINISTIC_RULE_FAILED' : null,
+        deterministicPassCount: rules.length - failed,
+        deterministicFailCount: failed,
+        completedAt: new Date(),
+        leaseExpiresAt: null,
+      },
+    });
+    return status(complete);
+  });
+}

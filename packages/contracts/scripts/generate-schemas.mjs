@@ -38,6 +38,13 @@ import {
   generationContextItemSchema,
   generationContextProvenanceSchema,
   generationUsageSchema,
+  validationRequestSchema,
+  validationStatusSchema,
+  validationResultSchema,
+  validationFindingSchema,
+  validationReadinessSchema,
+  validationAcknowledgementSchema,
+  semanticCategorySchema,
 } from '../dist/index.js';
 
 const outputDirectory = join(dirname(fileURLToPath(import.meta.url)), '..', 'schemas');
@@ -105,6 +112,13 @@ const schemas = [
     'GenerationContextProvenanceV1',
   ],
   ['generation-usage.v1.json', generationUsageSchema, 'GenerationUsageV1'],
+  ['validation-request.v1.json', validationRequestSchema, 'ValidationRequestV1'],
+  ['validation-status.v1.json', validationStatusSchema, 'ValidationStatusV1'],
+  ['validation-result.v1.json', validationResultSchema, 'ValidationResultV1'],
+  ['validation-finding.v1.json', validationFindingSchema, 'ValidationFindingV1'],
+  ['validation-readiness.v1.json', validationReadinessSchema, 'ValidationReadinessV1'],
+  ['validation-acknowledgement.v1.json', validationAcknowledgementSchema, 'ValidationAcknowledgementV1'],
+  ['semantic-category.v1.json', semanticCategorySchema, 'SemanticCategoryV1'],
 ];
 let drift = false;
 for (const [file, schema, name] of schemas) {

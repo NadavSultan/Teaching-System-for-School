@@ -1,0 +1,639 @@
+{
+  "$ref": "#/definitions/ValidationResultV1",
+  "definitions": {
+    "ValidationResultV1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "version": {
+                  "type": "string",
+                  "const": "1.0.0"
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "assessmentId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "assessmentRevisionId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "revisionSequence": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0
+                },
+                "rulesetVersion": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "evaluatorVersion": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "deterministicPassCount": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "deterministicFailCount": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "semanticFindingCount": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "state": {
+                  "type": "string",
+                  "const": "PENDING"
+                },
+                "failureCode": {
+                  "type": "null"
+                },
+                "completedAt": {
+                  "type": "null"
+                }
+              },
+              "required": [
+                "version",
+                "id",
+                "assessmentId",
+                "assessmentRevisionId",
+                "revisionSequence",
+                "rulesetVersion",
+                "evaluatorVersion",
+                "attempts",
+                "deterministicPassCount",
+                "deterministicFailCount",
+                "semanticFindingCount",
+                "state",
+                "failureCode",
+                "completedAt"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "version": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/version"
+                },
+                "id": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/id"
+                },
+                "assessmentId": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/assessmentId"
+                },
+                "assessmentRevisionId": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/assessmentRevisionId"
+                },
+                "revisionSequence": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/revisionSequence"
+                },
+                "rulesetVersion": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/rulesetVersion"
+                },
+                "evaluatorVersion": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/evaluatorVersion"
+                },
+                "attempts": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/attempts"
+                },
+                "deterministicPassCount": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/deterministicPassCount"
+                },
+                "deterministicFailCount": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/deterministicFailCount"
+                },
+                "semanticFindingCount": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/semanticFindingCount"
+                },
+                "state": {
+                  "type": "string",
+                  "const": "PROCESSING"
+                },
+                "failureCode": {
+                  "type": "null"
+                },
+                "completedAt": {
+                  "type": "null"
+                }
+              },
+              "required": [
+                "version",
+                "id",
+                "assessmentId",
+                "assessmentRevisionId",
+                "revisionSequence",
+                "rulesetVersion",
+                "evaluatorVersion",
+                "attempts",
+                "deterministicPassCount",
+                "deterministicFailCount",
+                "semanticFindingCount",
+                "state",
+                "failureCode",
+                "completedAt"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "version": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/version"
+                },
+                "id": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/id"
+                },
+                "assessmentId": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/assessmentId"
+                },
+                "assessmentRevisionId": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/assessmentRevisionId"
+                },
+                "revisionSequence": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/revisionSequence"
+                },
+                "rulesetVersion": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/rulesetVersion"
+                },
+                "evaluatorVersion": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/evaluatorVersion"
+                },
+                "attempts": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/attempts"
+                },
+                "deterministicPassCount": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/deterministicPassCount"
+                },
+                "deterministicFailCount": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/deterministicFailCount"
+                },
+                "semanticFindingCount": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/semanticFindingCount"
+                },
+                "state": {
+                  "type": "string",
+                  "const": "SUCCEEDED"
+                },
+                "failureCode": {
+                  "type": "null"
+                },
+                "completedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "version",
+                "id",
+                "assessmentId",
+                "assessmentRevisionId",
+                "revisionSequence",
+                "rulesetVersion",
+                "evaluatorVersion",
+                "attempts",
+                "deterministicPassCount",
+                "deterministicFailCount",
+                "semanticFindingCount",
+                "state",
+                "failureCode",
+                "completedAt"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "version": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/version"
+                },
+                "id": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/id"
+                },
+                "assessmentId": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/assessmentId"
+                },
+                "assessmentRevisionId": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/assessmentRevisionId"
+                },
+                "revisionSequence": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/revisionSequence"
+                },
+                "rulesetVersion": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/rulesetVersion"
+                },
+                "evaluatorVersion": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/evaluatorVersion"
+                },
+                "attempts": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/attempts"
+                },
+                "deterministicPassCount": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/deterministicPassCount"
+                },
+                "deterministicFailCount": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/deterministicFailCount"
+                },
+                "semanticFindingCount": {
+                  "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/0/properties/semanticFindingCount"
+                },
+                "state": {
+                  "type": "string",
+                  "const": "FAILED"
+                },
+                "failureCode": {
+                  "type": "string",
+                  "enum": [
+                    "RULESET_INTEGRITY",
+                    "DETERMINISTIC_RULE_FAILED",
+                    "TIMEOUT",
+                    "TRANSIENT_EXHAUSTED",
+                    "PERMANENT_EVALUATOR_ERROR",
+                    "OUTPUT_INVALID"
+                  ]
+                },
+                "completedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "version",
+                "id",
+                "assessmentId",
+                "assessmentRevisionId",
+                "revisionSequence",
+                "rulesetVersion",
+                "evaluatorVersion",
+                "attempts",
+                "deterministicPassCount",
+                "deterministicFailCount",
+                "semanticFindingCount",
+                "state",
+                "failureCode",
+                "completedAt"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "executions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ruleId": {
+                "type": "string",
+                "enum": [
+                  "REVISION_FINALIZED_AND_OWNED",
+                  "STRICT_REVISION_CONTRACT",
+                  "PLAN_COUNT_KEY_ORDER",
+                  "CURRICULUM_SCOPE_PUBLISHED",
+                  "ANSWER_COMPLETENESS_AND_TARGETS",
+                  "EXACT_SCORE_TREE",
+                  "STABLE_ID_AND_EXACT_DUPLICATE",
+                  "DETERMINISTIC_ANSWER_LEAKAGE",
+                  "SOURCE_LINK_COMPLETENESS_AND_IDENTITY",
+                  "CURRENT_SOURCE_ELIGIBILITY",
+                  "GENERATION_REVISION_PROVENANCE"
+                ]
+              },
+              "ruleVersion": {
+                "type": "string",
+                "minLength": 1
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "PASS",
+                  "FAIL"
+                ]
+              },
+              "evidence": {
+                "type": "object",
+                "properties": {
+                  "identity": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "revisionId": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "identity",
+                  "revisionId"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "ruleId",
+              "ruleVersion",
+              "outcome",
+              "evidence"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "DETERMINISTIC"
+                  },
+                  "code": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "category": {
+                    "type": "string",
+                    "enum": [
+                      "REVISION",
+                      "CONTRACT",
+                      "PLAN",
+                      "CURRICULUM",
+                      "ANSWER",
+                      "SCORING",
+                      "IDENTITY",
+                      "LEAKAGE",
+                      "SOURCE",
+                      "PROVENANCE"
+                    ]
+                  },
+                  "severity": {
+                    "type": "string",
+                    "const": "BLOCKING"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "messageKey": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "evidence": {
+                    "$ref": "#/definitions/ValidationResultV1/properties/executions/items/properties/evidence"
+                  },
+                  "confidenceBasisPoints": {
+                    "type": "null"
+                  },
+                  "ruleVersion": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "evaluatorVersion": {
+                    "type": "null"
+                  },
+                  "schemaVersion": {
+                    "type": "null"
+                  }
+                },
+                "required": [
+                  "id",
+                  "kind",
+                  "code",
+                  "category",
+                  "severity",
+                  "path",
+                  "messageKey",
+                  "evidence",
+                  "confidenceBasisPoints",
+                  "ruleVersion",
+                  "evaluatorVersion",
+                  "schemaVersion"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "SEMANTIC"
+                  },
+                  "code": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "category": {
+                    "type": "string",
+                    "enum": [
+                      "HEBREW_CORRECTNESS",
+                      "AMBIGUITY",
+                      "ANSWER_VALIDITY",
+                      "DIFFICULTY_FIT",
+                      "CURRICULUM_FIT",
+                      "DUPLICATION",
+                      "ANSWER_LEAKAGE"
+                    ]
+                  },
+                  "severity": {
+                    "type": "string",
+                    "enum": [
+                      "BLOCKING",
+                      "WARNING",
+                      "INFO"
+                    ]
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "messageKey": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "evidence": {
+                    "$ref": "#/definitions/ValidationResultV1/properties/executions/items/properties/evidence"
+                  },
+                  "confidenceBasisPoints": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 10000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "ruleVersion": {
+                    "type": "null"
+                  },
+                  "evaluatorVersion": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "schemaVersion": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "id",
+                  "kind",
+                  "code",
+                  "category",
+                  "severity",
+                  "path",
+                  "messageKey",
+                  "evidence",
+                  "confidenceBasisPoints",
+                  "ruleVersion",
+                  "evaluatorVersion",
+                  "schemaVersion"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "semanticEvaluation": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "type": "string",
+                      "const": "SUCCEEDED"
+                    },
+                    "evaluatorVersion": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "promptVersion": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "modelConfigurationVersion": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "schemaVersion": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "failureCode": {
+                      "type": "null"
+                    },
+                    "latencyMs": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "findingCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "evaluatorVersion",
+                    "promptVersion",
+                    "modelConfigurationVersion",
+                    "schemaVersion",
+                    "failureCode",
+                    "latencyMs",
+                    "findingCount"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "type": "string",
+                      "const": "FAILED"
+                    },
+                    "evaluatorVersion": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "promptVersion": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "modelConfigurationVersion": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "schemaVersion": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "failureCode": {
+                      "$ref": "#/definitions/ValidationResultV1/properties/status/anyOf/3/properties/failureCode"
+                    },
+                    "latencyMs": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "findingCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "evaluatorVersion",
+                    "promptVersion",
+                    "modelConfigurationVersion",
+                    "schemaVersion",
+                    "failureCode",
+                    "latencyMs",
+                    "findingCount"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "status",
+        "executions",
+        "findings",
+        "semanticEvaluation"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

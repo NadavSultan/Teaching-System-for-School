@@ -1,0 +1,184 @@
+{
+  "$ref": "#/definitions/ValidationFindingV1",
+  "definitions": {
+    "ValidationFindingV1": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "kind": {
+              "type": "string",
+              "const": "DETERMINISTIC"
+            },
+            "code": {
+              "type": "string",
+              "minLength": 1
+            },
+            "category": {
+              "type": "string",
+              "enum": [
+                "REVISION",
+                "CONTRACT",
+                "PLAN",
+                "CURRICULUM",
+                "ANSWER",
+                "SCORING",
+                "IDENTITY",
+                "LEAKAGE",
+                "SOURCE",
+                "PROVENANCE"
+              ]
+            },
+            "severity": {
+              "type": "string",
+              "const": "BLOCKING"
+            },
+            "path": {
+              "type": "string"
+            },
+            "messageKey": {
+              "type": "string",
+              "minLength": 1
+            },
+            "evidence": {
+              "type": "object",
+              "properties": {
+                "identity": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "revisionId": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "required": [
+                "identity",
+                "revisionId"
+              ],
+              "additionalProperties": false
+            },
+            "confidenceBasisPoints": {
+              "type": "null"
+            },
+            "ruleVersion": {
+              "type": "string",
+              "minLength": 1
+            },
+            "evaluatorVersion": {
+              "type": "null"
+            },
+            "schemaVersion": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "code",
+            "category",
+            "severity",
+            "path",
+            "messageKey",
+            "evidence",
+            "confidenceBasisPoints",
+            "ruleVersion",
+            "evaluatorVersion",
+            "schemaVersion"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "kind": {
+              "type": "string",
+              "const": "SEMANTIC"
+            },
+            "code": {
+              "type": "string",
+              "minLength": 1
+            },
+            "category": {
+              "type": "string",
+              "enum": [
+                "HEBREW_CORRECTNESS",
+                "AMBIGUITY",
+                "ANSWER_VALIDITY",
+                "DIFFICULTY_FIT",
+                "CURRICULUM_FIT",
+                "DUPLICATION",
+                "ANSWER_LEAKAGE"
+              ]
+            },
+            "severity": {
+              "type": "string",
+              "enum": [
+                "BLOCKING",
+                "WARNING",
+                "INFO"
+              ]
+            },
+            "path": {
+              "type": "string"
+            },
+            "messageKey": {
+              "type": "string",
+              "minLength": 1
+            },
+            "evidence": {
+              "$ref": "#/definitions/ValidationFindingV1/anyOf/0/properties/evidence"
+            },
+            "confidenceBasisPoints": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "ruleVersion": {
+              "type": "null"
+            },
+            "evaluatorVersion": {
+              "type": "string",
+              "minLength": 1
+            },
+            "schemaVersion": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "code",
+            "category",
+            "severity",
+            "path",
+            "messageKey",
+            "evidence",
+            "confidenceBasisPoints",
+            "ruleVersion",
+            "evaluatorVersion",
+            "schemaVersion"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}
