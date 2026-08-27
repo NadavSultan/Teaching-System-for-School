@@ -443,7 +443,16 @@ const cases: Array<[string, () => unknown | Promise<unknown>]> = [
         validationRequestSchema.safeParse({ ...validRequest(), platformEntitlement: true }).success,
       ).toBe(false),
   ],
-  ['C01', () => expect(validRequest()).toEqual(validRequest())],
+  [
+    'C01',
+    () =>
+      expect(validRequest()).toMatchObject({
+        version: '1.0.0',
+        assessmentId: revisionId,
+        assessmentRevisionId: revisionId,
+        idempotencyKey: 'request-1',
+      }),
+  ],
   [
     'C02',
     () =>
