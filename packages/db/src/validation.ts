@@ -117,10 +117,56 @@ function toValidationSnapshot(revision: any) {
     [...rows].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).find(predicate);
   const mapLink = (question: any, link: any) => {
     const sourceVersion = link.sourceVersion;
-    const source = sourceVersion.source;
+    const source = sourceVersion?.source;
     const review = latest(sourceVersion.reviews ?? [], () => true);
     const permission = latest(sourceVersion.permissions ?? [], () => true);
     const run = link.generationRun;
+    if (!sourceVersion || !source || !link.knowledgeItem || !run) {
+      return {
+        questionId: question.id,
+        revisionId: revision.id,
+        sourceVersionId: link.sourceVersionId ?? '',
+        knowledgeItemId: link.knowledgeItemId ?? '',
+        locator: link.locator ?? '',
+        contentHash: link.textHash ?? '',
+        sourceVersion: {
+          id: sourceVersion?.id ?? link.sourceVersionId ?? '',
+          sourceId: sourceVersion?.sourceId ?? '',
+          sourceOrganizationId: source?.organizationId ?? '',
+        },
+        knowledgeItem: {
+          id: link.knowledgeItem?.id ?? link.knowledgeItemId ?? '',
+          sourceVersionId: link.knowledgeItem?.sourceVersionId ?? '',
+          organizationId: link.knowledgeItem?.organizationId ?? '',
+        },
+        eligibility: {
+          pedagogicalApproved: false,
+          usageAllowed: false,
+          sourceLifecycle: 'FAILED',
+          itemLifecycle: 'SUSPENDED',
+          visibilityPermitted: false,
+          exactPublishedCurriculum: false,
+        },
+        provenance: {
+          generationRunId: '',
+          generationRunState: 'FAILED',
+          operation: 'DRAFT',
+          assessmentId: '',
+          curriculumVersionId: '',
+          outputRevisionId: '',
+          promptTemplateVersion: '',
+          promptTemplateHash: '',
+          modelConfigurationVersion: '',
+          modelConfigurationHash: '',
+          responseSchemaVersion: '',
+          responseSchemaHash: '',
+          revisionId: '',
+          questionId: '',
+          sourceVersionId: '',
+          knowledgeItemId: '',
+        },
+      };
+    }
     return {
       questionId: question.id,
       revisionId: revision.id,
@@ -129,11 +175,18 @@ function toValidationSnapshot(revision: any) {
       // Link values are candidates; the nested canonical snapshot is the authority.
       locator: link.locator,
       contentHash: link.textHash,
-      sourceVersion: { id: sourceVersion.id, contentHash: sourceVersion.contentHash },
+      sourceVersion: {
+        id: sourceVersion.id,
+        contentHash: sourceVersion.contentHash,
+        sourceId: sourceVersion.sourceId,
+        sourceOrganizationId: source.organizationId,
+      },
       knowledgeItem: {
         id: link.knowledgeItem.id,
         locator: link.knowledgeItem.locator,
         textHash: link.knowledgeItem.textHash,
+        sourceVersionId: link.knowledgeItem.sourceVersionId,
+        organizationId: link.knowledgeItem.organizationId,
       },
       eligibility: {
         pedagogicalApproved: review?.decision === 'APPROVED',

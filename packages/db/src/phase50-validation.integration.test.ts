@@ -3,10 +3,12 @@ import {
   createPersonalWorkspace,
   createAssessmentRevision,
   createKnowledgeSource,
+  getGenerationResult,
   getRevisionValidationReadiness,
   getValidationStatus,
   publishCurriculumVersion,
   processValidationRun,
+  processGenerationRun,
   recordPedagogicalReview,
   recordUsagePermission,
   registerSourceVersion,
@@ -17,6 +19,8 @@ import {
   runIngestion,
   setSourceLifecycle,
 } from './index.js';
+import { createGenerationFixture } from './phase40.acceptance.fixtures.js';
+import { DeterministicFakeModelGateway } from '@teach/ai';
 
 const principal = (userId: string) => ({
   version: '1.0.0' as const,
@@ -112,6 +116,117 @@ describe('Phase 50 persisted validation operations', () => {
       state: 'PENDING',
       revisionSequence: 1,
     });
+  });
+
+  it('D18 persisted current eligibility rejects each inactive source state and preserves shared sources', async () => {
+    const check = async (
+      mutate: (f: Awaited<ReturnType<typeof createGenerationFixture>>) => Promise<void>,
+    ) => {
+      const f = await createGenerationFixture();
+      const generated = await processGenerationRun(
+        f.generationRunId,
+        prisma,
+        new DeterministicFakeModelGateway(),
+      );
+      expect(generated?.state).toBe('SUCCEEDED');
+      const output = await getGenerationResult(f.context, f.generationRunId);
+      expect(output?.revision?.id).toBeTruthy();
+      const generatedQuestion = output!.revision!.sections[0]!.questions[0]!;
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
+        await tx.answer.create({
+          data: {
+            questionId: generatedQuestion.id,
+            key: 'd18-answer',
+            order: 0,
+            text: 'תשובה תקינה',
+            answerData: {},
+          },
+        });
+      });
+      await mutate(f);
+      const requested = await requestRevisionValidation(f.context, {
+        version: '1.0.0',
+        assessmentId: f.assessmentId,
+        assessmentRevisionId: output!.revision!.id,
+        idempotencyKey: `d18-validation-${Math.random()}`,
+      });
+      const processed = await processValidationRun(requested.id);
+      expect(processed?.state).toBe('FAILED');
+      const findings = await prisma.validationFinding.findMany({
+        where: { validationRunId: requested.id },
+        orderBy: { id: 'asc' },
+        select: { code: true, severity: true },
+      });
+      expect(findings).toEqual([{ code: 'CURRENT_SOURCE_ELIGIBILITY', severity: 'BLOCKING' }]);
+    };
+    await check(async (f) => {
+      await recordPedagogicalReview(f.context, {
+        version: '1.0.0',
+        sourceVersionId: f.sourceVersionId,
+        decision: 'REJECTED',
+        reason: 'd18',
+      });
+    });
+    await check(async (f) => {
+      await recordUsagePermission(f.context, {
+        version: '1.0.0',
+        sourceVersionId: f.sourceVersionId,
+        decision: 'DENIED',
+        evidenceReference: 'd18',
+        scope: 'AI_GENERATION',
+      });
+    });
+    await check(async (f) => {
+      await recordUsagePermission(f.context, {
+        version: '1.0.0',
+        sourceVersionId: f.sourceVersionId,
+        decision: 'ALLOWED',
+        evidenceReference: 'd18',
+        scope: 'AI_GENERATION',
+        validUntil: '2020-01-01T00:00:00.000Z',
+      });
+    });
+    await check(async (f) => {
+      await setSourceLifecycle(f.context, f.sourceVersionId, 'SUSPENDED', 'd18');
+    });
+    await check(async (f) => {
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
+        await tx.$executeRaw`UPDATE knowledge_items SET status = 'SUSPENDED' WHERE id = ${f.knowledgeItemId}::uuid`;
+      });
+    });
+    const shared = await createGenerationFixture();
+    const generated = await processGenerationRun(
+      shared.generationRunId,
+      prisma,
+      new DeterministicFakeModelGateway(),
+    );
+    expect(generated?.state).toBe('SUCCEEDED');
+    const sharedOutput = await getGenerationResult(shared.context, shared.generationRunId);
+    const sharedQuestion = sharedOutput!.revision!.sections[0]!.questions[0]!;
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
+      await tx.answer.create({
+        data: {
+          questionId: sharedQuestion.id,
+          key: 'd18-shared-answer',
+          order: 0,
+          text: 'תשובה תקינה',
+          answerData: {},
+        },
+      });
+      await tx.$executeRaw`UPDATE knowledge_sources SET visibility = 'PLATFORM_SHARED', organization_id = NULL WHERE id = ${shared.sourceId}::uuid`;
+      await tx.$executeRaw`UPDATE knowledge_items SET visibility = 'PLATFORM_SHARED', organization_id = NULL WHERE id = ${shared.knowledgeItemId}::uuid`;
+    });
+    const sharedRequest = await requestRevisionValidation(shared.context, {
+      version: '1.0.0',
+      assessmentId: shared.assessmentId,
+      assessmentRevisionId: sharedOutput!.revision!.id,
+      idempotencyKey: `d18-shared-${Math.random()}`,
+    });
+    const sharedProcessed = await processValidationRun(sharedRequest.id);
+    expect(sharedProcessed?.state).toBe('SUCCEEDED');
   });
 
   it('replays the exact request and rejects a conflicting idempotency payload', async () => {

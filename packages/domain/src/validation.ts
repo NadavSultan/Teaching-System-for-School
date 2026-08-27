@@ -270,11 +270,18 @@ const linkShape = (v: unknown) => {
     str(x.sourceVersionId) &&
     str(x.knowledgeItemId) &&
     sv !== null &&
-    (exact(sv, ['id']) || exact(sv, ['id', 'contentHash'])) &&
+    (exact(sv, ['id']) ||
+      exact(sv, ['id', 'contentHash']) ||
+      exact(sv, ['id', 'sourceId', 'sourceOrganizationId']) ||
+      exact(sv, ['id', 'contentHash', 'sourceId', 'sourceOrganizationId'])) &&
     sv.id === x.sourceVersionId &&
     ki !== null &&
-    (exact(ki, ['id']) || exact(ki, ['id', 'locator', 'textHash'])) &&
+    (exact(ki, ['id']) ||
+      exact(ki, ['id', 'locator', 'textHash']) ||
+      exact(ki, ['id', 'sourceVersionId', 'organizationId']) ||
+      exact(ki, ['id', 'locator', 'textHash', 'sourceVersionId', 'organizationId'])) &&
     ki.id === x.knowledgeItemId &&
+    (ki.sourceVersionId === undefined || ki.sourceVersionId === sv.id) &&
     eligibilityShape(x.eligibility) &&
     provenanceShape(x.provenance)
   );

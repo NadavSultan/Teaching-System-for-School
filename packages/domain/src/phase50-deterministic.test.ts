@@ -12,8 +12,8 @@ const link = () => ({
   knowledgeItemId: 'ki1',
   locator: 'paragraph:1',
   contentHash: 'hash-1',
-  sourceVersion: { id: 'sv1' },
-  knowledgeItem: { id: 'ki1' },
+  sourceVersion: { id: 'sv1', sourceId: 'source1', sourceOrganizationId: 'org1' },
+  knowledgeItem: { id: 'ki1', sourceVersionId: 'sv1', organizationId: 'org1' },
   eligibility: {
     pedagogicalApproved: true,
     usageAllowed: true,
@@ -254,62 +254,63 @@ describe('Package 1B deterministic matrix', () => {
     expectFails(withSubQuestion({ answers: [] }), ['ANSWER_COMPLETENESS_AND_TARGETS']);
   });
   it('D10 question and subquestion answer or rubric owner type and ID must match', () => {
-    expectFails(
-      {
-        ...snapshot(),
-        sections: [
-          {
-            ...snapshot().sections[0]!,
-            questions: [
-              {
-                ...snapshot().sections[0]!.questions[0]!,
-                answers: [{ ownerType: 'SUBQUESTION', ownerId: 'other', text: 'תשובה' }],
-              },
-            ],
-          },
-        ],
-      },
-      ['ANSWER_COMPLETENESS_AND_TARGETS'],
-    );
-    expectFails(
-      {
-        ...snapshot(),
-        sections: [
-          {
-            ...snapshot().sections[0]!,
-            questions: [{ ...snapshot().sections[0]!.questions[0]!, answers: [{ text: 'תשובה' }] }],
-          },
-        ],
-      },
-      ['ANSWER_COMPLETENESS_AND_TARGETS'],
-    );
-    expectFails(
-      {
-        ...withSubQuestion(),
-        sections: [
-          {
-            ...withSubQuestion().sections[0]!,
-            questions: [
-              {
-                ...withSubQuestion().sections[0]!.questions[0]!,
-                rubrics: [{ ownerType: 'QUESTION', ownerId: 'wrong', scoreUnits: null }],
-              },
-            ],
-          },
-        ],
-      },
-      ['ANSWER_COMPLETENESS_AND_TARGETS'],
-    );
-    expectFails(
-      withSubQuestion({ answers: [{ ownerType: 'QUESTION', ownerId: 'q1', text: 'x' }] }),
-      ['ANSWER_COMPLETENESS_AND_TARGETS'],
-    );
-    expectFails(
-      withSubQuestion({
-        rubrics: [{ ownerType: 'SUBQUESTION', ownerId: 'wrong', scoreUnits: null }],
-      }),
-      ['ANSWER_COMPLETENESS_AND_TARGETS'],
-    );
+    const positive = withSubQuestion();
+    const question = positive.sections[0]!.questions[0]!;
+    const subQuestion = question.subQuestions[0]!;
+    const valid = {
+      ...positive,
+      sections: [
+        {
+          ...positive.sections[0]!,
+          questions: [
+            {
+              ...question,
+              rubrics: [{ ownerType: 'QUESTION', ownerId: 'q1', scoreUnits: null }],
+            },
+          ],
+        },
+      ],
+    };
+    const mutate = (changes: Record<string, unknown>) => {
+      const { subQuestion: subChanges, ...questionChanges } = changes;
+      expectFails(
+        {
+          ...valid,
+          sections: [
+            {
+              ...valid.sections[0]!,
+              questions: [
+                {
+                  ...valid.sections[0]!.questions[0]!,
+                  ...questionChanges,
+                  subQuestions: [
+                    {
+                      ...subQuestion,
+                      ...(subChanges as Record<string, unknown> | undefined),
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        ['ANSWER_COMPLETENESS_AND_TARGETS'],
+      );
+    };
+    mutate({ answers: [{ ownerType: 'SUBQUESTION', ownerId: 'sq1', text: 'תשובה' }] });
+    mutate({ answers: [{ ownerType: 'QUESTION', ownerId: 'wrong', text: 'תשובה' }] });
+    mutate({ rubrics: [{ ownerType: 'SUBQUESTION', ownerId: 'sq1', scoreUnits: null }] });
+    mutate({ rubrics: [{ ownerType: 'QUESTION', ownerId: 'wrong', scoreUnits: null }] });
+    mutate({ subQuestion: { answers: [{ ownerType: 'QUESTION', ownerId: 'q1', text: 'x' }] } });
+    mutate({
+      subQuestion: { answers: [{ ownerType: 'SUBQUESTION', ownerId: 'wrong', text: 'x' }] },
+    });
+    mutate({
+      subQuestion: { rubrics: [{ ownerType: 'QUESTION', ownerId: 'q1', scoreUnits: null }] },
+    });
+    mutate({
+      subQuestion: { rubrics: [{ ownerType: 'SUBQUESTION', ownerId: 'wrong', scoreUnits: null }] },
+    });
   });
   it('D11 assessment section question and subquestion score totals use the approved score tree', () => {
     const base = withSubQuestion();
@@ -705,7 +706,7 @@ describe('Package 1B deterministic matrix', () => {
         ['SOURCE_LINK_COMPLETENESS_AND_IDENTITY'],
       );
   });
-  it('D18 linked source rejected denied expired or inactive fails current eligibility only', () => {
+  it('linked source rejected denied expired or inactive fails current eligibility only', () => {
     const base = snapshot();
     const denied = [
       { pedagogicalApproved: false },
