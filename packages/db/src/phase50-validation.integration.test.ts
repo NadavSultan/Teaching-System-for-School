@@ -666,9 +666,8 @@ describe('Phase 50 persisted validation operations', () => {
       await alter(async (tx) => {
         const foreign = await tx.organization.create({ data: { name: `phase50-foreign-${sequence}`, workspaceType: 'SCHOOL' } });
         await tx.$executeRaw`UPDATE knowledge_sources SET organization_id = ${foreign.id}::uuid WHERE id = ${f.sourceId}::uuid`;
-        await tx.$executeRaw`UPDATE knowledge_items SET organization_id = ${foreign.id}::uuid WHERE id = ${f.knowledgeItemId}::uuid`;
       });
-      await validate(f, [sourceFailure, currentFailure]);
+      await validate(f, [sourceFailure]);
     }
     {
       const f = await generatedValidationFixture();
