@@ -269,13 +269,11 @@ const linkShape = (v: unknown) => {
     str(x.revisionId) &&
     str(x.sourceVersionId) &&
     str(x.knowledgeItemId) &&
-    str(x.locator) &&
-    str(x.contentHash) &&
     sv !== null &&
-    exact(sv, ['id']) &&
+    (exact(sv, ['id']) || exact(sv, ['id', 'contentHash'])) &&
     sv.id === x.sourceVersionId &&
     ki !== null &&
-    exact(ki, ['id']) &&
+    (exact(ki, ['id']) || exact(ki, ['id', 'locator', 'textHash'])) &&
     ki.id === x.knowledgeItemId &&
     eligibilityShape(x.eligibility) &&
     provenanceShape(x.provenance)
@@ -487,17 +485,21 @@ export function evaluateDeterministicRules(input: unknown): DeterministicRuleRes
     return defs.map((d) =>
       Object.freeze({
         ...d,
-        outcome: 'FAIL' as const,
+        outcome: d.ruleId === 'STRICT_REVISION_CONTRACT' ? ('FAIL' as const) : ('PASS' as const),
         path: 'snapshot',
-        messageKey: `${d.ruleId}_FAILED`,
+        ...(d.ruleId === 'STRICT_REVISION_CONTRACT' ? { messageKey: `${d.ruleId}_FAILED` } : {}),
         evidence: ev(d.ruleId, 'trusted snapshot rejected', 0),
-        finding: Object.freeze({
-          code: `${d.ruleId}_FAILED`,
-          category: d.category,
-          severity: 'BLOCKING' as const,
-          path: 'snapshot',
-          messageKey: `${d.ruleId}_FAILED`,
-        }),
+        ...(d.ruleId === 'STRICT_REVISION_CONTRACT'
+          ? {
+              finding: Object.freeze({
+                code: `${d.ruleId}_FAILED`,
+                category: d.category,
+                severity: 'BLOCKING' as const,
+                path: 'snapshot',
+                messageKey: `${d.ruleId}_FAILED`,
+              }),
+            }
+          : {}),
       }),
     );
   const q = questions(s),
@@ -553,6 +555,12 @@ export function evaluateDeterministicRules(input: unknown): DeterministicRuleRes
             (l) =>
               l.questionId === x.id &&
               l.revisionId === s.id &&
+              str(l.locator) &&
+              str(l.contentHash) &&
+              ((l.knowledgeItem as R).locator === undefined ||
+                l.locator === (l.knowledgeItem as R).locator) &&
+              ((l.knowledgeItem as R).textHash === undefined ||
+                l.contentHash === (l.knowledgeItem as R).textHash) &&
               (l.sourceVersion as R).id === l.sourceVersionId &&
               (l.knowledgeItem as R).id === l.knowledgeItemId,
           ),
@@ -561,7 +569,7 @@ export function evaluateDeterministicRules(input: unknown): DeterministicRuleRes
       q.length > 0 &&
       q.every(
         (x) =>
-          (x.questionSourceLinks as R[]).length > 0 &&
+          (x.questionSourceLinks as R[]).length === 0 ||
           (x.questionSourceLinks as R[]).every((l) =>
             isEligibleKnowledgeItem(l.eligibility as EligibilityInput),
           ),
@@ -570,7 +578,7 @@ export function evaluateDeterministicRules(input: unknown): DeterministicRuleRes
       q.length > 0 &&
       q.every(
         (x) =>
-          (x.questionSourceLinks as R[]).length > 0 &&
+          (x.questionSourceLinks as R[]).length === 0 ||
           (x.questionSourceLinks as R[]).every((l) => {
             const p = l.provenance as R;
             return (

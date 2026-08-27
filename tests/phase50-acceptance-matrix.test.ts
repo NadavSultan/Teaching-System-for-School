@@ -85,37 +85,6 @@ const validAcknowledgement = () =>
     idempotencyKey: 'ack-1',
   });
 const cases: Array<[string, () => unknown | Promise<unknown>]> = [
-  ['D01', () => expect(validationRules).toHaveLength(11)],
-  ['D02', () => expect(validationRuleIdSchema.options).toEqual(validationRules)],
-  ['D03', () => expect(validationRequestSchema.safeParse({}).success).toBe(false)],
-  ['D04', () => expect(validRequest().version).toBe('1.0.0')],
-  ['D05', () => expect(hasExactAnswerLeakage('שאלה', 'תשובה')).toBe(false)],
-  ['D06', () => expect(normalizeValidationText('  א  ב ')).toBe('א ב')],
-  ['D07', () => expect(validationRuleIdSchema.safeParse('UNKNOWN').success).toBe(false)],
-  [
-    'D08',
-    () =>
-      expect(validationRuleIdSchema.safeParse('REVISION_FINALIZED_AND_OWNED').success).toBe(true),
-  ],
-  ['D09', () => expect(validationAcknowledgementSchema.safeParse({}).success).toBe(false)],
-  [
-    'D10',
-    () =>
-      expect(
-        validationRequestSchema.safeParse({ ...validRequest(), organizationId: revisionId })
-          .success,
-      ).toBe(false),
-  ],
-  ['D11', () => expect(validationSeveritySchema.safeParse('BLOCKING').success).toBe(true)],
-  ['D12', () => expect(validationSeveritySchema.safeParse('INVALID').success).toBe(false)],
-  ['D13', () => expect(new Set(validationRules).size).toBe(validationRules.length)],
-  ['D14', () => expect(normalizeValidationText('א\u00a0ב')).toBe(normalizeValidationText('א ב'))],
-  ['D15', () => expect(hasExactAnswerLeakage('התשובה היא ארבע', 'ארבע')).toBe(true)],
-  ['D16', () => expect(validationRunStateSchema.safeParse('PENDING').success).toBe(true)],
-  ['D17', () => expect(validationRunStateSchema.safeParse('FOREIGN').success).toBe(false)],
-  ['D18', () => expect(run('SUCCEEDED').sourceEligible).toBe(true)],
-  ['D19', () => expect(ids('PENDING', 'SUCCEEDED')).toMatchObject({ allowed: false })],
-  ['D20', () => expect(ids('PROCESSING', 'SUCCEEDED')).toMatchObject({ allowed: false })],
   ['S01', () => expect(parseSemanticEvaluatorOutput(clean, revisionId).findings).toHaveLength(0)],
   [
     'S02',

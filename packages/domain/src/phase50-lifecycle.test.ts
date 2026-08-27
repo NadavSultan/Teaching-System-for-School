@@ -44,7 +44,7 @@ describe('Package 1B lifecycle matrix', () => {
     ).toMatchObject({ allowed: false, reason: 'LEASE_NOT_STALE' });
   });
   it('PROCESSING to PROCESSING is rejected', () => expected('PROCESSING', 'PROCESSING'));
-  it('PROCESSING to SUCCEEDED requires exact complete shape', () => {
+  it('D20 completion rejects absent duplicate reordered unknown and wrong-version execution sets', () => {
     expected('PROCESSING', 'SUCCEEDED');
     expect(
       decideValidationRunTransition({

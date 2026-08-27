@@ -78,6 +78,161 @@ async function ownedRun(context: AccessContext, runId: string, client: Db) {
   });
 }
 
+/**
+ * Converts persisted Phase 20/30/40 rows into the domain validator's strict
+ * input.  The values used for source identity deliberately come from the
+ * canonical knowledge-item/source-version rows, never from client-shaped
+ * link metadata.
+ */
+function toValidationSnapshot(revision: any) {
+  const outputRun = revision.outputGenerationRuns?.find(
+    (run: any) => run.state === 'SUCCEEDED' && run.outputRevisionId === revision.id,
+  );
+  const specification = outputRun?.frozenSpecification as any;
+  const frozenPlan = specification?.sections
+    ? {
+        questions: specification.sections.flatMap((section: any) =>
+          section.questions.map((question: any) => ({ key: question.key, order: question.order })),
+        ),
+      }
+    : {
+        questions: revision.sections.flatMap((section: any) =>
+          section.questions.map((question: any) => ({ key: question.key, order: question.order })),
+        ),
+      };
+  const nodeIds = revision.nodeLinks.map((link: any) => link.curriculumNodeId);
+  const latest = (rows: any[], predicate: (row: any) => boolean) =>
+    [...rows].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).find(predicate);
+  const mapLink = (question: any, link: any) => {
+    const sourceVersion = link.sourceVersion;
+    const source = sourceVersion.source;
+    const review = latest(sourceVersion.reviews ?? [], () => true);
+    const permission = latest(
+      sourceVersion.permissions ?? [],
+      (row) => row.validUntil === null || row.validUntil > new Date(),
+    );
+    const run = link.generationRun;
+    return {
+      questionId: question.id,
+      revisionId: revision.id,
+      sourceVersionId: sourceVersion.id,
+      knowledgeItemId: link.knowledgeItem.id,
+      // Link values are candidates; the nested canonical snapshot is the authority.
+      locator: link.locator,
+      contentHash: link.textHash,
+      sourceVersion: { id: sourceVersion.id, contentHash: sourceVersion.contentHash },
+      knowledgeItem: {
+        id: link.knowledgeItem.id,
+        locator: link.knowledgeItem.locator,
+        textHash: link.knowledgeItem.textHash,
+      },
+      eligibility: {
+        pedagogicalApproved: review?.decision === 'APPROVED',
+        usageAllowed: permission?.decision === 'ALLOWED',
+        sourceLifecycle: source.lifecycleEvents?.[0]?.toStatus ?? sourceVersion.lifecycle,
+        itemLifecycle: link.knowledgeItem.status,
+        visibilityPermitted:
+          link.knowledgeItem.visibility === 'PLATFORM_SHARED' ||
+          link.knowledgeItem.organizationId === revision.organizationId,
+        exactPublishedCurriculum:
+          link.curriculumVersionId === revision.curriculumVersionId &&
+          nodeIds.includes(link.curriculumNodeId) &&
+          revision.curriculumVersion.status === 'PUBLISHED',
+      },
+      provenance: {
+        generationRunId: run.id,
+        generationRunState: run.state,
+        operation: run.operation,
+        assessmentId: run.assessmentId,
+        curriculumVersionId: link.curriculumVersionId,
+        outputRevisionId: run.outputRevisionId,
+        promptTemplateVersion: run.promptTemplateVersion,
+        promptTemplateHash: run.promptTemplateHash,
+        modelConfigurationVersion: run.modelConfigurationVersion,
+        modelConfigurationHash: run.modelConfigurationHash,
+        responseSchemaVersion: run.responseSchemaVersion,
+        responseSchemaHash: run.responseSchemaHash,
+        revisionId: revision.id,
+        questionId: question.id,
+        sourceVersionId: sourceVersion.id,
+        knowledgeItemId: link.knowledgeItem.id,
+      },
+    };
+  };
+  const mapQuestion = (question: any, links: any[]) => ({
+    id: question.id,
+    key: question.key,
+    prompt: question.prompt,
+    instructions: question.instructions ?? '',
+    order: question.order,
+    scoreUnits: question.scoreUnits,
+    answers: question.answers.map((answer: any) => ({
+      ownerType: 'QUESTION',
+      ownerId: question.id,
+      text: answer.text,
+    })),
+    rubrics: question.rubrics.map((rubric: any) => ({
+      ownerType: 'QUESTION',
+      ownerId: question.id,
+      scoreUnits: rubric.scoreUnits,
+    })),
+    subQuestions: question.subQuestions.map((sub: any) => ({
+      id: sub.id,
+      key: sub.key,
+      prompt: sub.prompt,
+      instructions: '',
+      order: sub.order,
+      scoreUnits: sub.scoreUnits,
+      answers: sub.answers.map((answer: any) => ({
+        ownerType: 'SUBQUESTION',
+        ownerId: sub.id,
+        text: answer.text,
+      })),
+      rubrics: sub.rubrics.map((rubric: any) => ({
+        ownerType: 'SUBQUESTION',
+        ownerId: sub.id,
+        scoreUnits: rubric.scoreUnits,
+      })),
+      subQuestions: [],
+      questionSourceLinks: [],
+    })),
+    questionSourceLinks: links.map((link) => mapLink(question, link)),
+  });
+  return {
+    id: revision.id,
+    generationRunId: outputRun?.id ?? '',
+    generationOperation: outputRun?.operation ?? 'DRAFT',
+    promptTemplateVersion: outputRun?.promptTemplateVersion ?? '',
+    promptTemplateHash: outputRun?.promptTemplateHash ?? '',
+    modelConfigurationVersion: outputRun?.modelConfigurationVersion ?? '',
+    modelConfigurationHash: outputRun?.modelConfigurationHash ?? '',
+    responseSchemaVersion: outputRun?.responseSchemaVersion ?? '',
+    responseSchemaHash: outputRun?.responseSchemaHash ?? '',
+    assessmentId: revision.assessmentId,
+    organizationId: revision.assessment.organizationId,
+    ownerOrganizationId: revision.assessment.organizationId,
+    state: revision.state,
+    assessmentType: revision.assessment.type,
+    scoringMode: revision.scoringMode,
+    totalScoreUnits: revision.totalScoreUnits,
+    curriculumVersion: {
+      id: revision.curriculumVersion.id,
+      status: revision.curriculumVersion.status,
+      nodeIds,
+    },
+    curriculumNodeIds: nodeIds,
+    frozenPlan,
+    sections: revision.sections.map((section: any) => ({
+      key: section.key,
+      order: section.order,
+      scoreUnits: section.scoreUnits,
+      questions: section.questions.map((question: any) =>
+        mapQuestion(question, question.questionSourceLinks),
+      ),
+    })),
+  };
+}
+
 export async function requestRevisionValidation(
   context: AccessContext,
   input: unknown,
@@ -345,16 +500,20 @@ export async function processValidationRun(validationRunId: string, client: Pris
     const revision = await tx.assessmentRevision.findUnique({
       where: { id: claimed.assessmentRevisionId },
       include: {
+        assessment: true,
         curriculumVersion: true,
         nodeLinks: true,
+        outputGenerationRuns: true,
         sections: {
           include: {
             questions: {
               include: {
                 answers: true,
+                rubrics: true,
+                subQuestions: { include: { answers: true, rubrics: true } },
                 questionSourceLinks: {
                   include: {
-                    knowledgeItem: true,
+                    knowledgeItem: { include: { sourceVersion: { include: { source: true } } } },
                     generationRun: true,
                     sourceVersion: {
                       include: {
@@ -363,6 +522,8 @@ export async function processValidationRun(validationRunId: string, client: Pris
                             lifecycleEvents: { orderBy: { createdAt: 'desc' }, take: 1 },
                           },
                         },
+                        reviews: { orderBy: { createdAt: 'desc' } },
+                        permissions: { orderBy: { createdAt: 'desc' } },
                       },
                     },
                   },
@@ -373,7 +534,7 @@ export async function processValidationRun(validationRunId: string, client: Pris
         },
       },
     });
-    const results = evaluateDeterministicRules(revision);
+    const results = evaluateDeterministicRules(toValidationSnapshot(revision));
     const byRule = new Map(results.map((result) => [result.ruleId, result]));
     const executions = await Promise.all(
       rules.map((rule) =>

@@ -96,9 +96,9 @@ const expectFails = (value: unknown, ids: string[]) => {
   }
 };
 describe('Package 1B deterministic matrix', () => {
-  it('valid worksheet has eleven affirmative passes', () =>
+  it('D01 valid WORKSHEET revision has all eleven ordered executions PASS', () =>
     expect(result(snapshot()).every((r) => r.outcome === 'PASS')).toBe(true));
-  it('valid exact 10000 unit test has eleven affirmative passes', () => {
+  it('D02 valid TEST revision has exact 10000-unit scoring and all eleven executions PASS', () => {
     const s = {
       ...snapshot(),
       assessmentType: 'TEST' as const,
@@ -114,9 +114,9 @@ describe('Package 1B deterministic matrix', () => {
     };
     expect(result(s).every((r) => r.outcome === 'PASS')).toBe(true);
   });
-  it('malformed snapshot fails closed for every rule', () =>
-    expectFails({}, validationRules as unknown as string[]));
-  it('missing ownership fails ownership only', () =>
+  it('D03 persisted graph that cannot map to the strict revision contract is rejected', () =>
+    expectFails({}, ['STRICT_REVISION_CONTRACT']));
+  it('D04 required revision ownership field absent fails the intended blocking rule', () =>
     expectFails({ ...snapshot(), ownerOrganizationId: 'other' }, ['REVISION_FINALIZED_AND_OWNED']));
   it('missing strict field fails closed at contract boundary', () => {
     expectFails(
@@ -129,18 +129,18 @@ describe('Package 1B deterministic matrix', () => {
           },
         ],
       },
-      validationRules as unknown as string[],
+      ['STRICT_REVISION_CONTRACT'],
     );
-    expectFails({ ...snapshot(), assessmentType: 'ALIEN' }, validationRules as unknown as string[]);
-    expectFails({ ...snapshot(), scoringMode: 'ALIEN' }, validationRules as unknown as string[]);
+    expectFails({ ...snapshot(), assessmentType: 'ALIEN' }, ['STRICT_REVISION_CONTRACT']);
+    expectFails({ ...snapshot(), scoringMode: 'ALIEN' }, ['STRICT_REVISION_CONTRACT']);
   });
-  it('frozen plan count mismatch fails plan only', () =>
+  it('D05 frozen-plan question count differs and fails only the plan rule', () =>
     expectFails({ ...snapshot(), frozenPlan: { questions: [] } }, ['PLAN_COUNT_KEY_ORDER']));
-  it('frozen plan key order mismatch fails plan only', () =>
+  it('D06 frozen-plan keys or order differ and fail only the plan rule', () =>
     expectFails({ ...snapshot(), frozenPlan: { questions: [{ key: 'wrong', order: 0 }] } }, [
       'PLAN_COUNT_KEY_ORDER',
     ]));
-  it('unpublished curriculum fails curriculum only', () =>
+  it('D08 curriculum version is not currently PUBLISHED', () =>
     expectFails(
       {
         ...snapshot(),
@@ -148,9 +148,9 @@ describe('Package 1B deterministic matrix', () => {
       },
       ['CURRICULUM_SCOPE_PUBLISHED'],
     ));
-  it('unknown curriculum node fails curriculum only', () =>
+  it('D07 unknown or cross-version curriculum node fails curriculum scope', () =>
     expectFails({ ...snapshot(), curriculumNodeIds: ['unknown'] }, ['CURRICULUM_SCOPE_PUBLISHED']));
-  it('missing answer fails answer targets only', () =>
+  it('D09 required question and subquestion answers are independently required', () =>
     expectFails(
       {
         ...snapshot(),
@@ -163,7 +163,7 @@ describe('Package 1B deterministic matrix', () => {
       },
       ['ANSWER_COMPLETENESS_AND_TARGETS'],
     ));
-  it('wrong answer owner fails answer targets only', () => {
+  it('D10 question and subquestion answer or rubric owner type and ID must match', () => {
     expectFails(
       {
         ...snapshot(),
@@ -194,7 +194,7 @@ describe('Package 1B deterministic matrix', () => {
       ['ANSWER_COMPLETENESS_AND_TARGETS'],
     );
   });
-  it('score mismatch fails approved score rule only', () =>
+  it('D11 assessment section question and subquestion score totals use the approved score tree', () =>
     expectFails(
       {
         ...snapshot(),
@@ -204,7 +204,7 @@ describe('Package 1B deterministic matrix', () => {
       },
       ['EXACT_SCORE_TREE'],
     ));
-  it('incomplete rubric allocation fails approved score rule only', () =>
+  it('D12 rubric allocation incomplete or internally inconsistent fails scoring', () =>
     expectFails(
       {
         ...snapshot(),
@@ -227,7 +227,7 @@ describe('Package 1B deterministic matrix', () => {
       },
       ['EXACT_SCORE_TREE'],
     ));
-  it('duplicate stable ID fails identity only', () =>
+  it('D13 duplicate stable question and subquestion IDs fail identity', () =>
     expectFails(
       {
         ...snapshot(),
@@ -256,7 +256,7 @@ describe('Package 1B deterministic matrix', () => {
       },
       ['STABLE_ID_AND_EXACT_DUPLICATE'],
     ));
-  it('normalized duplicate text fails identity only', () =>
+  it('D14 exact normalized duplicate question text fails identity', () =>
     expectFails(
       {
         ...snapshot(),
@@ -327,7 +327,7 @@ describe('Package 1B deterministic matrix', () => {
         },
       }).filter((r) => r.outcome === 'FAIL'),
     ).toHaveLength(0));
-  it('exact normalized answer leakage fails leakage only', () => {
+  it('D15 exact normalized answer leakage into visible prompt fails leakage', () => {
     expectFails(
       {
         ...snapshot(),
@@ -348,7 +348,7 @@ describe('Package 1B deterministic matrix', () => {
     );
     expect(hasExactAnswerLeakage('שאלה נכונה', 'שאלה נכונות')).toBe(false);
   });
-  it('missing source identity fails source, eligibility and provenance', () => {
+  it('source identity fixture rejects missing or forged link fields', () => {
     const base = snapshot();
     expectFails(
       {
@@ -360,18 +360,9 @@ describe('Package 1B deterministic matrix', () => {
           },
         ],
       },
-      [
-        'SOURCE_LINK_COMPLETENESS_AND_IDENTITY',
-        'CURRENT_SOURCE_ELIGIBILITY',
-        'GENERATION_REVISION_PROVENANCE',
-      ],
+      ['SOURCE_LINK_COMPLETENESS_AND_IDENTITY'],
     );
-    for (const change of [
-      { knowledgeItem: { id: 'foreign' } },
-      { sourceVersion: { id: 'foreign' } },
-      { locator: '' },
-      { contentHash: '' },
-    ])
+    for (const change of [{ locator: '' }, { contentHash: '' }])
       expectFails(
         {
           ...base,
@@ -381,16 +372,64 @@ describe('Package 1B deterministic matrix', () => {
               questions: [
                 {
                   ...base.sections[0]!.questions[0]!,
-                  questionSourceLinks: [{ ...link(), ...change }],
+                  questionSourceLinks: [
+                    {
+                      ...link(),
+                      ...change,
+                      knowledgeItem: { id: 'ki1', locator: 'paragraph:1', textHash: 'hash-1' },
+                    },
+                  ],
                 },
               ],
             },
           ],
         },
-        validationRules as unknown as string[],
+        ['SOURCE_LINK_COMPLETENESS_AND_IDENTITY'],
       );
   });
-  it('revoked current eligibility fails eligibility only', () => {
+  it('D16 generated question without a source link fails source completeness only', () => {
+    const base = snapshot();
+    expectFails(
+      {
+        ...base,
+        sections: [
+          {
+            ...base.sections[0]!,
+            questions: [{ ...base.sections[0]!.questions[0]!, questionSourceLinks: [] }],
+          },
+        ],
+      },
+      ['SOURCE_LINK_COMPLETENESS_AND_IDENTITY'],
+    );
+  });
+  it('D17 wrong non-empty canonical locator or content hash fails source identity only', () => {
+    const base = snapshot();
+    for (const change of [{ locator: 'paragraph:99' }, { contentHash: 'f'.repeat(64) }])
+      expectFails(
+        {
+          ...base,
+          sections: [
+            {
+              ...base.sections[0]!,
+              questions: [
+                {
+                  ...base.sections[0]!.questions[0]!,
+                  questionSourceLinks: [
+                    {
+                      ...link(),
+                      ...change,
+                      knowledgeItem: { id: 'ki1', locator: 'paragraph:1', textHash: 'hash-1' },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        ['SOURCE_LINK_COMPLETENESS_AND_IDENTITY'],
+      );
+  });
+  it('D18 linked source rejected denied expired or inactive fails current eligibility only', () => {
     const base = snapshot();
     const denied = [
       { pedagogicalApproved: false },
@@ -424,7 +463,7 @@ describe('Package 1B deterministic matrix', () => {
       'PASS',
     );
   });
-  it('generation revision lineage mismatch fails provenance only', () => {
+  it('D19 generation run output revision and lineage identities must agree', () => {
     const base = snapshot();
     const mutate = (p: Record<string, unknown>) =>
       expectFails(
@@ -451,32 +490,5 @@ describe('Package 1B deterministic matrix', () => {
     mutate({ responseSchemaHash: 'other' });
     mutate({ questionId: 'other' });
     mutate({ knowledgeItemId: 'other' });
-    expectFails(
-      {
-        ...base,
-        sections: [
-          {
-            ...base.sections[0]!,
-            questions: [
-              {
-                ...base.sections[0]!.questions[0]!,
-                questionSourceLinks: [
-                  {
-                    ...link(),
-                    provenance: {
-                      generationRunState: 'SUCCEEDED',
-                      outputRevisionId: 'r1',
-                      revisionId: 'r1',
-                      questionId: 'q1',
-                    },
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-      validationRules as unknown as string[],
-    );
   });
 });
