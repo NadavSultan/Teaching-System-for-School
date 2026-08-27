@@ -19,6 +19,28 @@ const RULESET_VERSION = 'v1';
 const EVALUATOR_VERSION = semanticEvaluatorRegistry.evaluatorVersion;
 type Db = PrismaClient | Prisma.TransactionClient;
 
+async function reloadValidationContext(context: AccessContext, client: Db): Promise<AccessContext> {
+  const membership = await client.membership.findUnique({
+    where: {
+      userId_organizationId: {
+        userId: context.principal.userId,
+        organizationId: context.organizationId,
+      },
+    },
+    include: { user: true, organization: true },
+  });
+  if (!membership) throw new Error('Resource not found or unavailable');
+  return {
+    principal: context.principal,
+    organizationId: membership.organizationId,
+    userStatus: membership.user.status,
+    membershipStatus: membership.status,
+    role: membership.role,
+    organizationStatus: membership.organization.status,
+    workspaceType: membership.organization.workspaceType,
+  };
+}
+
 function fingerprint(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
@@ -61,7 +83,8 @@ export async function requestRevisionValidation(
   input: unknown,
   client: PrismaClient = prisma,
 ) {
-  authorizeWorkspace(context, context.organizationId, 'CREATE_ASSESSMENT_REVISION');
+  const trustedContext = await reloadValidationContext(context, client);
+  authorizeWorkspace(trustedContext, trustedContext.organizationId, 'CREATE_ASSESSMENT_REVISION');
   const parsed = validationRequestSchema.parse(input);
   const requestFingerprint = fingerprint({
     assessmentId: parsed.assessmentId,
@@ -71,12 +94,12 @@ export async function requestRevisionValidation(
     async (tx) => {
       const revisionRows = await tx.$queryRaw<
         Array<{ id: string }>
-      >`SELECT r.id FROM assessment_revisions r JOIN assessments a ON a.id = r.assessment_id WHERE r.id = ${parsed.assessmentRevisionId}::uuid AND r.assessment_id = ${parsed.assessmentId}::uuid AND a.organization_id = ${context.organizationId}::uuid AND r.state = 'FINALIZED' FOR UPDATE`;
+      >`SELECT r.id FROM assessment_revisions r JOIN assessments a ON a.id = r.assessment_id WHERE r.id = ${parsed.assessmentRevisionId}::uuid AND r.assessment_id = ${parsed.assessmentId}::uuid AND a.organization_id = ${trustedContext.organizationId}::uuid AND r.state = 'FINALIZED' FOR UPDATE`;
       if (!revisionRows[0]) throw new Error('Resource not found or unavailable');
       const existing = await tx.validationRun.findUnique({
         where: {
           organizationId_assessmentRevisionId_idempotencyKey: {
-            organizationId: context.organizationId,
+            organizationId: trustedContext.organizationId,
             assessmentRevisionId: parsed.assessmentRevisionId,
             idempotencyKey: parsed.idempotencyKey,
           },
@@ -91,7 +114,7 @@ export async function requestRevisionValidation(
         (
           await tx.validationRun.aggregate({
             where: {
-              organizationId: context.organizationId,
+              organizationId: trustedContext.organizationId,
               assessmentRevisionId: parsed.assessmentRevisionId,
             },
             _max: { revisionSequence: true },
@@ -99,10 +122,10 @@ export async function requestRevisionValidation(
         )._max.revisionSequence ?? 0;
       const run = await tx.validationRun.create({
         data: {
-          organizationId: context.organizationId,
+          organizationId: trustedContext.organizationId,
           assessmentId: parsed.assessmentId,
           assessmentRevisionId: parsed.assessmentRevisionId,
-          requestingUserId: context.principal.userId,
+          requestingUserId: trustedContext.principal.userId,
           rulesetVersion: RULESET_VERSION,
           evaluatorVersion: EVALUATOR_VERSION,
           revisionSequence: sequence + 1,
@@ -112,7 +135,7 @@ export async function requestRevisionValidation(
       });
       await tx.outboxEvent.create({
         data: {
-          organizationId: context.organizationId,
+          organizationId: trustedContext.organizationId,
           eventType: 'validation.requested',
           payload: { validationRunId: run.id },
           idempotencyKey: `validation:${run.id}`,
@@ -120,8 +143,8 @@ export async function requestRevisionValidation(
       });
       await tx.auditEvent.create({
         data: {
-          actorUserId: context.principal.userId,
-          organizationId: context.organizationId,
+          actorUserId: trustedContext.principal.userId,
+          organizationId: trustedContext.organizationId,
           eventType: 'validation.requested',
           targetType: 'validation_run',
           targetId: run.id,
@@ -139,9 +162,10 @@ export async function getValidationStatus(
   runId: string,
   client: PrismaClient = prisma,
 ) {
-  authorizeWorkspace(context, context.organizationId, 'READ_ASSESSMENT');
+  const trustedContext = await reloadValidationContext(context, client);
+  authorizeWorkspace(trustedContext, trustedContext.organizationId, 'READ_ASSESSMENT');
   const run = await client.validationRun.findFirst({
-    where: { id: runId, organizationId: context.organizationId },
+    where: { id: runId, organizationId: trustedContext.organizationId },
   });
   return run ? status(run) : null;
 }
@@ -151,8 +175,9 @@ export async function getValidationResult(
   runId: string,
   client: PrismaClient = prisma,
 ) {
-  authorizeWorkspace(context, context.organizationId, 'READ_ASSESSMENT');
-  const run = await ownedRun(context, runId, client);
+  const trustedContext = await reloadValidationContext(context, client);
+  authorizeWorkspace(trustedContext, trustedContext.organizationId, 'READ_ASSESSMENT');
+  const run = await ownedRun(trustedContext, runId, client);
   if (!run) return null;
   return validationResultSchema.parse({
     version: '1.0.0',
@@ -193,18 +218,19 @@ export async function acknowledgeSemanticWarning(
   input: unknown,
   client: PrismaClient = prisma,
 ) {
-  authorizeWorkspace(context, context.organizationId, 'CREATE_ASSESSMENT_REVISION');
+  const trustedContext = await reloadValidationContext(context, client);
+  authorizeWorkspace(trustedContext, trustedContext.organizationId, 'CREATE_ASSESSMENT_REVISION');
   const parsed = validationAcknowledgementSchema.parse(input);
   const reasonHash = createHash('sha256').update(parsed.reason).digest('hex');
   return client.$transaction(async (tx) => {
     const finding = await tx.validationFinding.findFirst({
-      where: { id: parsed.findingId, organizationId: context.organizationId },
+      where: { id: parsed.findingId, organizationId: trustedContext.organizationId },
     });
     if (!finding) throw new Error('Resource not found or unavailable');
     const existing = await tx.validationFindingAcknowledgement.findUnique({
       where: {
         organizationId_findingId_idempotencyKey: {
-          organizationId: context.organizationId,
+          organizationId: trustedContext.organizationId,
           findingId: finding.id,
           idempotencyKey: parsed.idempotencyKey,
         },
@@ -216,9 +242,9 @@ export async function acknowledgeSemanticWarning(
     }
     return tx.validationFindingAcknowledgement.create({
       data: {
-        organizationId: context.organizationId,
+        organizationId: trustedContext.organizationId,
         findingId: finding.id,
-        actorUserId: context.principal.userId,
+        actorUserId: trustedContext.principal.userId,
         idempotencyKey: parsed.idempotencyKey,
         reason: parsed.reason,
         reasonHash,
@@ -233,9 +259,10 @@ export async function getRevisionValidationReadiness(
   assessmentRevisionId: string,
   client: PrismaClient = prisma,
 ) {
-  authorizeWorkspace(context, context.organizationId, 'READ_ASSESSMENT');
+  const trustedContext = await reloadValidationContext(context, client);
+  authorizeWorkspace(trustedContext, trustedContext.organizationId, 'READ_ASSESSMENT');
   const run = await client.validationRun.findFirst({
-    where: { organizationId: context.organizationId, assessmentId, assessmentRevisionId },
+    where: { organizationId: trustedContext.organizationId, assessmentId, assessmentRevisionId },
     orderBy: { revisionSequence: 'desc' },
     include: { findings: { include: { acknowledgements: true } } },
   });
