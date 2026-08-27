@@ -10,14 +10,23 @@ import {
 } from './semantic-evaluator.js';
 const revisionId = '00000000-0000-4000-8000-000000000001';
 const clean = {
-  version: '1.0.0', evaluatorVersion: 'local-disabled-v1', promptVersion: 'validation-prompt-v1',
-  modelConfigurationVersion: 'local-none-v1', schemaVersion: '1.0.0', revisionId, findings: [],
+  version: '1.0.0',
+  evaluatorVersion: 'local-disabled-v1',
+  promptVersion: 'validation-prompt-v1',
+  modelConfigurationVersion: 'local-none-v1',
+  schemaVersion: '1.0.0',
+  revisionId,
+  findings: [],
 };
 describe('Phase 50 semantic evaluator', () => {
   it('accepts a strict clean result and deterministic fake output', async () => {
     expect(parseSemanticEvaluatorOutput(clean, revisionId)).toEqual(clean);
     await expect(
-      new DeterministicFakeSemanticEvaluator(clean).evaluate({ revisionId, operationId: 'o', signal: new AbortController().signal }),
+      new DeterministicFakeSemanticEvaluator(clean).evaluate({
+        revisionId,
+        operationId: 'o',
+        signal: new AbortController().signal,
+      }),
     ).resolves.toEqual(clean);
   });
   it('accepts all allowed category and severity combinations', () => {
@@ -109,31 +118,82 @@ describe('Phase 50 semantic evaluator', () => {
     });
     expect(resolveLiveSemanticEvaluator()).toBeNull();
     let signal: AbortSignal | undefined;
-    const evaluator = new DeterministicFakeSemanticEvaluator(undefined, async (input) => { signal = input.signal; await new Promise(() => undefined); });
-    await expect(evaluateSemanticWithRetry(evaluator, { revisionId, operationId: 'abort' }, 1, 5)).rejects.toMatchObject({ code: 'TIMEOUT' });
+    const evaluator = new DeterministicFakeSemanticEvaluator(undefined, async (input) => {
+      signal = input.signal;
+      await new Promise(() => undefined);
+    });
+    await expect(
+      evaluateSemanticWithRetry(evaluator, { revisionId, operationId: 'abort' }, 1, 5),
+    ).rejects.toMatchObject({ code: 'TIMEOUT' });
     expect(signal?.aborted).toBe(true);
   });
   it('retries only typed timeout/transient failures and maps exhaustion deterministically', async () => {
-    const timeout = new DeterministicFakeSemanticEvaluator(undefined, async () => { await new Promise(() => undefined); });
-    await expect(evaluateSemanticWithRetry(timeout, { revisionId, operationId: 'timeout' }, 2, 5)).rejects.toMatchObject({ code: 'TIMEOUT' });
+    const timeout = new DeterministicFakeSemanticEvaluator(undefined, async () => {
+      await new Promise(() => undefined);
+    });
+    await expect(
+      evaluateSemanticWithRetry(timeout, { revisionId, operationId: 'timeout' }, 2, 5),
+    ).rejects.toMatchObject({ code: 'TIMEOUT' });
     expect(timeout.attempts).toEqual([1, 2]);
-    const transient = new DeterministicFakeSemanticEvaluator(undefined, async (_input, attempt) => { if (attempt === 1) throw new TransientSemanticEvaluatorError(); return clean; });
-    await expect(evaluateSemanticWithRetry(transient, { revisionId, operationId: 'transient' }, 2, 5)).resolves.toEqual(clean);
+    const transient = new DeterministicFakeSemanticEvaluator(undefined, async (_input, attempt) => {
+      if (attempt === 1) throw new TransientSemanticEvaluatorError();
+      return clean;
+    });
+    await expect(
+      evaluateSemanticWithRetry(transient, { revisionId, operationId: 'transient' }, 2, 5),
+    ).resolves.toEqual(clean);
     expect(transient.attempts).toEqual([1, 2]);
-    const exhausted = new DeterministicFakeSemanticEvaluator(undefined, async () => { throw new TransientSemanticEvaluatorError(); });
-    await expect(evaluateSemanticWithRetry(exhausted, { revisionId, operationId: 'exhausted' }, 2, 5)).rejects.toMatchObject({ code: 'TRANSIENT_EXHAUSTED' });
+    const exhausted = new DeterministicFakeSemanticEvaluator(undefined, async () => {
+      throw new TransientSemanticEvaluatorError();
+    });
+    await expect(
+      evaluateSemanticWithRetry(exhausted, { revisionId, operationId: 'exhausted' }, 2, 5),
+    ).rejects.toMatchObject({ code: 'TRANSIENT_EXHAUSTED' });
     expect(exhausted.attempts).toEqual([1, 2]);
-    const unknown = new DeterministicFakeSemanticEvaluator(undefined, async () => { throw { hidden: 'content' }; });
-    await expect(evaluateSemanticWithRetry(unknown, { revisionId, operationId: 'unknown' }, 2, 5)).rejects.toMatchObject({ code: 'PERMANENT_EVALUATOR_ERROR' });
+    const unknown = new DeterministicFakeSemanticEvaluator(undefined, async () => {
+      throw { hidden: 'content' };
+    });
+    await expect(
+      evaluateSemanticWithRetry(unknown, { revisionId, operationId: 'unknown' }, 2, 5),
+    ).rejects.toMatchObject({ code: 'PERMANENT_EVALUATOR_ERROR' });
     expect(unknown.attempts).toEqual([1]);
   });
   it('rejects duplicate finding identity, wrong registered code, bounds and preserves replay', async () => {
-    const finding = { category: 'AMBIGUITY', severity: 'WARNING', code: 'AMBIGUITY_V1', path: 'q', messageKey: 'm', evidence: { revisionId } } as const;
-    expect(() => parseSemanticEvaluatorOutput({ ...clean, findings: [finding, finding] }, revisionId)).toThrow(SemanticEvaluatorFailure);
-    expect(() => parseSemanticEvaluatorOutput({ ...clean, findings: [{ ...finding, code: 'OTHER' }] }, revisionId)).toThrow(SemanticEvaluatorFailure);
-    expect(() => parseSemanticEvaluatorOutput({ ...clean, findings: [{ ...finding, messageKey: 'x'.repeat(161) }] }, revisionId)).toThrow(SemanticEvaluatorFailure);
-    expect(() => parseSemanticEvaluatorOutput({ ...clean, findings: [{ ...finding, evidence: { revisionId: 'other' } }] }, revisionId)).toThrow(SemanticEvaluatorFailure);
-    expect(() => parseSemanticEvaluatorOutput({ ...clean, findings: [{ ...finding, evidence: { payload: 'x'.repeat(1_000_001) } }] }, revisionId)).toThrow(SemanticEvaluatorFailure);
+    const finding = {
+      category: 'AMBIGUITY',
+      severity: 'WARNING',
+      code: 'AMBIGUITY_V1',
+      path: 'q',
+      messageKey: 'm',
+      evidence: { revisionId },
+    } as const;
+    expect(() =>
+      parseSemanticEvaluatorOutput({ ...clean, findings: [finding, finding] }, revisionId),
+    ).toThrow(SemanticEvaluatorFailure);
+    expect(() =>
+      parseSemanticEvaluatorOutput(
+        { ...clean, findings: [{ ...finding, code: 'OTHER' }] },
+        revisionId,
+      ),
+    ).toThrow(SemanticEvaluatorFailure);
+    expect(() =>
+      parseSemanticEvaluatorOutput(
+        { ...clean, findings: [{ ...finding, messageKey: 'x'.repeat(161) }] },
+        revisionId,
+      ),
+    ).toThrow(SemanticEvaluatorFailure);
+    expect(() =>
+      parseSemanticEvaluatorOutput(
+        { ...clean, findings: [{ ...finding, evidence: { revisionId: 'other' } }] },
+        revisionId,
+      ),
+    ).toThrow(SemanticEvaluatorFailure);
+    expect(() =>
+      parseSemanticEvaluatorOutput(
+        { ...clean, findings: [{ ...finding, evidence: { payload: 'x'.repeat(1_000_001) } }] },
+        revisionId,
+      ),
+    ).toThrow(SemanticEvaluatorFailure);
     const first = parseSemanticEvaluatorOutput(clean, revisionId);
     const second = parseSemanticEvaluatorOutput(clean, revisionId);
     expect(second).toEqual(first);
@@ -146,6 +206,8 @@ describe('Phase 50 semantic evaluator', () => {
     ['wrong schema', { ...clean, schemaVersion: 'wrong' }],
     ['unknown key', { ...clean, extra: true }],
   ])('rejects %s identity boundary', (_name, candidate) => {
-    expect(() => parseSemanticEvaluatorOutput(candidate, revisionId)).toThrow(SemanticEvaluatorFailure);
+    expect(() => parseSemanticEvaluatorOutput(candidate, revisionId)).toThrow(
+      SemanticEvaluatorFailure,
+    );
   });
 });

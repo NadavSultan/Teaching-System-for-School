@@ -117,7 +117,11 @@ const schemas = [
   ['validation-result.v1.json', validationResultSchema, 'ValidationResultV1'],
   ['validation-finding.v1.json', validationFindingSchema, 'ValidationFindingV1'],
   ['validation-readiness.v1.json', validationReadinessSchema, 'ValidationReadinessV1'],
-  ['validation-acknowledgement.v1.json', validationAcknowledgementSchema, 'ValidationAcknowledgementV1'],
+  [
+    'validation-acknowledgement.v1.json',
+    validationAcknowledgementSchema,
+    'ValidationAcknowledgementV1',
+  ],
   ['semantic-category.v1.json', semanticCategorySchema, 'SemanticCategoryV1'],
 ];
 let drift = false;
