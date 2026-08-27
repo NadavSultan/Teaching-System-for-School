@@ -14,6 +14,18 @@ const link = () => ({
   contentHash: 'hash-1',
   sourceVersion: { id: 'sv1', sourceId: 'source1', sourceOrganizationId: 'org1' },
   knowledgeItem: { id: 'ki1', sourceVersionId: 'sv1', organizationId: 'org1' },
+  canonical: {
+    relationComplete: true,
+    runMatchesRevision: true,
+    questionMatchesRevision: true,
+    sourceParentMatches: true,
+    contextMatches: true,
+    locatorMatches: true,
+    contentHashMatches: true,
+    curriculumMatches: true,
+    ownershipMatches: true,
+    pinnedProvenanceMatches: true,
+  },
   eligibility: {
     pedagogicalApproved: true,
     usageAllowed: true,

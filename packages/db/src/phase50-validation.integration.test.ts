@@ -107,6 +107,10 @@ async function generatedValidationFixture() {
   const output = await getGenerationResult(f.context, f.generationRunId);
   if (!output?.revision) throw new Error('generated fixture output missing');
   const question = output.revision.sections[0]!.questions[0]!;
+  const generatedLink = await prisma.questionSourceLink.findFirstOrThrow({
+    where: { assessmentQuestionId: question.id },
+    include: { sourceVersion: true },
+  });
   await prisma.$transaction(async (tx) => {
     await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
     await tx.answer.create({
@@ -118,8 +122,19 @@ async function generatedValidationFixture() {
         answerData: {},
       },
     });
+    await tx.$executeRaw`UPDATE knowledge_sources SET organization_id = ${f.context.organizationId}::uuid WHERE id = ${generatedLink.sourceVersion.sourceId}::uuid`;
+    await tx.$executeRaw`UPDATE knowledge_items SET organization_id = ${f.context.organizationId}::uuid WHERE id = ${generatedLink.knowledgeItemId}::uuid`;
+    await tx.$executeRaw`UPDATE question_source_links SET curriculum_version_id = ${f.curriculumVersionId}::uuid, curriculum_node_id = ${f.curriculumNodeId}::uuid WHERE assessment_question_id = ${question.id}::uuid`;
+    await tx.$executeRaw`UPDATE generation_context_items SET curriculum_version_id = ${f.curriculumVersionId}::uuid, curriculum_node_id = ${f.curriculumNodeId}::uuid WHERE generation_run_id = ${f.generationRunId}::uuid AND knowledge_item_id = ${generatedLink.knowledgeItemId}::uuid`;
   });
-  return { ...f, revisionId: output.revision.id, questionId: question.id };
+  return {
+    ...f,
+    sourceId: generatedLink.sourceVersion.sourceId,
+    sourceVersionId: generatedLink.sourceVersionId,
+    knowledgeItemId: generatedLink.knowledgeItemId,
+    revisionId: output.revision.id,
+    questionId: question.id,
+  };
 }
 
 describe('Phase 50 persisted validation operations', () => {
@@ -159,6 +174,10 @@ describe('Phase 50 persisted validation operations', () => {
       const output = await getGenerationResult(f.context, f.generationRunId);
       expect(output?.revision?.id).toBeTruthy();
       const generatedQuestion = output!.revision!.sections[0]!.questions[0]!;
+      const generatedLink = await prisma.questionSourceLink.findFirstOrThrow({
+        where: { assessmentQuestionId: generatedQuestion.id },
+        include: { sourceVersion: true },
+      });
       await prisma.$transaction(async (tx) => {
         await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
         await tx.answer.create({
@@ -170,8 +189,17 @@ describe('Phase 50 persisted validation operations', () => {
             answerData: {},
           },
         });
+        await tx.$executeRaw`UPDATE knowledge_sources SET organization_id = ${f.context.organizationId}::uuid WHERE id = ${generatedLink.sourceVersion.sourceId}::uuid`;
+        await tx.$executeRaw`UPDATE knowledge_items SET organization_id = ${f.context.organizationId}::uuid WHERE id = ${generatedLink.knowledgeItemId}::uuid`;
+        await tx.$executeRaw`UPDATE question_source_links SET curriculum_version_id = ${f.curriculumVersionId}::uuid, curriculum_node_id = ${f.curriculumNodeId}::uuid WHERE assessment_question_id = ${generatedQuestion.id}::uuid`;
+        await tx.$executeRaw`UPDATE generation_context_items SET curriculum_version_id = ${f.curriculumVersionId}::uuid, curriculum_node_id = ${f.curriculumNodeId}::uuid WHERE generation_run_id = ${f.generationRunId}::uuid AND knowledge_item_id = ${generatedLink.knowledgeItemId}::uuid`;
       });
-      await mutate(f);
+      await mutate({
+        ...f,
+        sourceId: generatedLink.sourceVersion.sourceId,
+        sourceVersionId: generatedLink.sourceVersionId,
+        knowledgeItemId: generatedLink.knowledgeItemId,
+      });
       const requested = await requestRevisionValidation(f.context, {
         version: '1.0.0',
         assessmentId: f.assessmentId,
@@ -182,7 +210,7 @@ describe('Phase 50 persisted validation operations', () => {
       expect(processed?.state).toBe('FAILED');
       const findings = await prisma.validationFinding.findMany({
         where: { validationRunId: requested.id },
-        orderBy: { id: 'asc' },
+        orderBy: { code: 'asc' },
         select: { code: true, severity: true },
       });
       expect(findings).toEqual([{ code: 'CURRENT_SOURCE_ELIGIBILITY', severity: 'BLOCKING' }]);
@@ -202,6 +230,43 @@ describe('Phase 50 persisted validation operations', () => {
         decision: 'DENIED',
         evidenceReference: 'd18',
         scope: 'AI_GENERATION',
+      });
+    });
+    await check(async (f) => {
+      await recordPedagogicalReview(f.context, {
+        version: '1.0.0',
+        sourceVersionId: f.sourceVersionId,
+        decision: 'REJECTED',
+        reason: 'equal timestamp rejected review',
+      });
+      const reviews = await prisma.pedagogicalReview.findMany({
+        where: { sourceVersionId: f.sourceVersionId },
+        orderBy: { id: 'desc' },
+      });
+      const winner = reviews[0]!;
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
+        await tx.$executeRaw`UPDATE pedagogical_reviews SET created_at = '2030-01-01T00:00:00.000Z'::timestamptz WHERE source_version_id = ${f.sourceVersionId}::uuid`;
+        await tx.$executeRaw`UPDATE pedagogical_reviews SET decision = 'REJECTED'::"ReviewDecision" WHERE id = ${winner.id}::uuid`;
+      });
+    });
+    await check(async (f) => {
+      await recordUsagePermission(f.context, {
+        version: '1.0.0',
+        sourceVersionId: f.sourceVersionId,
+        decision: 'DENIED',
+        evidenceReference: 'equal timestamp denied permission',
+        scope: 'AI_GENERATION',
+      });
+      const permissions = await prisma.usagePermission.findMany({
+        where: { sourceVersionId: f.sourceVersionId },
+        orderBy: { id: 'desc' },
+      });
+      const winner = permissions[0]!;
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
+        await tx.$executeRaw`UPDATE usage_permissions SET created_at = '2030-01-01T00:00:00.000Z'::timestamptz WHERE source_version_id = ${f.sourceVersionId}::uuid`;
+        await tx.$executeRaw`UPDATE usage_permissions SET decision = 'DENIED'::"UsagePermissionDecision", valid_until = NULL WHERE id = ${winner.id}::uuid`;
       });
     });
     await check(async (f) => {
@@ -254,47 +319,6 @@ describe('Phase 50 persisted validation operations', () => {
     });
     const sharedProcessed = await processValidationRun(sharedRequest.id);
     expect(sharedProcessed?.state).toBe('SUCCEEDED');
-    const foreign = await createGenerationFixture();
-    const foreignGenerated = await processGenerationRun(
-      foreign.generationRunId,
-      prisma,
-      new DeterministicFakeModelGateway(),
-    );
-    expect(foreignGenerated?.state).toBe('SUCCEEDED');
-    const foreignOutput = await getGenerationResult(foreign.context, foreign.generationRunId);
-    const foreignQuestion = foreignOutput!.revision!.sections[0]!.questions[0]!;
-    await prisma.$transaction(async (tx) => {
-      await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
-      await tx.answer.create({
-        data: {
-          questionId: foreignQuestion.id,
-          key: 'd18-private-answer',
-          order: 0,
-          text: 'תשובה תקינה',
-          answerData: {},
-        },
-      });
-      const other = await tx.organization.create({
-        data: { name: 'foreign-source-owner', workspaceType: 'SCHOOL' },
-      });
-      await tx.$executeRaw`UPDATE knowledge_sources SET organization_id = ${other.id}::uuid WHERE id = ${foreign.sourceId}::uuid`;
-      await tx.$executeRaw`UPDATE knowledge_items SET organization_id = ${other.id}::uuid WHERE id = ${foreign.knowledgeItemId}::uuid`;
-    });
-    const foreignRequest = await requestRevisionValidation(foreign.context, {
-      version: '1.0.0',
-      assessmentId: foreign.assessmentId,
-      assessmentRevisionId: foreignOutput!.revision!.id,
-      idempotencyKey: `d18-private-${Math.random()}`,
-    });
-    const foreignProcessed = await processValidationRun(foreignRequest.id);
-    expect(foreignProcessed?.state).toBe('FAILED');
-    expect(
-      await prisma.validationFinding.findMany({
-        where: { validationRunId: foreignRequest.id },
-        orderBy: { id: 'asc' },
-        select: { code: true, severity: true },
-      }),
-    ).toEqual([{ code: 'CURRENT_SOURCE_ELIGIBILITY', severity: 'BLOCKING' }]);
   });
 
   it('replays the exact request and rejects a conflicting idempotency payload', async () => {
@@ -363,7 +387,7 @@ describe('Phase 50 persisted validation operations', () => {
     });
   });
 
-  it('D17 persisted canonical source snapshot rejects a forged locator and hash', async () => {
+  it('rejects a manually forged canonical source locator and hash', async () => {
     const f = await fixture();
     const source = await createKnowledgeSource(f.context, {
       version: '1.0.0',
@@ -538,8 +562,149 @@ describe('Phase 50 persisted validation operations', () => {
     });
     expect(findings).toEqual([
       { code: 'SOURCE_LINK_COMPLETENESS_AND_IDENTITY', severity: 'BLOCKING' },
-      { code: 'CURRENT_SOURCE_ELIGIBILITY', severity: 'BLOCKING' },
+      { code: 'GENERATION_REVISION_PROVENANCE', severity: 'BLOCKING' },
     ]);
+  });
+
+  it('D17 persisted canonical GenerationContext source identity matrix', async () => {
+    let sequence = 0;
+    const sourceFailure = 'SOURCE_LINK_COMPLETENESS_AND_IDENTITY';
+    const currentFailure = 'CURRENT_SOURCE_ELIGIBILITY';
+    const provenanceFailure = 'GENERATION_REVISION_PROVENANCE';
+    const allFailures = [...validationRules];
+    const expectedFindings = (failed: string[]) => {
+      const failedSnapshot = failed.length === validationRules.length;
+      const categories: Record<string, string> = {
+        REVISION_FINALIZED_AND_OWNED: 'REVISION', STRICT_REVISION_CONTRACT: 'CONTRACT',
+        PLAN_COUNT_KEY_ORDER: 'PLAN', CURRICULUM_SCOPE_PUBLISHED: 'CURRICULUM',
+        ANSWER_COMPLETENESS_AND_TARGETS: 'ANSWER', EXACT_SCORE_TREE: 'SCORING',
+        STABLE_ID_AND_EXACT_DUPLICATE: 'IDENTITY', DETERMINISTIC_ANSWER_LEAKAGE: 'LEAKAGE',
+        SOURCE_LINK_COMPLETENESS_AND_IDENTITY: 'SOURCE', CURRENT_SOURCE_ELIGIBILITY: 'SOURCE',
+        GENERATION_REVISION_PROVENANCE: 'PROVENANCE',
+      };
+      return [...failed].sort().map((code) => ({
+        code,
+        category: categories[code],
+        severity: 'BLOCKING',
+        path: failedSnapshot ? 'snapshot' : code === sourceFailure ? 'sources' : code === currentFailure ? 'eligibility' : 'provenance',
+        messageKey: `${code}_FAILED`,
+      }));
+    };
+    const validate = async (f: Awaited<ReturnType<typeof generatedValidationFixture>>, failed: string[]) => {
+      const requested = await requestRevisionValidation(f.context, {
+        version: '1.0.0',
+        assessmentId: f.assessmentId,
+        assessmentRevisionId: f.revisionId,
+        idempotencyKey: `phase50-source-matrix-${++sequence}`,
+      });
+      const processed = await processValidationRun(requested.id);
+      expect(processed?.state).toBe(failed.length === 0 ? 'SUCCEEDED' : 'FAILED');
+      const executions = await prisma.validationRuleExecution.findMany({
+        where: { validationRunId: requested.id },
+        include: { ruleDefinition: true },
+        orderBy: { ruleDefinition: { deterministicOrder: 'asc' } },
+      });
+      expect(executions).toHaveLength(11);
+      expect(executions.map((row) => row.ruleDefinition.ruleId)).toEqual(validationRules);
+      expect(executions.map((row) => row.ruleDefinition.ruleVersion)).toEqual(Array(11).fill('1.0.0'));
+      expect(executions.filter((row) => row.outcome === 'FAIL').map((row) => row.ruleDefinition.ruleId)).toEqual(failed);
+      const findings = await prisma.validationFinding.findMany({
+        where: { validationRunId: requested.id },
+        orderBy: { code: 'asc' },
+        select: { code: true, category: true, severity: true, path: true, messageKey: true },
+      });
+      expect(findings).toEqual(expectedFindings(failed));
+    };
+    const alter = async (sql: (tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0]) => Promise<unknown>) =>
+      prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
+        await sql(tx as never);
+      });
+
+    await validate(await generatedValidationFixture(), []);
+
+    {
+      const f = await generatedValidationFixture();
+      const other = await generatedValidationFixture();
+      await alter((tx) => tx.$executeRaw`UPDATE question_source_links SET knowledge_item_id = ${other.knowledgeItemId}::uuid WHERE assessment_question_id = ${f.questionId}::uuid`);
+      await validate(f, [sourceFailure, currentFailure]);
+    }
+    {
+      const f = await generatedValidationFixture();
+      await alter((tx) => tx.$executeRaw`UPDATE question_source_links SET knowledge_item_id = '00000000-0000-4000-8000-000000000017'::uuid WHERE assessment_question_id = ${f.questionId}::uuid`);
+      await validate(f, allFailures);
+    }
+    {
+      const f = await generatedValidationFixture();
+      const other = await generatedValidationFixture();
+      await alter((tx) => tx.$executeRaw`UPDATE question_source_links SET source_version_id = ${other.sourceVersionId}::uuid WHERE assessment_question_id = ${f.questionId}::uuid`);
+      await validate(f, [sourceFailure]);
+    }
+    {
+      const f = await generatedValidationFixture();
+      await alter((tx) => tx.$executeRaw`UPDATE question_source_links SET source_version_id = '00000000-0000-4000-8000-000000000018'::uuid WHERE assessment_question_id = ${f.questionId}::uuid`);
+      await validate(f, allFailures);
+    }
+    {
+      const f = await generatedValidationFixture();
+      const other = await generatedValidationFixture();
+      await alter((tx) => tx.$executeRaw`UPDATE knowledge_items SET source_version_id = ${other.sourceVersionId}::uuid, locator = 'parent-mismatch-locator' WHERE id = ${f.knowledgeItemId}::uuid`);
+      await validate(f, [sourceFailure]);
+    }
+    {
+      const f = await generatedValidationFixture();
+      await alter((tx) => tx.$executeRaw`UPDATE question_source_links SET locator = 'forged-locator' WHERE assessment_question_id = ${f.questionId}::uuid`);
+      await validate(f, [sourceFailure]);
+    }
+    {
+      const f = await generatedValidationFixture();
+      await alter((tx) => tx.$executeRaw`UPDATE question_source_links SET text_hash = ${'f'.repeat(64)} WHERE assessment_question_id = ${f.questionId}::uuid`);
+      await validate(f, [sourceFailure]);
+    }
+    {
+      const f = await generatedValidationFixture();
+      await alter(async (tx) => {
+        const foreign = await tx.organization.create({ data: { name: `phase50-foreign-${sequence}`, workspaceType: 'SCHOOL' } });
+        await tx.$executeRaw`UPDATE knowledge_sources SET organization_id = ${foreign.id}::uuid WHERE id = ${f.sourceId}::uuid`;
+        await tx.$executeRaw`UPDATE knowledge_items SET organization_id = ${foreign.id}::uuid WHERE id = ${f.knowledgeItemId}::uuid`;
+      });
+      await validate(f, [sourceFailure, currentFailure]);
+    }
+    {
+      const f = await generatedValidationFixture();
+      const outside = await generatedValidationFixture();
+      await alter((tx) => tx.$executeRaw`UPDATE question_source_links SET assessment_question_id = ${outside.questionId}::uuid WHERE assessment_question_id = ${f.questionId}::uuid`);
+      await validate(f, [sourceFailure, currentFailure, provenanceFailure]);
+    }
+    {
+      const f = await generatedValidationFixture();
+      const other = await generatedValidationFixture();
+      await alter((tx) => tx.$executeRaw`UPDATE generation_runs SET organization_id = ${other.workspace.organization.id}::uuid WHERE id = ${f.generationRunId}::uuid`);
+      await validate(f, allFailures);
+    }
+    {
+      const f = await generatedValidationFixture();
+      await alter((tx) => tx.$executeRaw`UPDATE generation_runs SET output_revision_id = '00000000-0000-4000-8000-000000000019'::uuid WHERE id = ${f.generationRunId}::uuid`);
+      await validate(f, allFailures);
+    }
+    {
+      const f = await generatedValidationFixture();
+      await alter((tx) => tx.$executeRaw`UPDATE question_source_links SET curriculum_node_id = '00000000-0000-4000-8000-000000000020'::uuid WHERE assessment_question_id = ${f.questionId}::uuid`);
+      await validate(f, [sourceFailure, currentFailure]);
+    }
+    {
+      const f = await generatedValidationFixture();
+      await alter((tx) => tx.$executeRaw`UPDATE generation_runs SET prompt_template_hash = ${'a'.repeat(64)} WHERE id = ${f.generationRunId}::uuid`);
+      await validate(f, [sourceFailure, provenanceFailure]);
+    }
+    {
+      const f = await generatedValidationFixture();
+      await alter(async (tx) => {
+        await tx.$executeRaw`UPDATE question_source_links SET locator = 'forged-locator', text_hash = ${'e'.repeat(64)} WHERE assessment_question_id = ${f.questionId}::uuid`;
+        await tx.$executeRaw`UPDATE generation_expected_question_citations SET locator = 'forged-locator', text_hash = ${'e'.repeat(64)} WHERE generation_run_id = ${f.generationRunId}::uuid AND assessment_question_id = ${f.questionId}::uuid`;
+      });
+      await validate(f, [sourceFailure]);
+    }
   });
 
   it('rejects a direct run insert with mismatched assessment and revision identity', async () => {

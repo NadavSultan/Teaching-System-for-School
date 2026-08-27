@@ -8,6 +8,7 @@ import {
   validationStatusSchema,
 } from '@teach/contracts';
 import { authorizeWorkspace, evaluateDeterministicRules, type AccessContext } from '@teach/domain';
+import { getGenerationModelConfiguration, getGenerationPromptTemplate } from '@teach/ai';
 import {
   DeterministicFakeSemanticEvaluator,
   parseSemanticEvaluatorOutput,
@@ -17,6 +18,9 @@ import { IdempotencyConflictError, prisma } from './index.js';
 
 const RULESET_VERSION = 'v1';
 const EVALUATOR_VERSION = semanticEvaluatorRegistry.evaluatorVersion;
+const RESPONSE_SCHEMA_HASH = createHash('sha256')
+  .update('generated-draft-output.v1|generated-question-output.v1')
+  .digest('hex');
 type Db = PrismaClient | Prisma.TransactionClient;
 
 async function reloadValidationContext(context: AccessContext, client: Db): Promise<AccessContext> {
@@ -91,15 +95,22 @@ function toValidationSnapshot(revision: any) {
     ),
   );
   const linkedRunIds = [...new Set(linkedRuns)];
+  const validOutputRuns = (revision.outputGenerationRuns ?? []).filter(
+    (run: any) =>
+      run.state === 'SUCCEEDED' &&
+      run.organizationId === revision.assessment.organizationId &&
+      run.assessmentId === revision.assessmentId &&
+      run.outputRevisionId === revision.id,
+  );
   const outputRun =
     linkedRunIds.length === 1
-      ? revision.outputGenerationRuns?.find(
+      ? validOutputRuns.find(
           (run: any) =>
-            run.id === linkedRunIds[0] &&
-            run.state === 'SUCCEEDED' &&
-            run.outputRevisionId === revision.id,
+            run.id === linkedRunIds[0],
         )
-      : undefined;
+      : linkedRunIds.length === 0 && validOutputRuns.length === 1
+        ? validOutputRuns[0]
+        : undefined;
   const specification = outputRun?.frozenSpecification as any;
   const frozenPlan = specification?.sections
     ? {
@@ -114,7 +125,12 @@ function toValidationSnapshot(revision: any) {
       };
   const nodeIds = revision.nodeLinks.map((link: any) => link.curriculumNodeId);
   const latest = (rows: any[], predicate: (row: any) => boolean) =>
-    [...rows].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).find(predicate);
+    [...rows]
+      .sort(
+        (a, b) =>
+          b.createdAt.getTime() - a.createdAt.getTime() || String(b.id).localeCompare(String(a.id)),
+      )
+      .find(predicate);
   const mapLink = (question: any, link: any) => {
     const sourceVersion = link.sourceVersion;
     const source = sourceVersion?.source;
@@ -136,6 +152,18 @@ function toValidationSnapshot(revision: any) {
           id: link.knowledgeItem?.id ?? link.knowledgeItemId ?? '',
           sourceVersionId: link.knowledgeItem?.sourceVersionId ?? '',
           organizationId: link.knowledgeItem?.organizationId ?? '',
+        },
+        canonical: {
+          relationComplete: false,
+          runMatchesRevision: false,
+          questionMatchesRevision: false,
+          sourceParentMatches: false,
+          contextMatches: false,
+          locatorMatches: false,
+          contentHashMatches: false,
+          curriculumMatches: false,
+          ownershipMatches: false,
+          pinnedProvenanceMatches: false,
         },
         eligibility: {
           pedagogicalApproved: false,
@@ -167,11 +195,12 @@ function toValidationSnapshot(revision: any) {
     }
     const review = latest(sourceVersion.reviews ?? [], () => true);
     const permission = latest(sourceVersion.permissions ?? [], () => true);
+    const authoritativeRun = outputRun?.id === run.id ? outputRun : undefined;
     return {
       questionId: question.id,
       revisionId: revision.id,
-      sourceVersionId: sourceVersion.id,
-      knowledgeItemId: link.knowledgeItem.id,
+      sourceVersionId: link.sourceVersionId,
+      knowledgeItemId: link.knowledgeItemId,
       // Link values are candidates; the nested canonical snapshot is the authority.
       locator: link.locator,
       contentHash: link.textHash,
@@ -188,6 +217,43 @@ function toValidationSnapshot(revision: any) {
         sourceVersionId: link.knowledgeItem.sourceVersionId,
         organizationId: link.knowledgeItem.organizationId,
       },
+      canonical: {
+        relationComplete: true,
+        runMatchesRevision:
+          outputRun?.id === run.id &&
+          run.state === 'SUCCEEDED' &&
+          run.organizationId === revision.assessment.organizationId &&
+          run.assessmentId === revision.assessmentId &&
+          run.outputRevisionId === revision.id,
+        questionMatchesRevision: question.questionSourceLinks.some(
+          (candidate: any) => candidate.id === link.id,
+        ),
+        sourceParentMatches: link.knowledgeItem.sourceVersionId === sourceVersion.id,
+        contextMatches: (authoritativeRun?.contextItems ?? []).some(
+          (context: any) =>
+            context.generationRunId === run.id &&
+            context.knowledgeItemId === link.knowledgeItem.id &&
+            context.sourceVersionId === sourceVersion.id &&
+            context.locator === link.knowledgeItem.locator &&
+            context.textHash === link.knowledgeItem.textHash &&
+            context.curriculumVersionId === link.curriculumVersionId &&
+            context.curriculumNodeId === link.curriculumNodeId,
+        ),
+        locatorMatches: link.locator === link.knowledgeItem.locator,
+        contentHashMatches: link.textHash === link.knowledgeItem.textHash,
+        curriculumMatches:
+          link.curriculumVersionId === revision.curriculumVersionId &&
+          nodeIds.includes(link.curriculumNodeId),
+        ownershipMatches:
+          source.visibility === 'PLATFORM_SHARED' ||
+          source.organizationId === revision.assessment.organizationId,
+        pinnedProvenanceMatches:
+          run.promptTemplateVersion === getGenerationPromptTemplate(run.operation).version &&
+          run.promptTemplateHash === getGenerationPromptTemplate(run.operation).hash &&
+          run.modelConfigurationVersion === getGenerationModelConfiguration().version &&
+          run.modelConfigurationHash === getGenerationModelConfiguration().hash &&
+          run.responseSchemaVersion === '1.0.0' && run.responseSchemaHash === RESPONSE_SCHEMA_HASH,
+      },
       eligibility: {
         pedagogicalApproved: review?.decision === 'APPROVED',
         usageAllowed:
@@ -197,7 +263,7 @@ function toValidationSnapshot(revision: any) {
         itemLifecycle: link.knowledgeItem.status,
         visibilityPermitted:
           link.knowledgeItem.visibility === 'PLATFORM_SHARED' ||
-          link.knowledgeItem.organizationId === revision.organizationId,
+          link.knowledgeItem.organizationId === revision.assessment.organizationId,
         exactPublishedCurriculum:
           link.curriculumVersionId === revision.curriculumVersionId &&
           nodeIds.includes(link.curriculumNodeId) &&
@@ -561,13 +627,15 @@ export async function processValidationRun(validationRunId: string, client: Pris
           data: { state: 'FAILED', failureCode: 'RULESET_INTEGRITY', completedAt: new Date() },
         }),
       );
-    const revision = await tx.assessmentRevision.findUnique({
+    let revision: any = null;
+    try {
+      revision = await tx.assessmentRevision.findUnique({
       where: { id: claimed.assessmentRevisionId },
       include: {
         assessment: true,
         curriculumVersion: true,
         nodeLinks: true,
-        outputGenerationRuns: true,
+        outputGenerationRuns: { include: { contextItems: true } },
         sections: {
           include: {
             questions: {
@@ -589,8 +657,8 @@ export async function processValidationRun(validationRunId: string, client: Pris
                             },
                           },
                         },
-                        reviews: { orderBy: { createdAt: 'desc' } },
-                        permissions: { orderBy: { createdAt: 'desc' } },
+                        reviews: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] },
+                        permissions: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] },
                       },
                     },
                   },
@@ -600,8 +668,13 @@ export async function processValidationRun(validationRunId: string, client: Pris
           },
         },
       },
-    });
-    const results = evaluateDeterministicRules(toValidationSnapshot(revision));
+      });
+    } catch {
+      // A deliberately orphaned persisted relation cannot be materialized by Prisma.
+      // Preserve a terminal, evidence-bearing fail-closed validation result instead.
+      revision = null;
+    }
+    const results = evaluateDeterministicRules(revision ? toValidationSnapshot(revision) : {});
     const byRule = new Map(results.map((result) => [result.ruleId, result]));
     const executions = await Promise.all(
       rules.map((rule) =>

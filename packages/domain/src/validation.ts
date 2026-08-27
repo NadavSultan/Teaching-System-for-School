@@ -257,13 +257,15 @@ const linkShape = (v: unknown) => {
       'contentHash',
       'sourceVersion',
       'knowledgeItem',
+      'canonical',
       'eligibility',
       'provenance',
     ])
   )
     return false;
   const sv = asRecord(x.sourceVersion),
-    ki = asRecord(x.knowledgeItem);
+    ki = asRecord(x.knowledgeItem),
+    canonical = asRecord(x.canonical);
   return (
     str(x.questionId) &&
     str(x.revisionId) &&
@@ -281,7 +283,20 @@ const linkShape = (v: unknown) => {
       exact(ki, ['id', 'sourceVersionId', 'organizationId']) ||
       exact(ki, ['id', 'locator', 'textHash', 'sourceVersionId', 'organizationId'])) &&
     ki.id === x.knowledgeItemId &&
-    (ki.sourceVersionId === undefined || ki.sourceVersionId === sv.id) &&
+    canonical !== null &&
+    exact(canonical, [
+      'relationComplete',
+      'runMatchesRevision',
+      'questionMatchesRevision',
+      'sourceParentMatches',
+      'contextMatches',
+      'locatorMatches',
+      'contentHashMatches',
+      'curriculumMatches',
+      'ownershipMatches',
+      'pinnedProvenanceMatches',
+    ]) &&
+    Object.values(canonical).every((value) => typeof value === 'boolean') &&
     eligibilityShape(x.eligibility) &&
     provenanceShape(x.provenance)
   );
@@ -565,7 +580,8 @@ export function evaluateDeterministicRules(input: unknown): DeterministicRuleRes
               ((l.knowledgeItem as R).textHash === undefined ||
                 l.contentHash === (l.knowledgeItem as R).textHash) &&
               (l.sourceVersion as R).id === l.sourceVersionId &&
-              (l.knowledgeItem as R).id === l.knowledgeItemId,
+              (l.knowledgeItem as R).id === l.knowledgeItemId &&
+              Object.values(l.canonical as R).every((value) => value === true),
           ),
       ),
     eligible =
@@ -601,6 +617,7 @@ export function evaluateDeterministicRules(input: unknown): DeterministicRuleRes
               p.questionId === x.id &&
               p.sourceVersionId === l.sourceVersionId &&
               p.knowledgeItemId === l.knowledgeItemId
+              && (l.canonical as R).pinnedProvenanceMatches === true
             );
           }),
       ),
