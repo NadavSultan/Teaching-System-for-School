@@ -355,6 +355,7 @@ describe('Phase 50 persisted validation operations', () => {
     });
     expect(findings).toEqual([
       { code: 'SOURCE_LINK_COMPLETENESS_AND_IDENTITY', severity: 'BLOCKING' },
+      { code: 'CURRENT_SOURCE_ELIGIBILITY', severity: 'BLOCKING' },
     ]);
   });
 
