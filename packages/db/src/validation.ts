@@ -313,15 +313,24 @@ export async function processValidationRun(validationRunId: string, client: Pris
     const run = await tx.validationRun.findUnique({ where: { id: validationRunId } });
     if (!run || run.state === 'SUCCEEDED' || run.state === 'FAILED')
       return run ? status(run) : null;
-    const claimed = await tx.validationRun.update({
-      where: { id: run.id },
+    const now = new Date();
+    const claimedRows = await tx.validationRun.updateMany({
+      where: {
+        id: run.id,
+        OR: [{ state: 'PENDING' }, { state: 'PROCESSING', leaseExpiresAt: { lt: now } }],
+      },
       data: {
         state: 'PROCESSING',
         attempts: { increment: 1 },
-        processingStartedAt: new Date(),
-        leaseExpiresAt: new Date(Date.now() + 30_000),
+        processingStartedAt: now,
+        leaseExpiresAt: new Date(now.getTime() + 30_000),
       },
     });
+    if (claimedRows.count !== 1) {
+      const current = await tx.validationRun.findUnique({ where: { id: run.id } });
+      return current ? status(current) : null;
+    }
+    const claimed = await tx.validationRun.findUniqueOrThrow({ where: { id: run.id } });
     const rules = await tx.validationRuleDefinition.findMany({
       where: { rulesetVersion: claimed.rulesetVersion },
       orderBy: { deterministicOrder: 'asc' },
