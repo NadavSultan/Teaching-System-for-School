@@ -118,8 +118,6 @@ function toValidationSnapshot(revision: any) {
   const mapLink = (question: any, link: any) => {
     const sourceVersion = link.sourceVersion;
     const source = sourceVersion?.source;
-    const review = latest(sourceVersion.reviews ?? [], () => true);
-    const permission = latest(sourceVersion.permissions ?? [], () => true);
     const run = link.generationRun;
     if (!sourceVersion || !source || !link.knowledgeItem || !run) {
       return {
@@ -167,6 +165,8 @@ function toValidationSnapshot(revision: any) {
         },
       };
     }
+    const review = latest(sourceVersion.reviews ?? [], () => true);
+    const permission = latest(sourceVersion.permissions ?? [], () => true);
     return {
       questionId: question.id,
       revisionId: revision.id,

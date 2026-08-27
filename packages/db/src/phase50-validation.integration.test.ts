@@ -21,6 +21,7 @@ import {
 } from './index.js';
 import { createGenerationFixture } from './phase40.acceptance.fixtures.js';
 import { DeterministicFakeModelGateway } from '@teach/ai';
+import { validationRules } from '@teach/domain';
 
 const principal = (userId: string) => ({
   version: '1.0.0' as const,
@@ -93,6 +94,32 @@ async function fixture() {
     ],
   });
   return { workspace, assessment, revision, context, node };
+}
+
+async function generatedValidationFixture() {
+  const f = await createGenerationFixture();
+  const generated = await processGenerationRun(
+    f.generationRunId,
+    prisma,
+    new DeterministicFakeModelGateway(),
+  );
+  if (generated?.state !== 'SUCCEEDED') throw new Error('generated fixture did not succeed');
+  const output = await getGenerationResult(f.context, f.generationRunId);
+  if (!output?.revision) throw new Error('generated fixture output missing');
+  const question = output.revision.sections[0]!.questions[0]!;
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
+    await tx.answer.create({
+      data: {
+        questionId: question.id,
+        key: 'phase50-answer',
+        order: 0,
+        text: 'תשובה תקינה',
+        answerData: {},
+      },
+    });
+  });
+  return { ...f, revisionId: output.revision.id, questionId: question.id };
 }
 
 describe('Phase 50 persisted validation operations', () => {
@@ -227,6 +254,47 @@ describe('Phase 50 persisted validation operations', () => {
     });
     const sharedProcessed = await processValidationRun(sharedRequest.id);
     expect(sharedProcessed?.state).toBe('SUCCEEDED');
+    const foreign = await createGenerationFixture();
+    const foreignGenerated = await processGenerationRun(
+      foreign.generationRunId,
+      prisma,
+      new DeterministicFakeModelGateway(),
+    );
+    expect(foreignGenerated?.state).toBe('SUCCEEDED');
+    const foreignOutput = await getGenerationResult(foreign.context, foreign.generationRunId);
+    const foreignQuestion = foreignOutput!.revision!.sections[0]!.questions[0]!;
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
+      await tx.answer.create({
+        data: {
+          questionId: foreignQuestion.id,
+          key: 'd18-private-answer',
+          order: 0,
+          text: 'תשובה תקינה',
+          answerData: {},
+        },
+      });
+      const other = await tx.organization.create({
+        data: { name: 'foreign-source-owner', workspaceType: 'SCHOOL' },
+      });
+      await tx.$executeRaw`UPDATE knowledge_sources SET organization_id = ${other.id}::uuid WHERE id = ${foreign.sourceId}::uuid`;
+      await tx.$executeRaw`UPDATE knowledge_items SET organization_id = ${other.id}::uuid WHERE id = ${foreign.knowledgeItemId}::uuid`;
+    });
+    const foreignRequest = await requestRevisionValidation(foreign.context, {
+      version: '1.0.0',
+      assessmentId: foreign.assessmentId,
+      assessmentRevisionId: foreignOutput!.revision!.id,
+      idempotencyKey: `d18-private-${Math.random()}`,
+    });
+    const foreignProcessed = await processValidationRun(foreignRequest.id);
+    expect(foreignProcessed?.state).toBe('FAILED');
+    expect(
+      await prisma.validationFinding.findMany({
+        where: { validationRunId: foreignRequest.id },
+        orderBy: { id: 'asc' },
+        select: { code: true, severity: true },
+      }),
+    ).toEqual([{ code: 'CURRENT_SOURCE_ELIGIBILITY', severity: 'BLOCKING' }]);
   });
 
   it('replays the exact request and rejects a conflicting idempotency payload', async () => {

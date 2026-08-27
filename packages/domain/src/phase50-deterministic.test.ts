@@ -271,6 +271,7 @@ describe('Package 1B deterministic matrix', () => {
         },
       ],
     };
+    expectAllPass(valid);
     const mutate = (changes: Record<string, unknown>) => {
       const { subQuestion: subChanges, ...questionChanges } = changes;
       expectFails(
