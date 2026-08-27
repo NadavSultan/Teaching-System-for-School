@@ -61,12 +61,12 @@ CREATE TABLE "validation_finding_acknowledgements" (
 );
 
 INSERT INTO "validation_rule_definitions" ("ruleset_version", "rule_id", "rule_version", "category", "default_severity", "deterministic_order") VALUES
-('v1','REVISION_FINALIZED_AND_OWNED','v1','REVISION','BLOCKING',1), ('v1','STRICT_REVISION_CONTRACT','v1','CONTRACT','BLOCKING',2),
-('v1','PLAN_COUNT_KEY_ORDER','v1','PLAN','BLOCKING',3), ('v1','CURRICULUM_SCOPE_PUBLISHED','v1','CURRICULUM','BLOCKING',4),
-('v1','ANSWER_COMPLETENESS_AND_TARGETS','v1','ANSWER','BLOCKING',5), ('v1','EXACT_SCORE_TREE','v1','SCORING','BLOCKING',6),
-('v1','STABLE_ID_AND_EXACT_DUPLICATE','v1','IDENTITY','BLOCKING',7), ('v1','DETERMINISTIC_ANSWER_LEAKAGE','v1','LEAKAGE','BLOCKING',8),
-('v1','SOURCE_LINK_COMPLETENESS_AND_IDENTITY','v1','SOURCE','BLOCKING',9), ('v1','CURRENT_SOURCE_ELIGIBILITY','v1','SOURCE','BLOCKING',10),
-('v1','GENERATION_REVISION_PROVENANCE','v1','PROVENANCE','BLOCKING',11);
+('v1','REVISION_FINALIZED_AND_OWNED','1.0.0','REVISION','BLOCKING',1), ('v1','STRICT_REVISION_CONTRACT','1.0.0','CONTRACT','BLOCKING',2),
+('v1','PLAN_COUNT_KEY_ORDER','1.0.0','PLAN','BLOCKING',3), ('v1','CURRICULUM_SCOPE_PUBLISHED','1.0.0','CURRICULUM','BLOCKING',4),
+('v1','ANSWER_COMPLETENESS_AND_TARGETS','1.0.0','ANSWER','BLOCKING',5), ('v1','EXACT_SCORE_TREE','1.0.0','SCORING','BLOCKING',6),
+('v1','STABLE_ID_AND_EXACT_DUPLICATE','1.0.0','IDENTITY','BLOCKING',7), ('v1','DETERMINISTIC_ANSWER_LEAKAGE','1.0.0','LEAKAGE','BLOCKING',8),
+('v1','SOURCE_LINK_COMPLETENESS_AND_IDENTITY','1.0.0','SOURCE','BLOCKING',9), ('v1','CURRENT_SOURCE_ELIGIBILITY','1.0.0','SOURCE','BLOCKING',10),
+('v1','GENERATION_REVISION_PROVENANCE','1.0.0','PROVENANCE','BLOCKING',11);
 
 CREATE FUNCTION "phase50_reject_immutable"() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'phase50 immutable evidence' USING ERRCODE = 'P5001'; END; $$;
 CREATE TRIGGER "phase50_rule_definitions_immutable" BEFORE UPDATE OR DELETE ON "validation_rule_definitions" FOR EACH ROW EXECUTE FUNCTION "phase50_reject_immutable"();
@@ -81,7 +81,7 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM "assessment_revisions" r JOIN "assessments" a ON a.id=r."assessment_id" WHERE r.id=NEW."assessment_revision_id" AND r."assessment_id"=NEW."assessment_id" AND r.state='FINALIZED' AND a."organization_id"=NEW."organization_id") THEN RAISE EXCEPTION 'phase50 revision identity or finalized state rejected' USING ERRCODE='P5002'; END IF;
     IF NOT EXISTS (SELECT 1 FROM "memberships" m JOIN "users" u ON u.id=m."user_id" WHERE m."organization_id"=NEW."organization_id" AND m."user_id"=NEW."requesting_user_id" AND m.status='ACTIVE' AND u.status='ACTIVE') THEN RAISE EXCEPTION 'phase50 persisted authority rejected' USING ERRCODE='P5003'; END IF;
   ELSE
-    IF OLD."organization_id"<>NEW."organization_id" OR OLD."assessment_id"<>NEW."assessment_id" OR OLD."assessment_revision_id"<>NEW."assessment_revision_id" OR OLD."requesting_user_id"<>NEW."requesting_user_id" OR OLD."revision_sequence"<>NEW."revision_sequence" OR OLD."idempotency_key"<>NEW."idempotency_key" OR OLD."ruleset_version"<>NEW."ruleset_version" OR OLD."evaluator_version"<>NEW."evaluator_version" THEN RAISE EXCEPTION 'phase50 validation run immutable identity' USING ERRCODE='P5004'; END IF;
+    IF OLD."organization_id"<>NEW."organization_id" OR OLD."assessment_id"<>NEW."assessment_id" OR OLD."assessment_revision_id"<>NEW."assessment_revision_id" OR OLD."requesting_user_id"<>NEW."requesting_user_id" OR OLD."operation"<>NEW."operation" OR OLD."ruleset_version"<>NEW."ruleset_version" OR OLD."evaluator_version"<>NEW."evaluator_version" OR OLD."revision_sequence"<>NEW."revision_sequence" OR OLD."idempotency_key"<>NEW."idempotency_key" OR OLD."request_fingerprint"<>NEW."request_fingerprint" THEN RAISE EXCEPTION 'phase50 validation run immutable identity' USING ERRCODE='P5004'; END IF;
     IF NOT ((OLD.state='PENDING' AND NEW.state='PROCESSING') OR (OLD.state='PROCESSING' AND NEW.state IN ('PENDING','SUCCEEDED','FAILED')) OR OLD.state=NEW.state) THEN RAISE EXCEPTION 'phase50 invalid validation state transition' USING ERRCODE='P5005'; END IF;
     IF NEW.state='SUCCEEDED' AND ((SELECT count(*) FROM "validation_rule_executions" e JOIN "validation_rule_definitions" d ON d.id=e."rule_definition_id" WHERE e."validation_run_id"=NEW.id AND d."ruleset_version"=NEW."ruleset_version") <> 11 OR NOT EXISTS (SELECT 1 FROM "semantic_evaluations" s WHERE s."validation_run_id"=NEW.id AND s.state='SUCCEEDED')) THEN RAISE EXCEPTION 'phase50 validation completion evidence incomplete' USING ERRCODE='P5006'; END IF;
   END IF;

@@ -8,11 +8,15 @@ import {
   validationStatusSchema,
 } from '@teach/contracts';
 import { authorizeWorkspace, evaluateDeterministicRules, type AccessContext } from '@teach/domain';
-import { DeterministicFakeSemanticEvaluator, parseSemanticEvaluatorOutput } from '@teach/ai';
+import {
+  DeterministicFakeSemanticEvaluator,
+  parseSemanticEvaluatorOutput,
+  semanticEvaluatorRegistry,
+} from '@teach/ai';
 import { IdempotencyConflictError, prisma } from './index.js';
 
 const RULESET_VERSION = 'v1';
-const EVALUATOR_VERSION = 'v1';
+const EVALUATOR_VERSION = semanticEvaluatorRegistry.evaluatorVersion;
 type Db = PrismaClient | Prisma.TransactionClient;
 
 function fingerprint(value: unknown): string {
@@ -31,6 +35,10 @@ function status(run: any) {
     state: run.state,
     attempts: run.attempts,
     failureCode: run.failureCode,
+    completedAt: run.completedAt ? run.completedAt.toISOString() : null,
+    deterministicPassCount: run.deterministicPassCount,
+    deterministicFailCount: run.deterministicFailCount,
+    semanticFindingCount: run.semanticFindingCount,
   });
 }
 
@@ -169,7 +177,11 @@ export async function getValidationResult(
       ? {
           state: run.semanticEvaluation.state,
           evaluatorVersion: run.semanticEvaluation.evaluatorVersion,
+          promptVersion: run.semanticEvaluation.promptVersion,
+          modelConfigurationVersion: run.semanticEvaluation.modelConfigurationVersion,
           schemaVersion: run.semanticEvaluation.schemaVersion,
+          failureCode: run.semanticEvaluation.failureCode,
+          latencyMs: run.semanticEvaluation.latencyMs ?? 0,
           findingCount: run.findings.filter((finding) => finding.kind === 'SEMANTIC').length,
         }
       : null,
@@ -376,16 +388,17 @@ export async function processValidationRun(validationRunId: string, client: Pris
       await evaluator.evaluate({
         revisionId: claimed.assessmentRevisionId,
         operationId: claimed.id,
+        signal: new AbortController().signal,
       }),
       claimed.assessmentRevisionId,
     );
     await tx.semanticEvaluation.create({
       data: {
         validationRunId: claimed.id,
-        evaluatorVersion: claimed.evaluatorVersion,
-        promptVersion: 'v1',
-        modelConfigurationVersion: 'fake-v1',
-        schemaVersion: 'v1',
+        evaluatorVersion: semanticEvaluatorRegistry.evaluatorVersion,
+        promptVersion: semanticEvaluatorRegistry.promptVersion,
+        modelConfigurationVersion: semanticEvaluatorRegistry.modelConfigurationVersion,
+        schemaVersion: semanticEvaluatorRegistry.schemaVersion,
         state: 'SUCCEEDED',
       },
     });

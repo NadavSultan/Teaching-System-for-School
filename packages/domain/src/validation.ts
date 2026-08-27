@@ -1,31 +1,729 @@
-import { isEligibleKnowledgeItem, validateScoreTree, type EligibilityInput, type ScoreNode } from './index.js';
+import {
+  isEligibleKnowledgeItem,
+  validateScoreTree,
+  type EligibilityInput,
+  type ScoreNode,
+} from './index.js';
 
 export const VALIDATION_RULESET_VERSION = 'validation-rules-v1' as const;
 export const VALIDATION_RULE_VERSION = '1.0.0' as const;
-export const validationRules = Object.freeze(['REVISION_FINALIZED_AND_OWNED','STRICT_REVISION_CONTRACT','PLAN_COUNT_KEY_ORDER','CURRICULUM_SCOPE_PUBLISHED','ANSWER_COMPLETENESS_AND_TARGETS','EXACT_SCORE_TREE','STABLE_ID_AND_EXACT_DUPLICATE','DETERMINISTIC_ANSWER_LEAKAGE','SOURCE_LINK_COMPLETENESS_AND_IDENTITY','CURRENT_SOURCE_ELIGIBILITY','GENERATION_REVISION_PROVENANCE'] as const);
+export const validationRules = Object.freeze([
+  'REVISION_FINALIZED_AND_OWNED',
+  'STRICT_REVISION_CONTRACT',
+  'PLAN_COUNT_KEY_ORDER',
+  'CURRICULUM_SCOPE_PUBLISHED',
+  'ANSWER_COMPLETENESS_AND_TARGETS',
+  'EXACT_SCORE_TREE',
+  'STABLE_ID_AND_EXACT_DUPLICATE',
+  'DETERMINISTIC_ANSWER_LEAKAGE',
+  'SOURCE_LINK_COMPLETENESS_AND_IDENTITY',
+  'CURRENT_SOURCE_ELIGIBILITY',
+  'GENERATION_REVISION_PROVENANCE',
+] as const);
 export type ValidationRuleId = (typeof validationRules)[number];
-export type ValidationRuleCategory = 'REVISION'|'CONTRACT'|'PLAN'|'CURRICULUM'|'ANSWER'|'SCORING'|'IDENTITY'|'LEAKAGE'|'SOURCE'|'PROVENANCE';
-const categories: readonly ValidationRuleCategory[] = ['REVISION','CONTRACT','PLAN','CURRICULUM','ANSWER','SCORING','IDENTITY','LEAKAGE','SOURCE','SOURCE','PROVENANCE'];
-export type ValidationRuleDefinition = Readonly<{ruleId:ValidationRuleId;ruleVersion:typeof VALIDATION_RULE_VERSION;category:ValidationRuleCategory;severity:'BLOCKING';order:number}>;
-export const validationRuleRegistry: readonly ValidationRuleDefinition[] = Object.freeze(validationRules.map((ruleId,index)=>Object.freeze({ruleId,ruleVersion:VALIDATION_RULE_VERSION,category:categories[index]!,severity:'BLOCKING' as const,order:index+1})));
-export type ValidationRunState='PENDING'|'PROCESSING'|'SUCCEEDED'|'FAILED';
-const transitions:Readonly<Record<ValidationRunState,readonly ValidationRunState[]>>={PENDING:['PROCESSING'],PROCESSING:['PENDING','SUCCEEDED','FAILED'],SUCCEEDED:[],FAILED:[]};
-export function canTransitionValidationRun(from:ValidationRunState,to:ValidationRunState){return transitions[from].includes(to);}
-const failureCodes=['RULESET_INTEGRITY','DETERMINISTIC_RULE_FAILED','TIMEOUT','TRANSIENT_EXHAUSTED','PERMANENT_EVALUATOR_ERROR','OUTPUT_INVALID'] as const;
-export type ValidationExecution=Readonly<{ruleId:ValidationRuleId;ruleVersion:typeof VALIDATION_RULE_VERSION;outcome:'PASS'|'FAIL'}>;
-export type ValidationTransitionDecision={allowed:true;reason:'CLAIM'|'STALE_RETRY'|'COMPLETE_SUCCESS'|'COMPLETE_FAILURE'}|{allowed:false;reason:'TERMINAL'|'ILLEGAL_PAIR'|'LEASE_NOT_STALE'|'SUCCESS_SHAPE_INVALID'};
-export function decideValidationRunTransition(i:{from:ValidationRunState;to:ValidationRunState;stale?:boolean;permittedAttempt?:boolean;completeRuleCount?:number;completeExecutions?:readonly ValidationExecution[];completeRuleIds?:readonly ValidationRuleId[];deterministicPassCount?:number;deterministicFailCount?:number;semanticSucceeded?:boolean;semanticExecutionComplete?:boolean;failureCode?:string;failureShapeSafe?:boolean}):ValidationTransitionDecision{if(i.from==='SUCCEEDED'||i.from==='FAILED')return{allowed:false,reason:'TERMINAL'};if(i.from==='PENDING'&&i.to==='PROCESSING')return{allowed:true,reason:'CLAIM'};if(i.from==='PROCESSING'&&i.to==='PENDING')return i.stale===true&&i.permittedAttempt===true?{allowed:true,reason:'STALE_RETRY'}:{allowed:false,reason:'LEASE_NOT_STALE'};if(i.from==='PROCESSING'&&i.to==='FAILED')return i.failureShapeSafe===true&&failureCodes.includes(i.failureCode as (typeof failureCodes)[number])?{allowed:true,reason:'COMPLETE_FAILURE'}:{allowed:false,reason:'SUCCESS_SHAPE_INVALID'};if(i.from==='PROCESSING'&&i.to==='SUCCEEDED'){const e=i.completeExecutions;const exact=e?.length===11&&e.every((x,n)=>x.ruleId===validationRules[n]&&x.ruleVersion===VALIDATION_RULE_VERSION&&(x.outcome==='PASS'||x.outcome==='FAIL'));const ok=i.completeRuleCount===11&&exact===true&&i.completeRuleIds===undefined&&i.deterministicPassCount!==undefined&&i.deterministicFailCount!==undefined&&i.deterministicPassCount+i.deterministicFailCount===11&&i.semanticSucceeded===true&&i.semanticExecutionComplete===true;return ok?{allowed:true,reason:'COMPLETE_SUCCESS'}:{allowed:false,reason:'SUCCESS_SHAPE_INVALID'};}return{allowed:false,reason:'ILLEGAL_PAIR'};}
-type R=Record<string,unknown>;const asRecord=(v:unknown):R|null=>typeof v==='object'&&v!==null&&!Array.isArray(v)?v as R:null;const exact=(v:R,keys:readonly string[])=>{const a=Object.keys(v).sort(),b=[...keys].sort();return a.length===b.length&&a.every((x,i)=>x===b[i]);};const str=(v:unknown)=>typeof v==='string'&&v.length>0;const integerOrNull=(v:unknown)=>v===null||typeof v==='number'&&Number.isSafeInteger(v)&&v>=0;const owner=(v:unknown)=>v==='QUESTION'||v==='SUBQUESTION';const sourceState=(v:unknown)=>v==='ACTIVE'||v==='DRAFT'||v==='SUSPENDED'||v==='DEPRECATED'||v==='FAILED'||v==='NEEDS_RE_REVIEW';const itemState=(v:unknown)=>v==='ACTIVE'||v==='SUSPENDED'||v==='DEPRECATED';
-const eligibilityShape=(v:unknown):v is EligibilityInput=>{const x=asRecord(v);return x!==null&&exact(x,['pedagogicalApproved','usageAllowed','sourceLifecycle','itemLifecycle','visibilityPermitted','exactPublishedCurriculum'])&&typeof x.pedagogicalApproved==='boolean'&&typeof x.usageAllowed==='boolean'&&sourceState(x.sourceLifecycle)&&itemState(x.itemLifecycle)&&typeof x.visibilityPermitted==='boolean'&&typeof x.exactPublishedCurriculum==='boolean';};
-const answerShape=(v:unknown)=>{const x=asRecord(v);return x!==null&&(exact(x,['ownerType','ownerId','text'])||exact(x,['text']))&&typeof x.text==='string'&&x.text.length<=10000&&(x.ownerType===undefined||owner(x.ownerType))&&(x.ownerId===undefined||str(x.ownerId));};
-const rubricShape=(v:unknown)=>{const x=asRecord(v);return x!==null&&(exact(x,['ownerType','ownerId','scoreUnits'])||exact(x,['scoreUnits']))&&integerOrNull(x.scoreUnits)&&(x.ownerType===undefined||owner(x.ownerType))&&(x.ownerId===undefined||str(x.ownerId));};
-const provenanceShape=(v:unknown)=>{const x=asRecord(v);return x!==null&&exact(x,['generationRunId','generationRunState','operation','assessmentId','curriculumVersionId','outputRevisionId','promptTemplateVersion','promptTemplateHash','modelConfigurationVersion','modelConfigurationHash','responseSchemaVersion','responseSchemaHash','revisionId','questionId','sourceVersionId','knowledgeItemId'])&&str(x.generationRunId)&&x.generationRunState==='SUCCEEDED'&&(x.operation==='DRAFT'||x.operation==='REGENERATE_QUESTION')&&str(x.assessmentId)&&str(x.curriculumVersionId)&&str(x.outputRevisionId)&&str(x.promptTemplateVersion)&&str(x.promptTemplateHash)&&str(x.modelConfigurationVersion)&&str(x.modelConfigurationHash)&&str(x.responseSchemaVersion)&&str(x.responseSchemaHash)&&str(x.revisionId)&&str(x.questionId)&&str(x.sourceVersionId)&&str(x.knowledgeItemId);};
-const linkShape=(v:unknown)=>{const x=asRecord(v);if(x===null||!exact(x,['questionId','revisionId','sourceVersionId','knowledgeItemId','locator','contentHash','sourceVersion','knowledgeItem','eligibility','provenance']))return false;const sv=asRecord(x.sourceVersion),ki=asRecord(x.knowledgeItem);return str(x.questionId)&&str(x.revisionId)&&str(x.sourceVersionId)&&str(x.knowledgeItemId)&&str(x.locator)&&str(x.contentHash)&&sv!==null&&exact(sv,['id'])&&sv.id===x.sourceVersionId&&ki!==null&&exact(ki,['id'])&&ki.id===x.knowledgeItemId&&eligibilityShape(x.eligibility)&&provenanceShape(x.provenance);};
-const questionShape=(v:unknown):v is R=>{const x=asRecord(v);return x!==null&&exact(x,['id','key','prompt','instructions','order','scoreUnits','answers','rubrics','subQuestions','questionSourceLinks'])&&str(x.id)&&str(x.key)&&typeof x.prompt==='string'&&x.prompt.length<=50000&&typeof x.instructions==='string'&&Number.isSafeInteger(x.order)&&integerOrNull(x.scoreUnits)&&Array.isArray(x.answers)&&x.answers.every(answerShape)&&Array.isArray(x.rubrics)&&x.rubrics.every(rubricShape)&&Array.isArray(x.subQuestions)&&x.subQuestions.every(questionShape)&&Array.isArray(x.questionSourceLinks)&&x.questionSourceLinks.every(linkShape);};
-type Trusted=Readonly<{id:string;generationRunId:string;generationOperation:'DRAFT'|'REGENERATE_QUESTION';promptTemplateVersion:string;promptTemplateHash:string;modelConfigurationVersion:string;modelConfigurationHash:string;responseSchemaVersion:string;responseSchemaHash:string;assessmentId:string;organizationId:string;ownerOrganizationId:string;state:'FINALIZED'|'BUILDING';assessmentType:'WORKSHEET'|'TEST';scoringMode:'NONE'|'POINTS';totalScoreUnits:number|null;curriculumVersion:Readonly<{id:string;status:'PUBLISHED'|'DRAFT';nodeIds:readonly string[]}>;curriculumNodeIds:readonly string[];frozenPlan:Readonly<{questions:readonly R[]}>;sections:readonly R[]}>;
-const parseTrusted=(v:unknown):Trusted|null=>{const x=asRecord(v);if(x===null||!exact(x,['id','generationRunId','generationOperation','promptTemplateVersion','promptTemplateHash','modelConfigurationVersion','modelConfigurationHash','responseSchemaVersion','responseSchemaHash','assessmentId','organizationId','ownerOrganizationId','state','assessmentType','scoringMode','totalScoreUnits','curriculumVersion','curriculumNodeIds','frozenPlan','sections']))return null;const cv=asRecord(x.curriculumVersion),fp=asRecord(x.frozenPlan);if(!str(x.id)||!str(x.generationRunId)||(x.generationOperation!=='DRAFT'&&x.generationOperation!=='REGENERATE_QUESTION')||!str(x.promptTemplateVersion)||!str(x.promptTemplateHash)||!str(x.modelConfigurationVersion)||!str(x.modelConfigurationHash)||!str(x.responseSchemaVersion)||!str(x.responseSchemaHash)||!str(x.assessmentId)||!str(x.organizationId)||!str(x.ownerOrganizationId)||(x.state!=='FINALIZED'&&x.state!=='BUILDING')||(x.assessmentType!=='WORKSHEET'&&x.assessmentType!=='TEST')||(x.scoringMode!=='NONE'&&x.scoringMode!=='POINTS')||!integerOrNull(x.totalScoreUnits)||cv===null||!exact(cv,['id','status','nodeIds'])||!str(cv.id)||(cv.status!=='PUBLISHED'&&cv.status!=='DRAFT')||!Array.isArray(cv.nodeIds)||!cv.nodeIds.every(str)||!Array.isArray(x.curriculumNodeIds)||!x.curriculumNodeIds.every(str)||fp===null||!exact(fp,['questions'])||!Array.isArray(fp.questions)||!fp.questions.every((v)=>{const p=asRecord(v);return p!==null&&exact(p,['key','order'])&&str(p.key)&&Number.isSafeInteger(p.order);})||!Array.isArray(x.sections)||!x.sections.every((v)=>{const s=asRecord(v);return s!==null&&exact(s,['key','order','scoreUnits','questions'])&&str(s.key)&&Number.isSafeInteger(s.order)&&integerOrNull(s.scoreUnits)&&Array.isArray(s.questions)&&s.questions.every(questionShape);}))return null;return Object.freeze({id:x.id as string,generationRunId:x.generationRunId as string,generationOperation:x.generationOperation as 'DRAFT'|'REGENERATE_QUESTION',promptTemplateVersion:x.promptTemplateVersion as string,promptTemplateHash:x.promptTemplateHash as string,modelConfigurationVersion:x.modelConfigurationVersion as string,modelConfigurationHash:x.modelConfigurationHash as string,responseSchemaVersion:x.responseSchemaVersion as string,responseSchemaHash:x.responseSchemaHash as string,assessmentId:x.assessmentId as string,organizationId:x.organizationId as string,ownerOrganizationId:x.ownerOrganizationId as string,state:x.state as 'FINALIZED'|'BUILDING',assessmentType:x.assessmentType as 'WORKSHEET'|'TEST',scoringMode:x.scoringMode as 'NONE'|'POINTS',totalScoreUnits:x.totalScoreUnits as number|null,curriculumVersion:Object.freeze({id:cv.id as string,status:cv.status as 'PUBLISHED'|'DRAFT',nodeIds:Object.freeze(cv.nodeIds as string[])}),curriculumNodeIds:Object.freeze(x.curriculumNodeIds as string[]),frozenPlan:Object.freeze({questions:Object.freeze(fp.questions as R[])}),sections:Object.freeze(x.sections as R[])});};
-export function normalizeValidationText(v:string){return v.normalize('NFKC').replace(/\s+/gu,' ').trim().toLocaleLowerCase('he-IL');}export function hasExactAnswerLeakage(p:string,a:string){const n=normalizeValidationText(a);return n.length>0&&normalizeValidationText(p).includes(n);}
-const questions=(s:Trusted)=>s.sections.flatMap(x=>x.questions as R[]);const allQuestions=(s:Trusted)=>questions(s).flatMap(x=>[x,...x.subQuestions as R[]]);const scoreNode=(x:R):ScoreNode=>({scoreUnits:typeof x.scoreUnits==='number'?x.scoreUnits:null,rubricScores:(x.rubrics as R[]).map(r=>r.scoreUnits as number|null),subQuestions:(x.subQuestions as R[]).map(scoreNode)});const ev=(ruleId:ValidationRuleId,affirmation:string,count:number)=>Object.freeze({ruleId,affirmation,questionCount:count});
-export type DeterministicRuleResult=Readonly<{ruleId:ValidationRuleId;ruleVersion:typeof VALIDATION_RULE_VERSION;category:ValidationRuleCategory;severity:'BLOCKING';order:number;outcome:'PASS'|'FAIL';path:string;messageKey?:string;evidence:Readonly<Record<string,string|number>>;finding?:Readonly<{code:string;category:ValidationRuleCategory;severity:'BLOCKING';path:string;messageKey:string}>}>;
-export function evaluateDeterministicRules(input:unknown):DeterministicRuleResult[]{const s=parseTrusted(input),defs=validationRuleRegistry;if(!s)return defs.map(d=>Object.freeze({...d,outcome:'FAIL' as const,path:'snapshot',messageKey:`${d.ruleId}_FAILED`,evidence:ev(d.ruleId,'trusted snapshot rejected',0),finding:Object.freeze({code:`${d.ruleId}_FAILED`,category:d.category,severity:'BLOCKING' as const,path:'snapshot',messageKey:`${d.ruleId}_FAILED`})}));const q=questions(s),a=allQuestions(s),ids=a.map(x=>x.id),texts=a.map(x=>normalizeValidationText(x.prompt as string)),plan=s.frozenPlan.questions,ownership=s.state==='FINALIZED'&&s.organizationId===s.ownerOrganizationId,planOk=plan.length===q.length&&plan.every((p,i)=>p.key===q[i]?.key&&p.order===q[i]?.order)&&q.every((x,i)=>x.order===i),curriculum=s.curriculumVersion.status==='PUBLISHED'&&s.curriculumNodeIds.length>0&&s.curriculumNodeIds.every(x=>s.curriculumVersion.nodeIds.includes(x)),targets=a.every(x=>(x.answers as R[]).length>0&&(x.answers as R[]).every(y=>y.ownerType===(q.includes(x)?'QUESTION':'SUBQUESTION')&&y.ownerId===x.id)&&(x.rubrics as R[]).every(y=>y.ownerType===(q.includes(x)?'QUESTION':'SUBQUESTION')&&y.ownerId===x.id)),score=validateScoreTree(s.scoringMode,s.assessmentType,s.totalScoreUnits,s.sections.map(sec=>({scoreUnits:sec.scoreUnits as number|null,questions:(sec.questions as R[]).map(scoreNode)}))).length===0,identity=ids.every(str)&&new Set(ids).size===ids.length&&new Set(texts).size===texts.length,visible=[...s.sections.map(x=>String(x.key)),...a].flatMap(x=>typeof x==='string'?[x]:[String(x.prompt),String(x.instructions)]),leakage=!a.some(x=>(x.answers as R[]).some(y=>visible.some(t=>hasExactAnswerLeakage(t,y.text as string)))),links=q.length>0&&q.every(x=>(x.questionSourceLinks as R[]).length>0&&(x.questionSourceLinks as R[]).every(l=>l.questionId===x.id&&l.revisionId===s.id&&(l.sourceVersion as R).id===l.sourceVersionId&&(l.knowledgeItem as R).id===l.knowledgeItemId)),eligible=q.length>0&&q.every(x=>(x.questionSourceLinks as R[]).length>0&&(x.questionSourceLinks as R[]).every(l=>isEligibleKnowledgeItem(l.eligibility as EligibilityInput))),provenance=q.length>0&&q.every(x=>(x.questionSourceLinks as R[]).length>0&&(x.questionSourceLinks as R[]).every(l=>{const p=l.provenance as R;return p.generationRunId===s.generationRunId&&p.generationRunState==='SUCCEEDED'&&p.operation===s.generationOperation&&p.assessmentId===s.assessmentId&&p.curriculumVersionId===s.curriculumVersion.id&&p.outputRevisionId===s.id&&p.promptTemplateVersion===s.promptTemplateVersion&&p.promptTemplateHash===s.promptTemplateHash&&p.modelConfigurationVersion===s.modelConfigurationVersion&&p.modelConfigurationHash===s.modelConfigurationHash&&p.responseSchemaVersion===s.responseSchemaVersion&&p.responseSchemaHash===s.responseSchemaHash&&p.revisionId===s.id&&p.questionId===x.id&&p.sourceVersionId===l.sourceVersionId&&p.knowledgeItemId===l.knowledgeItemId;})),checks:[ValidationRuleId,boolean,string,string][]=[['REVISION_FINALIZED_AND_OWNED',ownership,'ownership','trusted finalized ownership matches'],['STRICT_REVISION_CONTRACT',true,'contract','complete trusted contract parsed'],['PLAN_COUNT_KEY_ORDER',planOk,'plan','frozen plan count key order matches'],['CURRICULUM_SCOPE_PUBLISHED',curriculum,'curriculum','published curriculum scope matches'],['ANSWER_COMPLETENESS_AND_TARGETS',targets,'answers','answer and rubric ownership matches'],['EXACT_SCORE_TREE',score,'score','approved score tree matches'],['STABLE_ID_AND_EXACT_DUPLICATE',identity,'identity','stable IDs and normalized text unique'],['DETERMINISTIC_ANSWER_LEAKAGE',leakage,'leakage','visible text has no exact answer'],['SOURCE_LINK_COMPLETENESS_AND_IDENTITY',links,'sources','source identities match'],['CURRENT_SOURCE_ELIGIBILITY',eligible,'eligibility','approved Phase 30 eligibility predicate passes'],['GENERATION_REVISION_PROVENANCE',provenance,'provenance','generation lineage identities match']];return checks.map(([id,ok,path,text],i)=>{const d=defs[i]!,e=ev(id,text,a.length);return ok?Object.freeze({...d,outcome:'PASS' as const,path:'',evidence:e}):Object.freeze({...d,outcome:'FAIL' as const,path,messageKey:`${id}_FAILED`,evidence:e,finding:Object.freeze({code:`${id}_FAILED`,category:d.category,severity:'BLOCKING' as const,path,messageKey:`${id}_FAILED`})});});}
-export type ReadinessReason='VALIDATION_REQUIRED'|'VALIDATION_PENDING'|'VALIDATION_PROCESSING'|'VALIDATION_FAILED'|'DETERMINISTIC_BLOCKER'|'SEMANTIC_BLOCKER'|'WARNING_ACKNOWLEDGEMENT_REQUIRED'|'VALIDATION_VERSION_STALE'|'SOURCE_ELIGIBILITY_CHANGED';export type ValidationReadiness=Readonly<{status:'READY'|'BLOCKED';reasonCode:ReadinessReason|null;validationRunId:string|null}>;export type ReadinessRun=Readonly<{id:string;revisionId:string;revisionSequence:number;state:ValidationRunState;rulesetVersion:string;evaluatorVersion:string;completeEvidence?:boolean;deterministicBlocker?:boolean;semanticBlocker?:boolean;unacknowledgedWarning?:boolean;sourceEligible?:boolean}>;export function decideValidationReadiness(i:{revisionId:string;runs:readonly ReadinessRun[];currentRulesetVersion:string;currentEvaluatorVersion:string;currentSourceEligible:boolean}):ValidationReadiness{const r=i.runs.filter(x=>x.revisionId===i.revisionId);if(!r.length)return{status:'BLOCKED',reasonCode:'VALIDATION_REQUIRED',validationRunId:null};const m=Math.max(...r.map(x=>x.revisionSequence)),latest=r.filter(x=>x.revisionSequence===m);if(latest.length!==1)return{status:'BLOCKED',reasonCode:'VALIDATION_FAILED',validationRunId:null};const x=latest[0]!;if(x.state==='PENDING')return{status:'BLOCKED',reasonCode:'VALIDATION_PENDING',validationRunId:x.id};if(x.state==='PROCESSING')return{status:'BLOCKED',reasonCode:'VALIDATION_PROCESSING',validationRunId:x.id};if(x.state==='FAILED')return{status:'BLOCKED',reasonCode:'VALIDATION_FAILED',validationRunId:x.id};if(x.rulesetVersion!==i.currentRulesetVersion||x.evaluatorVersion!==i.currentEvaluatorVersion)return{status:'BLOCKED',reasonCode:'VALIDATION_VERSION_STALE',validationRunId:x.id};if(i.currentSourceEligible!==true||x.sourceEligible!==true)return{status:'BLOCKED',reasonCode:'SOURCE_ELIGIBILITY_CHANGED',validationRunId:x.id};if(x.completeEvidence!==true)return{status:'BLOCKED',reasonCode:'VALIDATION_FAILED',validationRunId:x.id};if(x.deterministicBlocker===true)return{status:'BLOCKED',reasonCode:'DETERMINISTIC_BLOCKER',validationRunId:x.id};if(x.semanticBlocker===true)return{status:'BLOCKED',reasonCode:'SEMANTIC_BLOCKER',validationRunId:x.id};if(x.unacknowledgedWarning===true)return{status:'BLOCKED',reasonCode:'WARNING_ACKNOWLEDGEMENT_REQUIRED',validationRunId:x.id};return{status:'READY',reasonCode:null,validationRunId:x.id};}
+export type ValidationRuleCategory =
+  | 'REVISION'
+  | 'CONTRACT'
+  | 'PLAN'
+  | 'CURRICULUM'
+  | 'ANSWER'
+  | 'SCORING'
+  | 'IDENTITY'
+  | 'LEAKAGE'
+  | 'SOURCE'
+  | 'PROVENANCE';
+const categories: readonly ValidationRuleCategory[] = [
+  'REVISION',
+  'CONTRACT',
+  'PLAN',
+  'CURRICULUM',
+  'ANSWER',
+  'SCORING',
+  'IDENTITY',
+  'LEAKAGE',
+  'SOURCE',
+  'SOURCE',
+  'PROVENANCE',
+];
+export type ValidationRuleDefinition = Readonly<{
+  ruleId: ValidationRuleId;
+  ruleVersion: typeof VALIDATION_RULE_VERSION;
+  category: ValidationRuleCategory;
+  severity: 'BLOCKING';
+  order: number;
+}>;
+export const validationRuleRegistry: readonly ValidationRuleDefinition[] = Object.freeze(
+  validationRules.map((ruleId, index) =>
+    Object.freeze({
+      ruleId,
+      ruleVersion: VALIDATION_RULE_VERSION,
+      category: categories[index]!,
+      severity: 'BLOCKING' as const,
+      order: index + 1,
+    }),
+  ),
+);
+export type ValidationRunState = 'PENDING' | 'PROCESSING' | 'SUCCEEDED' | 'FAILED';
+const transitions: Readonly<Record<ValidationRunState, readonly ValidationRunState[]>> = {
+  PENDING: ['PROCESSING'],
+  PROCESSING: ['PENDING', 'SUCCEEDED', 'FAILED'],
+  SUCCEEDED: [],
+  FAILED: [],
+};
+export function canTransitionValidationRun(from: ValidationRunState, to: ValidationRunState) {
+  return transitions[from].includes(to);
+}
+const failureCodes = [
+  'RULESET_INTEGRITY',
+  'DETERMINISTIC_RULE_FAILED',
+  'TIMEOUT',
+  'TRANSIENT_EXHAUSTED',
+  'PERMANENT_EVALUATOR_ERROR',
+  'OUTPUT_INVALID',
+] as const;
+export type ValidationExecution = Readonly<{
+  ruleId: ValidationRuleId;
+  ruleVersion: typeof VALIDATION_RULE_VERSION;
+  outcome: 'PASS' | 'FAIL';
+}>;
+export type ValidationTransitionDecision =
+  | { allowed: true; reason: 'CLAIM' | 'STALE_RETRY' | 'COMPLETE_SUCCESS' | 'COMPLETE_FAILURE' }
+  | {
+      allowed: false;
+      reason: 'TERMINAL' | 'ILLEGAL_PAIR' | 'LEASE_NOT_STALE' | 'SUCCESS_SHAPE_INVALID';
+    };
+export function decideValidationRunTransition(i: {
+  from: ValidationRunState;
+  to: ValidationRunState;
+  stale?: boolean;
+  permittedAttempt?: boolean;
+  completeRuleCount?: number;
+  completeExecutions?: readonly ValidationExecution[];
+  completeRuleIds?: readonly ValidationRuleId[];
+  deterministicPassCount?: number;
+  deterministicFailCount?: number;
+  semanticSucceeded?: boolean;
+  semanticExecutionComplete?: boolean;
+  failureCode?: string;
+  failureShapeSafe?: boolean;
+}): ValidationTransitionDecision {
+  if (i.from === 'SUCCEEDED' || i.from === 'FAILED') return { allowed: false, reason: 'TERMINAL' };
+  if (i.from === 'PENDING' && i.to === 'PROCESSING') return { allowed: true, reason: 'CLAIM' };
+  if (i.from === 'PROCESSING' && i.to === 'PENDING')
+    return i.stale === true && i.permittedAttempt === true
+      ? { allowed: true, reason: 'STALE_RETRY' }
+      : { allowed: false, reason: 'LEASE_NOT_STALE' };
+  if (i.from === 'PROCESSING' && i.to === 'FAILED')
+    return i.failureShapeSafe === true &&
+      failureCodes.includes(i.failureCode as (typeof failureCodes)[number])
+      ? { allowed: true, reason: 'COMPLETE_FAILURE' }
+      : { allowed: false, reason: 'SUCCESS_SHAPE_INVALID' };
+  if (i.from === 'PROCESSING' && i.to === 'SUCCEEDED') {
+    const e = i.completeExecutions;
+    const exact =
+      e?.length === 11 &&
+      e.every(
+        (x, n) =>
+          x.ruleId === validationRules[n] &&
+          x.ruleVersion === VALIDATION_RULE_VERSION &&
+          (x.outcome === 'PASS' || x.outcome === 'FAIL'),
+      );
+    const ok =
+      i.completeRuleCount === 11 &&
+      exact === true &&
+      i.completeRuleIds === undefined &&
+      i.deterministicPassCount !== undefined &&
+      i.deterministicFailCount !== undefined &&
+      i.deterministicPassCount + i.deterministicFailCount === 11 &&
+      i.semanticSucceeded === true &&
+      i.semanticExecutionComplete === true;
+    return ok
+      ? { allowed: true, reason: 'COMPLETE_SUCCESS' }
+      : { allowed: false, reason: 'SUCCESS_SHAPE_INVALID' };
+  }
+  return { allowed: false, reason: 'ILLEGAL_PAIR' };
+}
+type R = Record<string, unknown>;
+const asRecord = (v: unknown): R | null =>
+  typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as R) : null;
+const exact = (v: R, keys: readonly string[]) => {
+  const a = Object.keys(v).sort(),
+    b = [...keys].sort();
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+};
+const str = (v: unknown) => typeof v === 'string' && v.length > 0;
+const integerOrNull = (v: unknown) =>
+  v === null || (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0);
+const owner = (v: unknown) => v === 'QUESTION' || v === 'SUBQUESTION';
+const sourceState = (v: unknown) =>
+  v === 'ACTIVE' ||
+  v === 'DRAFT' ||
+  v === 'SUSPENDED' ||
+  v === 'DEPRECATED' ||
+  v === 'FAILED' ||
+  v === 'NEEDS_RE_REVIEW';
+const itemState = (v: unknown) => v === 'ACTIVE' || v === 'SUSPENDED' || v === 'DEPRECATED';
+const eligibilityShape = (v: unknown): v is EligibilityInput => {
+  const x = asRecord(v);
+  return (
+    x !== null &&
+    exact(x, [
+      'pedagogicalApproved',
+      'usageAllowed',
+      'sourceLifecycle',
+      'itemLifecycle',
+      'visibilityPermitted',
+      'exactPublishedCurriculum',
+    ]) &&
+    typeof x.pedagogicalApproved === 'boolean' &&
+    typeof x.usageAllowed === 'boolean' &&
+    sourceState(x.sourceLifecycle) &&
+    itemState(x.itemLifecycle) &&
+    typeof x.visibilityPermitted === 'boolean' &&
+    typeof x.exactPublishedCurriculum === 'boolean'
+  );
+};
+const answerShape = (v: unknown) => {
+  const x = asRecord(v);
+  return (
+    x !== null &&
+    (exact(x, ['ownerType', 'ownerId', 'text']) || exact(x, ['text'])) &&
+    typeof x.text === 'string' &&
+    x.text.length <= 10000 &&
+    (x.ownerType === undefined || owner(x.ownerType)) &&
+    (x.ownerId === undefined || str(x.ownerId))
+  );
+};
+const rubricShape = (v: unknown) => {
+  const x = asRecord(v);
+  return (
+    x !== null &&
+    (exact(x, ['ownerType', 'ownerId', 'scoreUnits']) || exact(x, ['scoreUnits'])) &&
+    integerOrNull(x.scoreUnits) &&
+    (x.ownerType === undefined || owner(x.ownerType)) &&
+    (x.ownerId === undefined || str(x.ownerId))
+  );
+};
+const provenanceShape = (v: unknown) => {
+  const x = asRecord(v);
+  return (
+    x !== null &&
+    exact(x, [
+      'generationRunId',
+      'generationRunState',
+      'operation',
+      'assessmentId',
+      'curriculumVersionId',
+      'outputRevisionId',
+      'promptTemplateVersion',
+      'promptTemplateHash',
+      'modelConfigurationVersion',
+      'modelConfigurationHash',
+      'responseSchemaVersion',
+      'responseSchemaHash',
+      'revisionId',
+      'questionId',
+      'sourceVersionId',
+      'knowledgeItemId',
+    ]) &&
+    str(x.generationRunId) &&
+    x.generationRunState === 'SUCCEEDED' &&
+    (x.operation === 'DRAFT' || x.operation === 'REGENERATE_QUESTION') &&
+    str(x.assessmentId) &&
+    str(x.curriculumVersionId) &&
+    str(x.outputRevisionId) &&
+    str(x.promptTemplateVersion) &&
+    str(x.promptTemplateHash) &&
+    str(x.modelConfigurationVersion) &&
+    str(x.modelConfigurationHash) &&
+    str(x.responseSchemaVersion) &&
+    str(x.responseSchemaHash) &&
+    str(x.revisionId) &&
+    str(x.questionId) &&
+    str(x.sourceVersionId) &&
+    str(x.knowledgeItemId)
+  );
+};
+const linkShape = (v: unknown) => {
+  const x = asRecord(v);
+  if (
+    x === null ||
+    !exact(x, [
+      'questionId',
+      'revisionId',
+      'sourceVersionId',
+      'knowledgeItemId',
+      'locator',
+      'contentHash',
+      'sourceVersion',
+      'knowledgeItem',
+      'eligibility',
+      'provenance',
+    ])
+  )
+    return false;
+  const sv = asRecord(x.sourceVersion),
+    ki = asRecord(x.knowledgeItem);
+  return (
+    str(x.questionId) &&
+    str(x.revisionId) &&
+    str(x.sourceVersionId) &&
+    str(x.knowledgeItemId) &&
+    str(x.locator) &&
+    str(x.contentHash) &&
+    sv !== null &&
+    exact(sv, ['id']) &&
+    sv.id === x.sourceVersionId &&
+    ki !== null &&
+    exact(ki, ['id']) &&
+    ki.id === x.knowledgeItemId &&
+    eligibilityShape(x.eligibility) &&
+    provenanceShape(x.provenance)
+  );
+};
+const questionShape = (v: unknown): v is R => {
+  const x = asRecord(v);
+  return (
+    x !== null &&
+    exact(x, [
+      'id',
+      'key',
+      'prompt',
+      'instructions',
+      'order',
+      'scoreUnits',
+      'answers',
+      'rubrics',
+      'subQuestions',
+      'questionSourceLinks',
+    ]) &&
+    str(x.id) &&
+    str(x.key) &&
+    typeof x.prompt === 'string' &&
+    x.prompt.length <= 50000 &&
+    typeof x.instructions === 'string' &&
+    Number.isSafeInteger(x.order) &&
+    integerOrNull(x.scoreUnits) &&
+    Array.isArray(x.answers) &&
+    x.answers.every(answerShape) &&
+    Array.isArray(x.rubrics) &&
+    x.rubrics.every(rubricShape) &&
+    Array.isArray(x.subQuestions) &&
+    x.subQuestions.every(questionShape) &&
+    Array.isArray(x.questionSourceLinks) &&
+    x.questionSourceLinks.every(linkShape)
+  );
+};
+type Trusted = Readonly<{
+  id: string;
+  generationRunId: string;
+  generationOperation: 'DRAFT' | 'REGENERATE_QUESTION';
+  promptTemplateVersion: string;
+  promptTemplateHash: string;
+  modelConfigurationVersion: string;
+  modelConfigurationHash: string;
+  responseSchemaVersion: string;
+  responseSchemaHash: string;
+  assessmentId: string;
+  organizationId: string;
+  ownerOrganizationId: string;
+  state: 'FINALIZED' | 'BUILDING';
+  assessmentType: 'WORKSHEET' | 'TEST';
+  scoringMode: 'NONE' | 'POINTS';
+  totalScoreUnits: number | null;
+  curriculumVersion: Readonly<{
+    id: string;
+    status: 'PUBLISHED' | 'DRAFT';
+    nodeIds: readonly string[];
+  }>;
+  curriculumNodeIds: readonly string[];
+  frozenPlan: Readonly<{ questions: readonly R[] }>;
+  sections: readonly R[];
+}>;
+const parseTrusted = (v: unknown): Trusted | null => {
+  const x = asRecord(v);
+  if (
+    x === null ||
+    !exact(x, [
+      'id',
+      'generationRunId',
+      'generationOperation',
+      'promptTemplateVersion',
+      'promptTemplateHash',
+      'modelConfigurationVersion',
+      'modelConfigurationHash',
+      'responseSchemaVersion',
+      'responseSchemaHash',
+      'assessmentId',
+      'organizationId',
+      'ownerOrganizationId',
+      'state',
+      'assessmentType',
+      'scoringMode',
+      'totalScoreUnits',
+      'curriculumVersion',
+      'curriculumNodeIds',
+      'frozenPlan',
+      'sections',
+    ])
+  )
+    return null;
+  const cv = asRecord(x.curriculumVersion),
+    fp = asRecord(x.frozenPlan);
+  if (
+    !str(x.id) ||
+    !str(x.generationRunId) ||
+    (x.generationOperation !== 'DRAFT' && x.generationOperation !== 'REGENERATE_QUESTION') ||
+    !str(x.promptTemplateVersion) ||
+    !str(x.promptTemplateHash) ||
+    !str(x.modelConfigurationVersion) ||
+    !str(x.modelConfigurationHash) ||
+    !str(x.responseSchemaVersion) ||
+    !str(x.responseSchemaHash) ||
+    !str(x.assessmentId) ||
+    !str(x.organizationId) ||
+    !str(x.ownerOrganizationId) ||
+    (x.state !== 'FINALIZED' && x.state !== 'BUILDING') ||
+    (x.assessmentType !== 'WORKSHEET' && x.assessmentType !== 'TEST') ||
+    (x.scoringMode !== 'NONE' && x.scoringMode !== 'POINTS') ||
+    !integerOrNull(x.totalScoreUnits) ||
+    cv === null ||
+    !exact(cv, ['id', 'status', 'nodeIds']) ||
+    !str(cv.id) ||
+    (cv.status !== 'PUBLISHED' && cv.status !== 'DRAFT') ||
+    !Array.isArray(cv.nodeIds) ||
+    !cv.nodeIds.every(str) ||
+    !Array.isArray(x.curriculumNodeIds) ||
+    !x.curriculumNodeIds.every(str) ||
+    fp === null ||
+    !exact(fp, ['questions']) ||
+    !Array.isArray(fp.questions) ||
+    !fp.questions.every((v) => {
+      const p = asRecord(v);
+      return (
+        p !== null && exact(p, ['key', 'order']) && str(p.key) && Number.isSafeInteger(p.order)
+      );
+    }) ||
+    !Array.isArray(x.sections) ||
+    !x.sections.every((v) => {
+      const s = asRecord(v);
+      return (
+        s !== null &&
+        exact(s, ['key', 'order', 'scoreUnits', 'questions']) &&
+        str(s.key) &&
+        Number.isSafeInteger(s.order) &&
+        integerOrNull(s.scoreUnits) &&
+        Array.isArray(s.questions) &&
+        s.questions.every(questionShape)
+      );
+    })
+  )
+    return null;
+  return Object.freeze({
+    id: x.id as string,
+    generationRunId: x.generationRunId as string,
+    generationOperation: x.generationOperation as 'DRAFT' | 'REGENERATE_QUESTION',
+    promptTemplateVersion: x.promptTemplateVersion as string,
+    promptTemplateHash: x.promptTemplateHash as string,
+    modelConfigurationVersion: x.modelConfigurationVersion as string,
+    modelConfigurationHash: x.modelConfigurationHash as string,
+    responseSchemaVersion: x.responseSchemaVersion as string,
+    responseSchemaHash: x.responseSchemaHash as string,
+    assessmentId: x.assessmentId as string,
+    organizationId: x.organizationId as string,
+    ownerOrganizationId: x.ownerOrganizationId as string,
+    state: x.state as 'FINALIZED' | 'BUILDING',
+    assessmentType: x.assessmentType as 'WORKSHEET' | 'TEST',
+    scoringMode: x.scoringMode as 'NONE' | 'POINTS',
+    totalScoreUnits: x.totalScoreUnits as number | null,
+    curriculumVersion: Object.freeze({
+      id: cv.id as string,
+      status: cv.status as 'PUBLISHED' | 'DRAFT',
+      nodeIds: Object.freeze(cv.nodeIds as string[]),
+    }),
+    curriculumNodeIds: Object.freeze(x.curriculumNodeIds as string[]),
+    frozenPlan: Object.freeze({ questions: Object.freeze(fp.questions as R[]) }),
+    sections: Object.freeze(x.sections as R[]),
+  });
+};
+export function normalizeValidationText(v: string) {
+  return v.normalize('NFKC').replace(/\s+/gu, ' ').trim().toLocaleLowerCase('he-IL');
+}
+export function hasExactAnswerLeakage(p: string, a: string) {
+  const n = normalizeValidationText(a);
+  return n.length > 0 && normalizeValidationText(p).includes(n);
+}
+const questions = (s: Trusted) => s.sections.flatMap((x) => x.questions as R[]);
+const allQuestions = (s: Trusted) => questions(s).flatMap((x) => [x, ...(x.subQuestions as R[])]);
+const scoreNode = (x: R): ScoreNode => ({
+  scoreUnits: typeof x.scoreUnits === 'number' ? x.scoreUnits : null,
+  rubricScores: (x.rubrics as R[]).map((r) => r.scoreUnits as number | null),
+  subQuestions: (x.subQuestions as R[]).map(scoreNode),
+});
+const ev = (ruleId: ValidationRuleId, affirmation: string, count: number) =>
+  Object.freeze({ ruleId, affirmation, questionCount: count });
+export type DeterministicRuleResult = Readonly<{
+  ruleId: ValidationRuleId;
+  ruleVersion: typeof VALIDATION_RULE_VERSION;
+  category: ValidationRuleCategory;
+  severity: 'BLOCKING';
+  order: number;
+  outcome: 'PASS' | 'FAIL';
+  path: string;
+  messageKey?: string;
+  evidence: Readonly<Record<string, string | number>>;
+  finding?: Readonly<{
+    code: string;
+    category: ValidationRuleCategory;
+    severity: 'BLOCKING';
+    path: string;
+    messageKey: string;
+  }>;
+}>;
+export function evaluateDeterministicRules(input: unknown): DeterministicRuleResult[] {
+  const s = parseTrusted(input),
+    defs = validationRuleRegistry;
+  if (!s)
+    return defs.map((d) =>
+      Object.freeze({
+        ...d,
+        outcome: 'FAIL' as const,
+        path: 'snapshot',
+        messageKey: `${d.ruleId}_FAILED`,
+        evidence: ev(d.ruleId, 'trusted snapshot rejected', 0),
+        finding: Object.freeze({
+          code: `${d.ruleId}_FAILED`,
+          category: d.category,
+          severity: 'BLOCKING' as const,
+          path: 'snapshot',
+          messageKey: `${d.ruleId}_FAILED`,
+        }),
+      }),
+    );
+  const q = questions(s),
+    a = allQuestions(s),
+    ids = a.map((x) => x.id),
+    texts = a.map((x) => normalizeValidationText(x.prompt as string)),
+    plan = s.frozenPlan.questions,
+    ownership = s.state === 'FINALIZED' && s.organizationId === s.ownerOrganizationId,
+    planOk =
+      plan.length === q.length &&
+      plan.every((p, i) => p.key === q[i]?.key && p.order === q[i]?.order) &&
+      q.every((x, i) => x.order === i),
+    curriculum =
+      s.curriculumVersion.status === 'PUBLISHED' &&
+      s.curriculumNodeIds.length > 0 &&
+      s.curriculumNodeIds.every((x) => s.curriculumVersion.nodeIds.includes(x)),
+    targets = a.every(
+      (x) =>
+        (x.answers as R[]).length > 0 &&
+        (x.answers as R[]).every(
+          (y) => y.ownerType === (q.includes(x) ? 'QUESTION' : 'SUBQUESTION') && y.ownerId === x.id,
+        ) &&
+        (x.rubrics as R[]).every(
+          (y) => y.ownerType === (q.includes(x) ? 'QUESTION' : 'SUBQUESTION') && y.ownerId === x.id,
+        ),
+    ),
+    score =
+      validateScoreTree(
+        s.scoringMode,
+        s.assessmentType,
+        s.totalScoreUnits,
+        s.sections.map((sec) => ({
+          scoreUnits: sec.scoreUnits as number | null,
+          questions: (sec.questions as R[]).map(scoreNode),
+        })),
+      ).length === 0,
+    identity =
+      ids.every(str) && new Set(ids).size === ids.length && new Set(texts).size === texts.length,
+    visible = [...s.sections.map((x) => String(x.key)), ...a].flatMap((x) =>
+      typeof x === 'string' ? [x] : [String(x.prompt), String(x.instructions)],
+    ),
+    leakage = !a.some((x) =>
+      (x.answers as R[]).some((y) =>
+        visible.some((t) => hasExactAnswerLeakage(t, y.text as string)),
+      ),
+    ),
+    links =
+      q.length > 0 &&
+      q.every(
+        (x) =>
+          (x.questionSourceLinks as R[]).length > 0 &&
+          (x.questionSourceLinks as R[]).every(
+            (l) =>
+              l.questionId === x.id &&
+              l.revisionId === s.id &&
+              (l.sourceVersion as R).id === l.sourceVersionId &&
+              (l.knowledgeItem as R).id === l.knowledgeItemId,
+          ),
+      ),
+    eligible =
+      q.length > 0 &&
+      q.every(
+        (x) =>
+          (x.questionSourceLinks as R[]).length > 0 &&
+          (x.questionSourceLinks as R[]).every((l) =>
+            isEligibleKnowledgeItem(l.eligibility as EligibilityInput),
+          ),
+      ),
+    provenance =
+      q.length > 0 &&
+      q.every(
+        (x) =>
+          (x.questionSourceLinks as R[]).length > 0 &&
+          (x.questionSourceLinks as R[]).every((l) => {
+            const p = l.provenance as R;
+            return (
+              p.generationRunId === s.generationRunId &&
+              p.generationRunState === 'SUCCEEDED' &&
+              p.operation === s.generationOperation &&
+              p.assessmentId === s.assessmentId &&
+              p.curriculumVersionId === s.curriculumVersion.id &&
+              p.outputRevisionId === s.id &&
+              p.promptTemplateVersion === s.promptTemplateVersion &&
+              p.promptTemplateHash === s.promptTemplateHash &&
+              p.modelConfigurationVersion === s.modelConfigurationVersion &&
+              p.modelConfigurationHash === s.modelConfigurationHash &&
+              p.responseSchemaVersion === s.responseSchemaVersion &&
+              p.responseSchemaHash === s.responseSchemaHash &&
+              p.revisionId === s.id &&
+              p.questionId === x.id &&
+              p.sourceVersionId === l.sourceVersionId &&
+              p.knowledgeItemId === l.knowledgeItemId
+            );
+          }),
+      ),
+    checks: [ValidationRuleId, boolean, string, string][] = [
+      [
+        'REVISION_FINALIZED_AND_OWNED',
+        ownership,
+        'ownership',
+        'trusted finalized ownership matches',
+      ],
+      ['STRICT_REVISION_CONTRACT', true, 'contract', 'complete trusted contract parsed'],
+      ['PLAN_COUNT_KEY_ORDER', planOk, 'plan', 'frozen plan count key order matches'],
+      [
+        'CURRICULUM_SCOPE_PUBLISHED',
+        curriculum,
+        'curriculum',
+        'published curriculum scope matches',
+      ],
+      [
+        'ANSWER_COMPLETENESS_AND_TARGETS',
+        targets,
+        'answers',
+        'answer and rubric ownership matches',
+      ],
+      ['EXACT_SCORE_TREE', score, 'score', 'approved score tree matches'],
+      [
+        'STABLE_ID_AND_EXACT_DUPLICATE',
+        identity,
+        'identity',
+        'stable IDs and normalized text unique',
+      ],
+      ['DETERMINISTIC_ANSWER_LEAKAGE', leakage, 'leakage', 'visible text has no exact answer'],
+      ['SOURCE_LINK_COMPLETENESS_AND_IDENTITY', links, 'sources', 'source identities match'],
+      [
+        'CURRENT_SOURCE_ELIGIBILITY',
+        eligible,
+        'eligibility',
+        'approved Phase 30 eligibility predicate passes',
+      ],
+      [
+        'GENERATION_REVISION_PROVENANCE',
+        provenance,
+        'provenance',
+        'generation lineage identities match',
+      ],
+    ];
+  return checks.map(([id, ok, path, text], i) => {
+    const d = defs[i]!,
+      e = ev(id, text, a.length);
+    return ok
+      ? Object.freeze({ ...d, outcome: 'PASS' as const, path: '', evidence: e })
+      : Object.freeze({
+          ...d,
+          outcome: 'FAIL' as const,
+          path,
+          messageKey: `${id}_FAILED`,
+          evidence: e,
+          finding: Object.freeze({
+            code: `${id}_FAILED`,
+            category: d.category,
+            severity: 'BLOCKING' as const,
+            path,
+            messageKey: `${id}_FAILED`,
+          }),
+        });
+  });
+}
+export type ReadinessReason =
+  | 'VALIDATION_REQUIRED'
+  | 'VALIDATION_PENDING'
+  | 'VALIDATION_PROCESSING'
+  | 'VALIDATION_FAILED'
+  | 'DETERMINISTIC_BLOCKER'
+  | 'SEMANTIC_BLOCKER'
+  | 'WARNING_ACKNOWLEDGEMENT_REQUIRED'
+  | 'VALIDATION_VERSION_STALE'
+  | 'SOURCE_ELIGIBILITY_CHANGED';
+export type ValidationReadiness = Readonly<{
+  status: 'READY' | 'BLOCKED';
+  reasonCode: ReadinessReason | null;
+  validationRunId: string | null;
+}>;
+export type ReadinessRun = Readonly<{
+  id: string;
+  revisionId: string;
+  revisionSequence: number;
+  state: ValidationRunState;
+  rulesetVersion: string;
+  evaluatorVersion: string;
+  completeEvidence?: boolean;
+  deterministicBlocker?: boolean;
+  semanticBlocker?: boolean;
+  unacknowledgedWarning?: boolean;
+  sourceEligible?: boolean;
+}>;
+export function decideValidationReadiness(i: {
+  revisionId: string;
+  runs: readonly ReadinessRun[];
+  currentRulesetVersion: string;
+  currentEvaluatorVersion: string;
+  currentSourceEligible: boolean;
+}): ValidationReadiness {
+  const r = i.runs.filter((x) => x.revisionId === i.revisionId);
+  if (!r.length)
+    return { status: 'BLOCKED', reasonCode: 'VALIDATION_REQUIRED', validationRunId: null };
+  const m = Math.max(...r.map((x) => x.revisionSequence)),
+    latest = r.filter((x) => x.revisionSequence === m);
+  if (latest.length !== 1)
+    return { status: 'BLOCKED', reasonCode: 'VALIDATION_FAILED', validationRunId: null };
+  const x = latest[0]!;
+  if (x.state === 'PENDING')
+    return { status: 'BLOCKED', reasonCode: 'VALIDATION_PENDING', validationRunId: x.id };
+  if (x.state === 'PROCESSING')
+    return { status: 'BLOCKED', reasonCode: 'VALIDATION_PROCESSING', validationRunId: x.id };
+  if (x.state === 'FAILED')
+    return { status: 'BLOCKED', reasonCode: 'VALIDATION_FAILED', validationRunId: x.id };
+  if (
+    x.rulesetVersion !== i.currentRulesetVersion ||
+    x.evaluatorVersion !== i.currentEvaluatorVersion
+  )
+    return { status: 'BLOCKED', reasonCode: 'VALIDATION_VERSION_STALE', validationRunId: x.id };
+  if (i.currentSourceEligible !== true || x.sourceEligible !== true)
+    return { status: 'BLOCKED', reasonCode: 'SOURCE_ELIGIBILITY_CHANGED', validationRunId: x.id };
+  if (x.completeEvidence !== true)
+    return { status: 'BLOCKED', reasonCode: 'VALIDATION_FAILED', validationRunId: x.id };
+  if (x.deterministicBlocker === true)
+    return { status: 'BLOCKED', reasonCode: 'DETERMINISTIC_BLOCKER', validationRunId: x.id };
+  if (x.semanticBlocker === true)
+    return { status: 'BLOCKED', reasonCode: 'SEMANTIC_BLOCKER', validationRunId: x.id };
+  if (x.unacknowledgedWarning === true)
+    return {
+      status: 'BLOCKED',
+      reasonCode: 'WARNING_ACKNOWLEDGEMENT_REQUIRED',
+      validationRunId: x.id,
+    };
+  return { status: 'READY', reasonCode: null, validationRunId: x.id };
+}
