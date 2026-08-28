@@ -302,6 +302,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
     for (const arrangement of ['duplicate-logical', 'stale-version'] as const) {
       const arranged = await completeRun(await fixture());
       const original = arranged.rules[0]!;
+      const replacedRule = arranged.rules[1]!;
       const forgedRule = await prisma.validationRuleDefinition.create({
         data: {
           rulesetVersion: 'v1',
@@ -313,28 +314,46 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
         },
       });
       const execution = await prisma.validationRuleExecution.findFirstOrThrow({
-        where: { validationRunId: arranged.value.id, ruleDefinitionId: original.id },
+        where: { validationRunId: arranged.value.id, ruleDefinitionId: replacedRule.id },
       });
       await prisma.$transaction(async (tx) => {
         await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
         await tx.$executeRaw`UPDATE validation_rule_executions SET rule_definition_id=${forgedRule.id}::uuid WHERE id=${execution.id}::uuid`;
       });
-      await reject(
-        () =>
-          prisma.$executeRaw`UPDATE validation_runs SET state='SUCCEEDED', completed_at=now(), lease_expires_at=NULL WHERE id=${arranged.value.id}::uuid`,
-        'P5022',
-        'phase50 success requires the complete pinned evidence shape',
-      );
-      expect(
-        await prisma.validationRuleExecution.count({
-          where: { validationRunId: arranged.value.id },
-        }),
-      ).toBe(11);
-      await prisma.$transaction(async (tx) => {
-        await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
-        await tx.$executeRaw`UPDATE validation_rule_executions SET rule_definition_id=${original.id}::uuid WHERE id=${execution.id}::uuid`;
-        await tx.$executeRaw`DELETE FROM validation_rule_definitions WHERE id=${forgedRule.id}::uuid`;
-      });
+      try {
+        if (arrangement === 'duplicate-logical') {
+          const logical = await prisma.$queryRaw<
+            Array<{ total: bigint; distinct: bigint; selected: bigint; missing: bigint }>
+          >`SELECT count(*) AS total, count(DISTINCT d.rule_id) AS distinct, count(*) FILTER (WHERE d.rule_id=${original.ruleId}) AS selected, count(*) FILTER (WHERE d.rule_id=${replacedRule.ruleId}) AS missing FROM validation_rule_executions e JOIN validation_rule_definitions d ON d.id=e.rule_definition_id WHERE e.validation_run_id=${arranged.value.id}::uuid`;
+          expect(Number(logical[0]!.total)).toBe(11);
+          expect(Number(logical[0]!.distinct)).toBe(10);
+          expect(Number(logical[0]!.selected)).toBe(2);
+          expect(Number(logical[0]!.missing)).toBe(0);
+        } else {
+          const mismatch = await prisma.validationRuleExecution.findFirstOrThrow({
+            where: { id: execution.id },
+            include: { ruleDefinition: true },
+          });
+          expect(mismatch.ruleDefinition.ruleVersion).toBe('0.9.0');
+        }
+        await reject(
+          () =>
+            prisma.$executeRaw`UPDATE validation_runs SET state='SUCCEEDED', completed_at=now(), lease_expires_at=NULL WHERE id=${arranged.value.id}::uuid`,
+          'P5022',
+          'phase50 success requires the complete pinned evidence shape',
+        );
+        expect(
+          await prisma.validationRuleExecution.count({
+            where: { validationRunId: arranged.value.id },
+          }),
+        ).toBe(11);
+      } finally {
+        await prisma.$transaction(async (tx) => {
+          await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
+          await tx.$executeRaw`UPDATE validation_rule_executions SET rule_definition_id=${replacedRule.id}::uuid WHERE id=${execution.id}::uuid`;
+          await tx.$executeRaw`DELETE FROM validation_rule_definitions WHERE id=${forgedRule.id}::uuid`;
+        });
+      }
     }
   });
   it('B08 SUCCEEDED without successful semantic evaluation is rejected', async () => {
@@ -839,21 +858,125 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
       'P5030',
       'phase50 current source eligibility is revoked',
     );
-    const forged = await incompleteRun(await fixture());
-    await prisma.$transaction(async (tx) => {
-      await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
-      await tx.$executeRaw`UPDATE validation_runs SET state='SUCCEEDED', completed_at=now(), lease_expires_at=NULL WHERE id=${forged.id}::uuid`;
+    const forgedFixture = await fixture();
+    const forgedRun = await completeRun(forgedFixture);
+    const forgedExecution = await prisma.validationRuleExecution.findFirstOrThrow({
+      where: { validationRunId: forgedRun.value.id, ruleDefinitionId: forgedRun.rules[1]!.id },
     });
+    const forgedRule = await prisma.validationRuleDefinition.create({
+      data: {
+        rulesetVersion: 'v1',
+        ruleId: 'B16_FORGED_RULE',
+        ruleVersion: '1.0.0',
+        category: forgedRun.rules[1]!.category,
+        defaultSeverity: forgedRun.rules[1]!.defaultSeverity,
+        deterministicOrder: 99,
+      },
+    });
+    await prisma.$executeRaw`UPDATE validation_runs SET state='SUCCEEDED', completed_at=now(), lease_expires_at=NULL WHERE id=${forgedRun.value.id}::uuid`;
     const forgedRevision = await prisma.assessmentRevision.findUniqueOrThrow({
-      where: { id: forged.assessmentRevisionId },
+      where: { id: forgedRun.value.assessmentRevisionId },
       include: { assessment: true },
     });
-    await reject(
-      () =>
-        prisma.$queryRaw`SELECT assert_revision_approvable(${forgedRevision.assessment.organizationId}::uuid,${forged.assessmentRevisionId}::uuid)`,
-      'P5029',
-      'phase50 revision is not approvable',
-    );
+    const forgedReady = await prisma.$queryRaw<
+      Array<{ assert_revision_approvable: string }>
+    >`SELECT assert_revision_approvable(${forgedRevision.assessment.organizationId}::uuid,${forgedRun.value.assessmentRevisionId}::uuid)`;
+    expect(forgedReady[0]?.assert_revision_approvable).toBe(forgedRun.value.id);
+    try {
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
+        await tx.$executeRaw`UPDATE validation_rule_executions SET rule_definition_id=${forgedRule.id}::uuid WHERE id=${forgedExecution.id}::uuid`;
+      });
+      expect(
+        await prisma.validationRuleExecution.count({
+          where: { validationRunId: forgedRun.value.id },
+        }),
+      ).toBe(11);
+      const forgedStored = await prisma.validationRun.findUniqueOrThrow({
+        where: { id: forgedRun.value.id },
+      });
+      expect(forgedStored.deterministicPassCount).toBe(11);
+      expect(forgedStored.deterministicFailCount).toBe(0);
+      expect(
+        await prisma.semanticEvaluation.count({
+          where: { validationRunId: forgedRun.value.id, state: 'SUCCEEDED' },
+        }),
+      ).toBe(1);
+      expect(forgedStored.semanticFindingCount).toBe(0);
+      expect(
+        await prisma.validationFinding.count({ where: { validationRunId: forgedRun.value.id } }),
+      ).toBe(0);
+      const forgedSet = await prisma.$queryRaw<
+        Array<{ forged: bigint; current: bigint }>
+      >`SELECT count(*) FILTER (WHERE rule_definition_id=${forgedRule.id}::uuid) AS forged, count(*) FILTER (WHERE rule_definition_id IN (SELECT id FROM validation_rule_definitions WHERE ruleset_version='v1' AND rule_version='1.0.0' AND deterministic_order BETWEEN 1 AND 11)) AS current FROM validation_rule_executions WHERE validation_run_id=${forgedRun.value.id}::uuid`;
+      expect(Number(forgedSet[0]!.forged)).toBe(1);
+      expect(Number(forgedSet[0]!.current)).toBe(10);
+      await reject(
+        () =>
+          prisma.$queryRaw`SELECT assert_revision_approvable(${forgedRevision.assessment.organizationId}::uuid,${forgedRun.value.assessmentRevisionId}::uuid)`,
+        'P5029',
+        'phase50 revision is not approvable',
+      );
+    } finally {
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
+        await tx.$executeRaw`UPDATE validation_rule_executions SET rule_definition_id=${forgedRun.rules[1]!.id}::uuid WHERE id=${forgedExecution.id}::uuid`;
+        await tx.$executeRaw`DELETE FROM validation_rule_definitions WHERE id=${forgedRule.id}::uuid`;
+      });
+    }
+    const forgedOther = await fixture();
+    const warningFixture = await fixture();
+    const warningRun = await completeRun(warningFixture);
+    const warningEvaluation = await prisma.semanticEvaluation.findUniqueOrThrow({
+      where: { validationRunId: warningRun.value.id },
+    });
+    const warningFinding = await prisma.validationFinding.create({
+      data: {
+        organizationId: warningFixture.workspace.organization.id,
+        validationRunId: warningRun.value.id,
+        assessmentRevisionId: warningFixture.revision.id,
+        semanticEvaluationId: warningEvaluation.id,
+        kind: 'SEMANTIC',
+        code: 'AMBIGUITY_V1',
+        category: 'AMBIGUITY',
+        severity: 'WARNING',
+        path: 'b16',
+        messageKey: 'b16-warning',
+        evaluatorVersion: 'local-disabled-v1',
+      },
+    });
+    await prisma.$executeRaw`UPDATE validation_runs SET state='SUCCEEDED', completed_at=now(), lease_expires_at=NULL, semantic_finding_count=1 WHERE id=${warningRun.value.id}::uuid`;
+    const warningAck = await prisma.validationFindingAcknowledgement.create({
+      data: {
+        organizationId: warningFixture.workspace.organization.id,
+        findingId: warningFinding.id,
+        actorUserId: warningFixture.workspace.user.id,
+        idempotencyKey: 'b16-warning',
+        reason: 'reviewed',
+        reasonHash: 'c'.repeat(64),
+      },
+    });
+    const warningReady = await prisma.$queryRaw<
+      Array<{ assert_revision_approvable: string }>
+    >`SELECT assert_revision_approvable(${warningFixture.workspace.organization.id}::uuid,${warningFixture.revision.id}::uuid)`;
+    expect(warningReady[0]?.assert_revision_approvable).toBe(warningRun.value.id);
+    try {
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
+        await tx.$executeRaw`UPDATE validation_finding_acknowledgements SET organization_id=${forgedOther.workspace.organization.id}::uuid WHERE id=${warningAck.id}::uuid`;
+      });
+      await reject(
+        () =>
+          prisma.$queryRaw`SELECT assert_revision_approvable(${warningFixture.workspace.organization.id}::uuid,${warningFixture.revision.id}::uuid)`,
+        'P5029',
+        'phase50 revision is not approvable',
+      );
+    } finally {
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
+        await tx.$executeRaw`UPDATE validation_finding_acknowledgements SET organization_id=${warningFixture.workspace.organization.id}::uuid WHERE id=${warningAck.id}::uuid`;
+      });
+    }
   });
 
   it('completed validation retains findings and defers blocker policy to readiness', async () => {
