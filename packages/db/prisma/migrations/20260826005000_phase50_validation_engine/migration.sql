@@ -70,7 +70,7 @@ CREATE TRIGGER phase50_semantic_immutable BEFORE UPDATE OR DELETE ON semantic_ev
 CREATE TRIGGER phase50_findings_immutable BEFORE UPDATE OR DELETE ON validation_findings FOR EACH ROW EXECUTE FUNCTION phase50_reject_immutable();
 
 CREATE OR REPLACE FUNCTION phase50_validation_run_guard() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE v_state text; v_rules integer; v_semantic integer; v_bad integer; v_warn integer; v_total integer;
+DECLARE v_state text; v_rules integer; v_semantic integer; v_bad integer; v_total integer;
 BEGIN
   IF TG_OP = 'INSERT' THEN
     IF NOT EXISTS (SELECT 1 FROM assessments a WHERE a.id=NEW.assessment_id AND a.organization_id=NEW.organization_id) THEN PERFORM phase50_raise('P5010','phase50 assessment owner does not match organization'); END IF;
@@ -93,8 +93,7 @@ BEGIN
     SELECT count(*) INTO v_total FROM validation_rule_executions WHERE validation_run_id=NEW.id;
     SELECT count(*) INTO v_semantic FROM semantic_evaluations s WHERE s.validation_run_id=NEW.id AND s.state='SUCCEEDED' AND s.evaluator_version='local-disabled-v1' AND s.prompt_version='validation-prompt-v1' AND s.model_configuration_version='local-none-v1' AND s.schema_version='1.0.0';
     SELECT count(*) INTO v_bad FROM validation_rule_executions e JOIN validation_rule_definitions d ON d.id=e.rule_definition_id WHERE e.validation_run_id=NEW.id AND (d.ruleset_version<>'v1' OR d.rule_version<>'1.0.0' OR d.deterministic_order NOT BETWEEN 1 AND 11);
-    SELECT count(*) INTO v_warn FROM validation_findings f WHERE f.validation_run_id=NEW.id AND (f.severity='BLOCKING' OR (f.severity='WARNING' AND NOT EXISTS (SELECT 1 FROM validation_finding_acknowledgements a WHERE a.finding_id=f.id)));
-    IF v_rules<>11 OR v_total<>11 OR v_semantic<>1 OR v_bad<>0 OR NEW.deterministic_pass_count+NEW.deterministic_fail_count<>11 OR NEW.deterministic_fail_count<>(SELECT count(*) FROM validation_rule_executions WHERE validation_run_id=NEW.id AND outcome='FAIL') OR NEW.semantic_finding_count<>(SELECT count(*) FROM validation_findings WHERE validation_run_id=NEW.id AND kind='SEMANTIC') OR NEW.completed_at IS NULL OR NEW.lease_expires_at IS NOT NULL OR NEW.failure_code IS NOT NULL OR v_warn<>0 THEN PERFORM phase50_raise('P5022','phase50 success requires the complete pinned evidence shape'); END IF;
+    IF v_rules<>11 OR v_total<>11 OR v_semantic<>1 OR v_bad<>0 OR NEW.deterministic_pass_count+NEW.deterministic_fail_count<>11 OR NEW.deterministic_fail_count<>(SELECT count(*) FROM validation_rule_executions WHERE validation_run_id=NEW.id AND outcome='FAIL') OR NEW.semantic_finding_count<>(SELECT count(*) FROM validation_findings WHERE validation_run_id=NEW.id AND kind='SEMANTIC') OR NEW.completed_at IS NULL OR NEW.lease_expires_at IS NOT NULL OR NEW.failure_code IS NOT NULL THEN PERFORM phase50_raise('P5022','phase50 success requires the complete pinned evidence shape'); END IF;
   END IF;
   RETURN NEW;
 END; $$;
@@ -133,6 +132,28 @@ DECLARE v_run UUID;
 BEGIN
   SELECT r.id INTO v_run FROM validation_runs r WHERE r.organization_id=p_organization_id AND r.assessment_revision_id=p_revision_id ORDER BY r.revision_sequence DESC LIMIT 1;
   IF v_run IS NULL OR NOT EXISTS (SELECT 1 FROM validation_runs r JOIN assessments a ON a.id=r.assessment_id JOIN assessment_revisions ar ON ar.id=r.assessment_revision_id WHERE r.id=v_run AND r.state='SUCCEEDED' AND a.organization_id=p_organization_id AND ar.assessment_id=r.assessment_id AND ar.state='FINALIZED' AND r.deterministic_pass_count+r.deterministic_fail_count=11 AND (SELECT count(*) FROM validation_rule_executions e WHERE e.validation_run_id=r.id)=11 AND (SELECT count(*) FROM semantic_evaluations s WHERE s.validation_run_id=r.id AND s.state='SUCCEEDED')=1) OR EXISTS (SELECT 1 FROM validation_findings f WHERE f.validation_run_id=v_run AND (f.severity='BLOCKING' OR (f.severity='WARNING' AND NOT EXISTS (SELECT 1 FROM validation_finding_acknowledgements a WHERE a.finding_id=f.id)))) THEN RAISE EXCEPTION 'phase50 revision is not approvable' USING ERRCODE='P5029'; END IF;
-  IF EXISTS (SELECT 1 FROM assessment_sections s JOIN assessment_questions q ON q.section_id=s.id JOIN question_source_links qsl ON qsl.assessment_question_id=q.id JOIN source_versions sv ON sv.id=qsl.source_version_id WHERE s.revision_id=p_revision_id AND sv.lifecycle<>'ACTIVE') THEN RAISE EXCEPTION 'phase50 current source eligibility is revoked' USING ERRCODE='P5030'; END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM assessment_sections sec
+    JOIN assessment_questions q ON q.section_id=sec.id
+    JOIN question_source_links qsl ON qsl.assessment_question_id=q.id
+    JOIN knowledge_items ki ON ki.id=qsl.knowledge_item_id
+    JOIN source_versions sv ON sv.id=qsl.source_version_id
+    JOIN knowledge_sources ks ON ks.id=sv.source_id
+    LEFT JOIN LATERAL (SELECT pr.decision FROM pedagogical_reviews pr WHERE pr.source_version_id=sv.id ORDER BY pr.created_at DESC, pr.id DESC LIMIT 1) review ON true
+    LEFT JOIN LATERAL (SELECT up.decision, up.valid_until FROM usage_permissions up WHERE up.source_version_id=sv.id ORDER BY up.created_at DESC, up.id DESC LIMIT 1) permission ON true
+    WHERE sec.revision_id=p_revision_id
+      AND NOT (
+        sv.lifecycle='ACTIVE'
+        AND COALESCE((SELECT sle.to_status FROM source_lifecycle_events sle WHERE sle.source_id=ks.id ORDER BY sle.created_at DESC, sle.id DESC LIMIT 1), sv.lifecycle)='ACTIVE'
+        AND ki.status='ACTIVE'
+        AND review.decision='APPROVED'
+        AND permission.decision='ALLOWED' AND (permission.valid_until IS NULL OR permission.valid_until>now())
+        AND (ks.visibility='PLATFORM_SHARED' OR ks.organization_id=p_organization_id)
+        AND (ki.visibility='PLATFORM_SHARED' OR ki.organization_id=p_organization_id)
+        AND qsl.curriculum_version_id=(SELECT curriculum_version_id FROM assessment_revisions WHERE id=p_revision_id)
+        AND EXISTS (SELECT 1 FROM curriculum_versions cv WHERE cv.id=qsl.curriculum_version_id AND cv.status='PUBLISHED')
+      )
+  ) THEN RAISE EXCEPTION 'phase50 current source eligibility is revoked' USING ERRCODE='P5030'; END IF;
   RETURN v_run;
 END; $$;

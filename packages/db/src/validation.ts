@@ -717,14 +717,41 @@ export async function processValidationRun(validationRunId: string, client: Pris
       }),
     );
     const evaluator = new DeterministicFakeSemanticEvaluator();
-    parseSemanticEvaluatorOutput(
-      await evaluator.evaluate({
-        revisionId: claimed.assessmentRevisionId,
-        operationId: claimed.id,
-        signal: new AbortController().signal,
-      }),
-      claimed.assessmentRevisionId,
-    );
+    try {
+      parseSemanticEvaluatorOutput(
+        await evaluator.evaluate({
+          revisionId: claimed.assessmentRevisionId,
+          operationId: claimed.id,
+          signal: new AbortController().signal,
+        }),
+        claimed.assessmentRevisionId,
+      );
+    } catch (error) {
+      const failureCode = error instanceof Error && error.message ? error.message.slice(0, 80) : 'SEMANTIC_EVALUATION_FAILED';
+      await tx.semanticEvaluation.create({
+        data: {
+          validationRunId: claimed.id,
+          evaluatorVersion: semanticEvaluatorRegistry.evaluatorVersion,
+          promptVersion: semanticEvaluatorRegistry.promptVersion,
+          modelConfigurationVersion: semanticEvaluatorRegistry.modelConfigurationVersion,
+          schemaVersion: semanticEvaluatorRegistry.schemaVersion,
+          state: 'FAILED',
+          failureCode,
+        },
+      });
+      const failedRun = await tx.validationRun.update({
+        where: { id: claimed.id },
+        data: {
+          state: 'FAILED',
+          failureCode: 'SEMANTIC_EVALUATION_FAILED',
+          deterministicPassCount: rules.length - results.filter((result) => result.outcome === 'FAIL').length,
+          deterministicFailCount: results.filter((result) => result.outcome === 'FAIL').length,
+          completedAt: new Date(),
+          leaseExpiresAt: null,
+        },
+      });
+      return status(failedRun);
+    }
     await tx.semanticEvaluation.create({
       data: {
         validationRunId: claimed.id,
@@ -739,8 +766,8 @@ export async function processValidationRun(validationRunId: string, client: Pris
     const complete = await tx.validationRun.update({
       where: { id: claimed.id },
       data: {
-        state: failed ? 'FAILED' : 'SUCCEEDED',
-        failureCode: failed ? 'DETERMINISTIC_RULE_FAILED' : null,
+        state: 'SUCCEEDED',
+        failureCode: null,
         deterministicPassCount: rules.length - failed,
         deterministicFailCount: failed,
         completedAt: new Date(),

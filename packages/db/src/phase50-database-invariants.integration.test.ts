@@ -2,10 +2,15 @@ import { afterAll, describe, expect, it } from 'vitest';
 import {
   createAssessmentRevision,
   createPersonalWorkspace,
+  getRevisionValidationReadiness,
   prisma,
   publishCurriculumVersion,
   resolveAccessContext,
+  setSourceLifecycle,
 } from './index.js';
+import { createGenerationFixture } from './phase40.acceptance.fixtures.js';
+import { processGenerationRun } from './generation.js';
+import { DeterministicFakeModelGateway } from '@teach/ai';
 
 const principal = (userId: string) => ({
   version: '1.0.0' as const,
@@ -203,13 +208,25 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
   });
   it('B05 immutable run identity/config/sequence/idempotency update is rejected', async () => {
     const f = await fixture();
+    const other = await fixture();
     const value = await run(f);
-    await reject(
-      () =>
-        prisma.$executeRaw`UPDATE validation_runs SET revision_sequence=2 WHERE id=${value.id}::uuid`,
-      'P5016',
-      'phase50 validation run identity is immutable',
-    );
+    const original = await prisma.validationRun.findUniqueOrThrow({ where: { id: value.id } });
+    const attempts = [
+      () => prisma.$executeRaw`UPDATE validation_runs SET organization_id=${other.workspace.organization.id}::uuid WHERE id=${value.id}::uuid`,
+      () => prisma.$executeRaw`UPDATE validation_runs SET assessment_id=${other.assessment.id}::uuid WHERE id=${value.id}::uuid`,
+      () => prisma.$executeRaw`UPDATE validation_runs SET assessment_revision_id=${other.revision.id}::uuid WHERE id=${value.id}::uuid`,
+      () => prisma.$executeRaw`UPDATE validation_runs SET requesting_user_id=${other.workspace.user.id}::uuid WHERE id=${value.id}::uuid`,
+      () => prisma.$executeRaw`UPDATE validation_runs SET operation='RECHECK' WHERE id=${value.id}::uuid`,
+      () => prisma.$executeRaw`UPDATE validation_runs SET ruleset_version='v2' WHERE id=${value.id}::uuid`,
+      () => prisma.$executeRaw`UPDATE validation_runs SET evaluator_version='wrong' WHERE id=${value.id}::uuid`,
+      () => prisma.$executeRaw`UPDATE validation_runs SET revision_sequence=2 WHERE id=${value.id}::uuid`,
+      () => prisma.$executeRaw`UPDATE validation_runs SET idempotency_key='changed' WHERE id=${value.id}::uuid`,
+      () => prisma.$executeRaw`UPDATE validation_runs SET request_fingerprint=${'b'.repeat(64)} WHERE id=${value.id}::uuid`,
+    ];
+    for (const attempt of attempts) {
+      await reject(attempt, 'P5016', 'phase50 validation run identity is immutable');
+      expect(await prisma.validationRun.findUniqueOrThrow({ where: { id: value.id } })).toEqual(original);
+    }
   });
   it('B06 illegal lifecycle pair is rejected', async () => {
     const f = await fixture();
@@ -217,6 +234,18 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
     await reject(
       () =>
         prisma.$executeRaw`UPDATE validation_runs SET state='FAILED', failure_code='x', completed_at=now() WHERE id=${value.id}::uuid`,
+      'P5018',
+      'phase50 validation lifecycle transition is forbidden',
+    );
+    await reject(
+      () => prisma.$executeRaw`UPDATE validation_runs SET state='PENDING' WHERE id=${value.id}::uuid`,
+      'P5017',
+      'phase50 same-state validation update is forbidden',
+    );
+    const terminal = await completeRun(await fixture());
+    await prisma.$executeRaw`UPDATE validation_runs SET state='SUCCEEDED', completed_at=now(), lease_expires_at=NULL WHERE id=${terminal.value.id}::uuid`;
+    await reject(
+      () => prisma.$executeRaw`UPDATE validation_runs SET state='PROCESSING' WHERE id=${terminal.value.id}::uuid`,
       'P5018',
       'phase50 validation lifecycle transition is forbidden',
     );
@@ -229,6 +258,21 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
         prisma.$executeRaw`UPDATE validation_runs SET state='SUCCEEDED', completed_at=now(), lease_expires_at=NULL WHERE id=${value.id}::uuid`,
       'P5022',
       'phase50 success requires the complete pinned evidence shape',
+    );
+    const duplicate = await completeRun(await fixture());
+    const duplicateRule = duplicate.rules[0]!;
+    await reject(
+      () => prisma.$executeRaw`INSERT INTO validation_rule_executions (validation_run_id,rule_definition_id,outcome,evidence) VALUES (${duplicate.value.id}::uuid,${duplicateRule.id}::uuid,'PASS','{}'::jsonb)`,
+      '23505',
+      `Key (validation_run_id, rule_definition_id)=(${duplicate.value.id}, ${duplicateRule.id}) already exists.`,
+    );
+    const wrongVersion = await fixture();
+    const wrongRun = await run(wrongVersion);
+    const wrongRule = await prisma.validationRuleDefinition.create({ data: { rulesetVersion: 'v2', ruleId: 'WRONG_VERSION', ruleVersion: '2.0.0', category: 'X', defaultSeverity: 'BLOCKING', deterministicOrder: 1 } });
+    await reject(
+      () => prisma.$executeRaw`INSERT INTO validation_rule_executions (validation_run_id,rule_definition_id,outcome,evidence) VALUES (${wrongRun.id}::uuid,${wrongRule.id}::uuid,'PASS','{}'::jsonb)`,
+      'P5023',
+      'phase50 execution rule is unknown or wrong version',
     );
   });
   it('B08 SUCCEEDED without successful semantic evaluation is rejected', async () => {
@@ -264,7 +308,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
         ruleVersion: '9.0.0',
         category: 'X',
         defaultSeverity: 'BLOCKING',
-        deterministicOrder: 1,
+        deterministicOrder: 99,
       },
     });
     await reject(
@@ -294,6 +338,28 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
         prisma.$executeRaw`INSERT INTO validation_findings (organization_id,validation_run_id,assessment_revision_id,execution_id,kind,code,category,severity,path,message_key,rule_version) VALUES (${other.workspace.organization.id}::uuid,${b.id}::uuid,${other.revision.id}::uuid,${foreignExecution.id}::uuid,'DETERMINISTIC','x','X','BLOCKING','p','m','1.0.0')`,
       'P5025',
       'phase50 deterministic finding identity does not match execution',
+    );
+    const sameRun = await completeRun(await fixture());
+    const orgForeign = await fixture();
+    const sameRunExecution = await prisma.validationRuleExecution.findFirstOrThrow({ where: { validationRunId: sameRun.value.id } });
+    await reject(
+      () => prisma.$executeRaw`INSERT INTO validation_findings (organization_id,validation_run_id,assessment_revision_id,execution_id,kind,code,category,severity,path,message_key,rule_version) VALUES (${orgForeign.workspace.organization.id}::uuid,${sameRun.value.id}::uuid,${sameRun.value.assessmentRevisionId}::uuid,${sameRunExecution.id}::uuid,'DETERMINISTIC','x','X','BLOCKING','p','m','1.0.0')`,
+      'P5025',
+      'phase50 deterministic finding identity does not match execution',
+    );
+    const semanticSource = await completeRun(await fixture());
+    const semanticOther = await fixture();
+    const semanticOtherRun = await run(semanticOther);
+    const semantic = await prisma.semanticEvaluation.findUniqueOrThrow({ where: { validationRunId: semanticSource.value.id } });
+    await reject(
+      () => prisma.$executeRaw`INSERT INTO validation_findings (organization_id,validation_run_id,assessment_revision_id,semantic_evaluation_id,kind,code,category,severity,path,message_key,evaluator_version) VALUES (${semanticOther.workspace.organization.id}::uuid,${semanticOtherRun.id}::uuid,${semanticOther.revision.id}::uuid,${semantic.id}::uuid,'SEMANTIC','ANSWER_VALIDITY_V1','ANSWER_VALIDITY','BLOCKING','p','m','local-disabled-v1')`,
+      'P5026',
+      'phase50 semantic finding identity does not match evaluation',
+    );
+    await reject(
+      () => prisma.$executeRaw`INSERT INTO validation_findings (organization_id,validation_run_id,assessment_revision_id,semantic_evaluation_id,kind,code,category,severity,path,message_key,evaluator_version) VALUES (${semanticSource.value.organizationId}::uuid,${semanticSource.value.id}::uuid,${semanticSource.value.assessmentRevisionId}::uuid,${semantic.id}::uuid,'SEMANTIC','ANSWER_VALIDITY_V1','ANSWER_VALIDITY','BLOCKING','p','m','wrong-evaluator')`,
+      'P5026',
+      'phase50 semantic finding identity does not match evaluation',
     );
   });
   it('B11 acknowledgement of deterministic finding is rejected', async () => {
@@ -351,6 +417,28 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
       'P5028',
       'phase50 acknowledgement requires an owned semantic warning and active actor',
     );
+    const infoFinding = await prisma.validationFinding.create({
+      data: {
+        organizationId: f.workspace.organization.id,
+        validationRunId: value.id,
+        assessmentRevisionId: f.revision.id,
+        semanticEvaluationId: semantic.id,
+        kind: 'SEMANTIC',
+        code: 'DIFFICULTY_FIT_V1',
+        category: 'DIFFICULTY_FIT',
+        severity: 'INFO',
+        path: 'p-info',
+        messageKey: 'm-info',
+        evaluatorVersion: 'local-disabled-v1',
+      },
+    });
+    await reject(
+      () =>
+        prisma.$executeRaw`INSERT INTO validation_finding_acknowledgements (organization_id,finding_id,actor_user_id,idempotency_key,reason,reason_hash) VALUES (${f.workspace.organization.id}::uuid,${infoFinding.id}::uuid,${f.workspace.user.id}::uuid,'b12-info','reviewed',${'b'.repeat(64)})`,
+      'P5028',
+      'phase50 acknowledgement requires an owned semantic warning and active actor',
+    );
+    expect(await prisma.validationFindingAcknowledgement.count({ where: { idempotencyKey: { in: ['b12', 'b12-info'] } } })).toBe(0);
   });
   it('B13 UPDATE/DELETE registry, execution, semantic evidence or finding is rejected', async () => {
     const f = await fixture();
@@ -377,16 +465,30 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
         evaluatorVersion: 'local-disabled-v1',
       },
     });
+    const snapshots = {
+      rule: await prisma.validationRuleDefinition.findUniqueOrThrow({ where: { id: rule.id } }),
+      execution: await prisma.validationRuleExecution.findUniqueOrThrow({ where: { id: execution.id } }),
+      semantic: await prisma.semanticEvaluation.findUniqueOrThrow({ where: { id: semantic.id } }),
+      finding: await prisma.validationFinding.findUniqueOrThrow({ where: { id: finding.id } }),
+    };
     for (const operation of [
       () =>
         prisma.$executeRaw`UPDATE validation_rule_definitions SET category='x' WHERE id=${rule.id}::uuid`,
+      () => prisma.$executeRaw`DELETE FROM validation_rule_definitions WHERE id=${rule.id}::uuid`,
+      () => prisma.$executeRaw`UPDATE validation_rule_executions SET evidence='{"x":1}'::jsonb WHERE id=${execution.id}::uuid`,
       () =>
         prisma.$executeRaw`DELETE FROM validation_rule_executions WHERE id=${execution.id}::uuid`,
+      () => prisma.$executeRaw`UPDATE semantic_evaluations SET failure_code='x' WHERE id=${semantic.id}::uuid`,
       () => prisma.$executeRaw`DELETE FROM semantic_evaluations WHERE id=${semantic.id}::uuid`,
+      () => prisma.$executeRaw`DELETE FROM validation_findings WHERE id=${finding.id}::uuid`,
       () =>
         prisma.$executeRaw`UPDATE validation_findings SET path='x' WHERE id=${finding.id}::uuid`,
     ])
       await reject(operation, 'P5001', 'phase50 immutable evidence');
+    expect(await prisma.validationRuleDefinition.findUniqueOrThrow({ where: { id: rule.id } })).toEqual(snapshots.rule);
+    expect(await prisma.validationRuleExecution.findUniqueOrThrow({ where: { id: execution.id } })).toEqual(snapshots.execution);
+    expect(await prisma.semanticEvaluation.findUniqueOrThrow({ where: { id: semantic.id } })).toEqual(snapshots.semantic);
+    expect(await prisma.validationFinding.findUniqueOrThrow({ where: { id: finding.id } })).toEqual(snapshots.finding);
   });
   it('B14 UPDATE/DELETE/reparent acknowledgement is rejected', async () => {
     const f = await fixture();
@@ -425,19 +527,30 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
       'P5001',
       'phase50 immutable evidence',
     );
+    await reject(
+      () => prisma.$executeRaw`DELETE FROM validation_finding_acknowledgements WHERE id=${ack.id}::uuid`,
+      'P5001',
+      'phase50 immutable evidence',
+    );
+    await reject(
+      () => prisma.$executeRaw`UPDATE validation_finding_acknowledgements SET finding_id=${finding.id}::uuid, organization_id=${f.workspace.organization.id}::uuid, actor_user_id=${f.workspace.user.id}::uuid WHERE id=${ack.id}::uuid`,
+      'P5001',
+      'phase50 immutable evidence',
+    );
+    expect(await prisma.validationFindingAcknowledgement.findUniqueOrThrow({ where: { id: ack.id } })).toEqual(ack);
   });
   it('B15 duplicate revision sequence and conflicting idempotency identity are rejected', async () => {
     const f = await fixture();
     const value = await run(f, 1, 'b15');
     await reject(
-      () => run(f, 1, 'b15-other'),
-      'P2002',
-      'Unique constraint failed on the fields: (`organization_id`,`assessment_revision_id`,`revision_sequence`)',
+      () => prisma.$executeRaw`INSERT INTO validation_runs (organization_id,assessment_id,assessment_revision_id,requesting_user_id,ruleset_version,evaluator_version,revision_sequence,idempotency_key,request_fingerprint) SELECT organization_id,assessment_id,assessment_revision_id,requesting_user_id,ruleset_version,evaluator_version,revision_sequence,'b15-sequence',request_fingerprint FROM validation_runs WHERE id=${value.id}::uuid`,
+      '23505',
+      `Key (organization_id, assessment_revision_id, revision_sequence)=(${f.workspace.organization.id}, ${f.revision.id}, 1) already exists.`,
     );
     await reject(
-      () => run(f, 2, 'b15'),
-      'P2002',
-      'Unique constraint failed on the fields: (`organization_id`,`assessment_revision_id`,`idempotency_key`)',
+      () => prisma.$executeRaw`INSERT INTO validation_runs (organization_id,assessment_id,assessment_revision_id,requesting_user_id,ruleset_version,evaluator_version,revision_sequence,idempotency_key,request_fingerprint) SELECT organization_id,assessment_id,assessment_revision_id,requesting_user_id,ruleset_version,evaluator_version,2,idempotency_key,request_fingerprint FROM validation_runs WHERE id=${value.id}::uuid`,
+      '23505',
+      `Key (organization_id, assessment_revision_id, idempotency_key)=(${f.workspace.organization.id}, ${f.revision.id}, b15) already exists.`,
     );
     expect(value.revisionSequence).toBe(1);
   });
@@ -456,5 +569,73 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
       'P5029',
       'phase50 revision is not approvable',
     );
+    const sourceFixture = await createGenerationFixture();
+    await processGenerationRun(sourceFixture.generationRunId, prisma, new DeterministicFakeModelGateway());
+    const generatedRevision = await prisma.assessmentRevision.findFirstOrThrow({ where: { assessmentId: sourceFixture.assessmentId }, orderBy: { createdAt: 'desc' } });
+    const sourceRun = await prisma.validationRun.create({
+      data: {
+        organizationId: sourceFixture.context.organizationId,
+        assessmentId: sourceFixture.assessmentId,
+        assessmentRevisionId: generatedRevision.id,
+        requestingUserId: sourceFixture.workspace.user.id,
+        rulesetVersion: 'v1',
+        evaluatorVersion: 'local-disabled-v1',
+        revisionSequence: 1,
+        idempotencyKey: 'b16-source',
+        requestFingerprint: 'b'.repeat(64),
+      },
+    });
+    await prisma.$executeRaw`UPDATE validation_runs SET state='PROCESSING', attempts=1, processing_started_at=now(), lease_expires_at=now()+interval '1 minute', deterministic_pass_count=11 WHERE id=${sourceRun.id}::uuid`;
+    const sourceRules = await prisma.validationRuleDefinition.findMany({ where: { rulesetVersion: 'v1' }, orderBy: { deterministicOrder: 'asc' } });
+    for (const rule of sourceRules) await prisma.validationRuleExecution.create({ data: { validationRunId: sourceRun.id, ruleDefinitionId: rule.id, outcome: 'PASS', evidence: {} } });
+    await prisma.semanticEvaluation.create({ data: { validationRunId: sourceRun.id, evaluatorVersion: 'local-disabled-v1', promptVersion: 'validation-prompt-v1', modelConfigurationVersion: 'local-none-v1', schemaVersion: '1.0.0', state: 'SUCCEEDED' } });
+    await prisma.$executeRaw`UPDATE validation_runs SET state='SUCCEEDED', completed_at=now(), lease_expires_at=NULL WHERE id=${sourceRun.id}::uuid`;
+    await setSourceLifecycle(sourceFixture.context, sourceFixture.sourceVersionId, 'SUSPENDED', 'b16 revocation');
+    await reject(
+      () => prisma.$queryRaw`SELECT assert_revision_approvable(${sourceFixture.context.organizationId}::uuid,${generatedRevision.id}::uuid)`,
+      'P5030',
+      'phase50 current source eligibility is revoked',
+    );
+    const forged = await incompleteRun(await fixture());
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
+      await tx.$executeRaw`UPDATE validation_runs SET state='SUCCEEDED', completed_at=now(), lease_expires_at=NULL WHERE id=${forged.id}::uuid`;
+    });
+    const forgedRevision = await prisma.assessmentRevision.findUniqueOrThrow({ where: { id: forged.assessmentRevisionId }, include: { assessment: true } });
+    await reject(
+      () => prisma.$queryRaw`SELECT assert_revision_approvable(${forgedRevision.assessment.organizationId}::uuid,${forged.assessmentRevisionId}::uuid)`,
+      'P5029',
+      'phase50 revision is not approvable',
+    );
+  });
+
+  it('completed validation retains findings and defers blocker policy to readiness', async () => {
+    const deterministic = await fixture();
+    const deterministicRun = await completeRun(deterministic);
+    const execution = await prisma.validationRuleExecution.findFirstOrThrow({ where: { validationRunId: deterministicRun.value.id } });
+    await prisma.validationFinding.create({ data: { organizationId: deterministic.workspace.organization.id, validationRunId: deterministicRun.value.id, assessmentRevisionId: deterministic.revision.id, executionId: execution.id, kind: 'DETERMINISTIC', code: 'RULE_FAIL', category: 'REVISION', severity: 'BLOCKING', path: 'revision', messageKey: 'RULE_FAIL', ruleVersion: deterministicRun.rules[0]!.ruleVersion } });
+    await prisma.$executeRaw`UPDATE validation_runs SET state='SUCCEEDED', completed_at=now(), lease_expires_at=NULL WHERE id=${deterministicRun.value.id}::uuid`;
+    expect((await getRevisionValidationReadiness(deterministic.context, deterministic.assessment.id, deterministic.revision.id)).reasonCode).toBe('DETERMINISTIC_BLOCKER');
+
+    const semanticBlock = await fixture();
+    const semanticBlockRun = await completeRun(semanticBlock);
+    const semanticBlockEvaluation = await prisma.semanticEvaluation.findUniqueOrThrow({ where: { validationRunId: semanticBlockRun.value.id } });
+    await prisma.validationFinding.create({ data: { organizationId: semanticBlock.workspace.organization.id, validationRunId: semanticBlockRun.value.id, assessmentRevisionId: semanticBlock.revision.id, semanticEvaluationId: semanticBlockEvaluation.id, kind: 'SEMANTIC', code: 'ANSWER_VALIDITY_V1', category: 'ANSWER_VALIDITY', severity: 'BLOCKING', path: 'question', messageKey: 'ANSWER_INVALID', evaluatorVersion: 'local-disabled-v1' } });
+    await prisma.$executeRaw`UPDATE validation_runs SET state='SUCCEEDED', completed_at=now(), lease_expires_at=NULL, semantic_finding_count=1 WHERE id=${semanticBlockRun.value.id}::uuid`;
+    expect((await getRevisionValidationReadiness(semanticBlock.context, semanticBlock.assessment.id, semanticBlock.revision.id)).reasonCode).toBe('SEMANTIC_BLOCKER');
+
+    const warning = await fixture();
+    const warningRun = await completeRun(warning);
+    const warningEvaluation = await prisma.semanticEvaluation.findUniqueOrThrow({ where: { validationRunId: warningRun.value.id } });
+    await prisma.validationFinding.create({ data: { organizationId: warning.workspace.organization.id, validationRunId: warningRun.value.id, assessmentRevisionId: warning.revision.id, semanticEvaluationId: warningEvaluation.id, kind: 'SEMANTIC', code: 'AMBIGUITY_V1', category: 'AMBIGUITY', severity: 'WARNING', path: 'question', messageKey: 'AMBIGUOUS', evaluatorVersion: 'local-disabled-v1' } });
+    await prisma.$executeRaw`UPDATE validation_runs SET state='SUCCEEDED', completed_at=now(), lease_expires_at=NULL, semantic_finding_count=1 WHERE id=${warningRun.value.id}::uuid`;
+    expect((await getRevisionValidationReadiness(warning.context, warning.assessment.id, warning.revision.id)).reasonCode).toBe('WARNING_ACKNOWLEDGEMENT_REQUIRED');
+
+    const info = await fixture();
+    const infoRun = await completeRun(info);
+    const infoEvaluation = await prisma.semanticEvaluation.findUniqueOrThrow({ where: { validationRunId: infoRun.value.id } });
+    await prisma.validationFinding.create({ data: { organizationId: info.workspace.organization.id, validationRunId: infoRun.value.id, assessmentRevisionId: info.revision.id, semanticEvaluationId: infoEvaluation.id, kind: 'SEMANTIC', code: 'DIFFICULTY_FIT_V1', category: 'DIFFICULTY_FIT', severity: 'INFO', path: 'question', messageKey: 'INFO_ONLY', evaluatorVersion: 'local-disabled-v1' } });
+    await prisma.$executeRaw`UPDATE validation_runs SET state='SUCCEEDED', completed_at=now(), lease_expires_at=NULL, semantic_finding_count=1 WHERE id=${infoRun.value.id}::uuid`;
+    expect((await getRevisionValidationReadiness(info.context, info.assessment.id, info.revision.id)).status).toBe('READY');
   });
 });
