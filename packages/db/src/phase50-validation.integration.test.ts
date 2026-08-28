@@ -744,6 +744,6 @@ describe('Phase 50 persisted validation operations', () => {
     });
     await expect(
       prisma.$executeRaw`INSERT INTO validation_runs (organization_id, assessment_id, assessment_revision_id, requesting_user_id, ruleset_version, evaluator_version, revision_sequence, idempotency_key, request_fingerprint) VALUES (${f.workspace.organization.id}::uuid, ${f.assessment.id}::uuid, ${other.id}::uuid, ${f.workspace.user.id}::uuid, 'v1', 'local-disabled-v1', 1, ${`direct-${Math.random()}`}, ${'c'.repeat(64)})`,
-    ).rejects.toThrow('phase50 revision identity or finalized state rejected');
+    ).rejects.toThrow('phase50 revision does not belong to assessment');
   });
 });
