@@ -131,7 +131,31 @@ CREATE OR REPLACE FUNCTION assert_revision_approvable(p_organization_id UUID, p_
 DECLARE v_run UUID;
 BEGIN
   SELECT r.id INTO v_run FROM validation_runs r WHERE r.organization_id=p_organization_id AND r.assessment_revision_id=p_revision_id ORDER BY r.revision_sequence DESC LIMIT 1;
-  IF v_run IS NULL OR NOT EXISTS (SELECT 1 FROM validation_runs r JOIN assessments a ON a.id=r.assessment_id JOIN assessment_revisions ar ON ar.id=r.assessment_revision_id WHERE r.id=v_run AND r.state='SUCCEEDED' AND a.organization_id=p_organization_id AND ar.assessment_id=r.assessment_id AND ar.state='FINALIZED' AND r.deterministic_pass_count+r.deterministic_fail_count=11 AND (SELECT count(*) FROM validation_rule_executions e WHERE e.validation_run_id=r.id)=11 AND (SELECT count(*) FROM semantic_evaluations s WHERE s.validation_run_id=r.id AND s.state='SUCCEEDED')=1) OR EXISTS (SELECT 1 FROM validation_findings f WHERE f.validation_run_id=v_run AND (f.severity='BLOCKING' OR (f.severity='WARNING' AND NOT EXISTS (SELECT 1 FROM validation_finding_acknowledgements a WHERE a.finding_id=f.id)))) THEN RAISE EXCEPTION 'phase50 revision is not approvable' USING ERRCODE='P5029'; END IF;
+  IF v_run IS NULL OR NOT EXISTS (
+    SELECT 1
+    FROM validation_runs r
+    JOIN assessments a ON a.id=r.assessment_id
+    JOIN assessment_revisions ar ON ar.id=r.assessment_revision_id
+    WHERE r.id=v_run
+      AND r.state='SUCCEEDED'
+      AND r.ruleset_version='v1'
+      AND r.evaluator_version='local-disabled-v1'
+      AND a.organization_id=p_organization_id
+      AND ar.assessment_id=r.assessment_id
+      AND ar.state='FINALIZED'
+      AND r.deterministic_pass_count+r.deterministic_fail_count=11
+      AND (SELECT count(*) FROM validation_rule_definitions d WHERE d.ruleset_version='v1' AND d.rule_version='1.0.0' AND d.deterministic_order BETWEEN 1 AND 11)=11
+      AND (SELECT count(*) FROM validation_rule_executions e WHERE e.validation_run_id=r.id)=11
+      AND (SELECT count(*) FROM validation_rule_executions e JOIN validation_rule_definitions d ON d.id=e.rule_definition_id WHERE e.validation_run_id=r.id AND d.ruleset_version='v1' AND d.rule_version='1.0.0' AND d.deterministic_order BETWEEN 1 AND 11)=11
+      AND (SELECT count(DISTINCT d.rule_id) FROM validation_rule_executions e JOIN validation_rule_definitions d ON d.id=e.rule_definition_id WHERE e.validation_run_id=r.id AND d.ruleset_version='v1' AND d.rule_version='1.0.0' AND d.deterministic_order BETWEEN 1 AND 11)=11
+      AND NOT EXISTS (SELECT 1 FROM validation_rule_definitions d WHERE d.ruleset_version='v1' AND d.rule_version='1.0.0' AND d.deterministic_order BETWEEN 1 AND 11 AND NOT EXISTS (SELECT 1 FROM validation_rule_executions e WHERE e.validation_run_id=r.id AND e.rule_definition_id=d.id))
+      AND r.deterministic_pass_count=(SELECT count(*) FROM validation_rule_executions e WHERE e.validation_run_id=r.id AND e.outcome='PASS')
+      AND r.deterministic_fail_count=(SELECT count(*) FROM validation_rule_executions e WHERE e.validation_run_id=r.id AND e.outcome='FAIL')
+      AND (SELECT count(*) FROM semantic_evaluations s WHERE s.validation_run_id=r.id)=1
+      AND (SELECT count(*) FROM semantic_evaluations s WHERE s.validation_run_id=r.id AND s.state='SUCCEEDED' AND s.evaluator_version='local-disabled-v1' AND s.prompt_version='validation-prompt-v1' AND s.model_configuration_version='local-none-v1' AND s.schema_version='1.0.0')=1
+      AND r.semantic_finding_count=(SELECT count(*) FROM validation_findings f WHERE f.validation_run_id=r.id AND f.kind='SEMANTIC')
+      AND NOT EXISTS (SELECT 1 FROM validation_findings f WHERE f.validation_run_id=r.id AND ((f.kind='DETERMINISTIC' AND NOT EXISTS (SELECT 1 FROM validation_rule_executions e JOIN validation_rule_definitions d ON d.id=e.rule_definition_id WHERE e.id=f.execution_id AND e.validation_run_id=r.id AND r.organization_id=f.organization_id AND r.assessment_revision_id=f.assessment_revision_id AND d.rule_version=f.rule_version AND f.severity='BLOCKING')) OR (f.kind='SEMANTIC' AND NOT EXISTS (SELECT 1 FROM semantic_evaluations s WHERE s.id=f.semantic_evaluation_id AND s.validation_run_id=r.id AND r.organization_id=f.organization_id AND r.assessment_revision_id=f.assessment_revision_id AND s.evaluator_version=f.evaluator_version AND f.severity IN ('BLOCKING','WARNING','INFO')))))
+  ) OR EXISTS (SELECT 1 FROM validation_findings f WHERE f.validation_run_id=v_run AND (f.severity='BLOCKING' OR (f.severity='WARNING' AND NOT EXISTS (SELECT 1 FROM validation_finding_acknowledgements a WHERE a.finding_id=f.id)))) THEN RAISE EXCEPTION 'phase50 revision is not approvable' USING ERRCODE='P5029'; END IF;
   IF EXISTS (
     SELECT 1
     FROM assessment_sections sec
@@ -153,6 +177,7 @@ BEGIN
         AND (ki.visibility='PLATFORM_SHARED' OR ki.organization_id=p_organization_id)
         AND qsl.curriculum_version_id=(SELECT curriculum_version_id FROM assessment_revisions WHERE id=p_revision_id)
         AND EXISTS (SELECT 1 FROM curriculum_versions cv WHERE cv.id=qsl.curriculum_version_id AND cv.status='PUBLISHED')
+        AND EXISTS (SELECT 1 FROM assessment_revision_node_links arnl WHERE arnl.revision_id=p_revision_id AND arnl.curriculum_node_id=qsl.curriculum_node_id)
       )
   ) THEN RAISE EXCEPTION 'phase50 current source eligibility is revoked' USING ERRCODE='P5030'; END IF;
   RETURN v_run;

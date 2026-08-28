@@ -104,10 +104,7 @@ function toValidationSnapshot(revision: any) {
   );
   const outputRun =
     linkedRunIds.length === 1
-      ? validOutputRuns.find(
-          (run: any) =>
-            run.id === linkedRunIds[0],
-        )
+      ? validOutputRuns.find((run: any) => run.id === linkedRunIds[0])
       : linkedRunIds.length === 0 && validOutputRuns.length === 1
         ? validOutputRuns[0]
         : undefined;
@@ -252,7 +249,8 @@ function toValidationSnapshot(revision: any) {
           run.promptTemplateHash === getGenerationPromptTemplate(run.operation).hash &&
           run.modelConfigurationVersion === getGenerationModelConfiguration().version &&
           run.modelConfigurationHash === getGenerationModelConfiguration().hash &&
-          run.responseSchemaVersion === '1.0.0' && run.responseSchemaHash === RESPONSE_SCHEMA_HASH,
+          run.responseSchemaVersion === '1.0.0' &&
+          run.responseSchemaHash === RESPONSE_SCHEMA_HASH,
       },
       eligibility: {
         pedagogicalApproved: review?.decision === 'APPROVED',
@@ -630,35 +628,36 @@ export async function processValidationRun(validationRunId: string, client: Pris
     let revision: any = null;
     try {
       revision = await tx.assessmentRevision.findUnique({
-      where: { id: claimed.assessmentRevisionId },
-      include: {
-        assessment: true,
-        curriculumVersion: true,
-        nodeLinks: true,
-        outputGenerationRuns: { include: { contextItems: true } },
-        sections: {
-          include: {
-            questions: {
-              include: {
-                answers: true,
-                rubrics: true,
-                subQuestions: { include: { answers: true, rubrics: true } },
-                questionSourceLinks: {
-                  include: {
-                    knowledgeItem: { include: { sourceVersion: { include: { source: true } } } },
-                    generationRun: true,
-                    sourceVersion: {
-                      include: {
-                        source: {
-                          include: {
-                            lifecycleEvents: {
-                              orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-                              take: 1,
+        where: { id: claimed.assessmentRevisionId },
+        include: {
+          assessment: true,
+          curriculumVersion: true,
+          nodeLinks: true,
+          outputGenerationRuns: { include: { contextItems: true } },
+          sections: {
+            include: {
+              questions: {
+                include: {
+                  answers: true,
+                  rubrics: true,
+                  subQuestions: { include: { answers: true, rubrics: true } },
+                  questionSourceLinks: {
+                    include: {
+                      knowledgeItem: { include: { sourceVersion: { include: { source: true } } } },
+                      generationRun: true,
+                      sourceVersion: {
+                        include: {
+                          source: {
+                            include: {
+                              lifecycleEvents: {
+                                orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+                                take: 1,
+                              },
                             },
                           },
+                          reviews: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] },
+                          permissions: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] },
                         },
-                        reviews: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] },
-                        permissions: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] },
                       },
                     },
                   },
@@ -667,7 +666,6 @@ export async function processValidationRun(validationRunId: string, client: Pris
             },
           },
         },
-      },
       });
     } catch {
       // A deliberately orphaned persisted relation cannot be materialized by Prisma.
@@ -727,7 +725,10 @@ export async function processValidationRun(validationRunId: string, client: Pris
         claimed.assessmentRevisionId,
       );
     } catch (error) {
-      const failureCode = error instanceof Error && error.message ? error.message.slice(0, 80) : 'SEMANTIC_EVALUATION_FAILED';
+      const failureCode =
+        error instanceof Error && error.message
+          ? error.message.slice(0, 80)
+          : 'SEMANTIC_EVALUATION_FAILED';
       await tx.semanticEvaluation.create({
         data: {
           validationRunId: claimed.id,
@@ -744,7 +745,8 @@ export async function processValidationRun(validationRunId: string, client: Pris
         data: {
           state: 'FAILED',
           failureCode: 'SEMANTIC_EVALUATION_FAILED',
-          deterministicPassCount: rules.length - results.filter((result) => result.outcome === 'FAIL').length,
+          deterministicPassCount:
+            rules.length - results.filter((result) => result.outcome === 'FAIL').length,
           deterministicFailCount: results.filter((result) => result.outcome === 'FAIL').length,
           completedAt: new Date(),
           leaseExpiresAt: null,

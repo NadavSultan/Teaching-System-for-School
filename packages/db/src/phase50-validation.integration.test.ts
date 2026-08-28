@@ -575,22 +575,36 @@ describe('Phase 50 persisted validation operations', () => {
     const expectedFindings = (failed: string[]) => {
       const failedSnapshot = failed.length === validationRules.length;
       const categories: Record<string, string> = {
-        REVISION_FINALIZED_AND_OWNED: 'REVISION', STRICT_REVISION_CONTRACT: 'CONTRACT',
-        PLAN_COUNT_KEY_ORDER: 'PLAN', CURRICULUM_SCOPE_PUBLISHED: 'CURRICULUM',
-        ANSWER_COMPLETENESS_AND_TARGETS: 'ANSWER', EXACT_SCORE_TREE: 'SCORING',
-        STABLE_ID_AND_EXACT_DUPLICATE: 'IDENTITY', DETERMINISTIC_ANSWER_LEAKAGE: 'LEAKAGE',
-        SOURCE_LINK_COMPLETENESS_AND_IDENTITY: 'SOURCE', CURRENT_SOURCE_ELIGIBILITY: 'SOURCE',
+        REVISION_FINALIZED_AND_OWNED: 'REVISION',
+        STRICT_REVISION_CONTRACT: 'CONTRACT',
+        PLAN_COUNT_KEY_ORDER: 'PLAN',
+        CURRICULUM_SCOPE_PUBLISHED: 'CURRICULUM',
+        ANSWER_COMPLETENESS_AND_TARGETS: 'ANSWER',
+        EXACT_SCORE_TREE: 'SCORING',
+        STABLE_ID_AND_EXACT_DUPLICATE: 'IDENTITY',
+        DETERMINISTIC_ANSWER_LEAKAGE: 'LEAKAGE',
+        SOURCE_LINK_COMPLETENESS_AND_IDENTITY: 'SOURCE',
+        CURRENT_SOURCE_ELIGIBILITY: 'SOURCE',
         GENERATION_REVISION_PROVENANCE: 'PROVENANCE',
       };
       return [...failed].sort().map((code) => ({
         code,
         category: categories[code],
         severity: 'BLOCKING',
-        path: failedSnapshot ? 'snapshot' : code === sourceFailure ? 'sources' : code === currentFailure ? 'eligibility' : 'provenance',
+        path: failedSnapshot
+          ? 'snapshot'
+          : code === sourceFailure
+            ? 'sources'
+            : code === currentFailure
+              ? 'eligibility'
+              : 'provenance',
         messageKey: `${code}_FAILED`,
       }));
     };
-    const validate = async (f: Awaited<ReturnType<typeof generatedValidationFixture>>, failed: string[]) => {
+    const validate = async (
+      f: Awaited<ReturnType<typeof generatedValidationFixture>>,
+      failed: string[],
+    ) => {
       const requested = await requestRevisionValidation(f.context, {
         version: '1.0.0',
         assessmentId: f.assessmentId,
@@ -606,8 +620,12 @@ describe('Phase 50 persisted validation operations', () => {
       });
       expect(executions).toHaveLength(11);
       expect(executions.map((row) => row.ruleDefinition.ruleId)).toEqual(validationRules);
-      expect(executions.map((row) => row.ruleDefinition.ruleVersion)).toEqual(Array(11).fill('1.0.0'));
-      expect(executions.filter((row) => row.outcome === 'FAIL').map((row) => row.ruleDefinition.ruleId)).toEqual(failed);
+      expect(executions.map((row) => row.ruleDefinition.ruleVersion)).toEqual(
+        Array(11).fill('1.0.0'),
+      );
+      expect(
+        executions.filter((row) => row.outcome === 'FAIL').map((row) => row.ruleDefinition.ruleId),
+      ).toEqual(failed);
       const findings = await prisma.validationFinding.findMany({
         where: { validationRunId: requested.id },
         orderBy: { code: 'asc' },
@@ -615,7 +633,9 @@ describe('Phase 50 persisted validation operations', () => {
       });
       expect(findings).toEqual(expectedFindings(failed));
     };
-    const alter = async (sql: (tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0]) => Promise<unknown>) =>
+    const alter = async (
+      sql: (tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0]) => Promise<unknown>,
+    ) =>
       prisma.$transaction(async (tx) => {
         await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
         await sql(tx as never);
@@ -626,45 +646,68 @@ describe('Phase 50 persisted validation operations', () => {
     {
       const f = await generatedValidationFixture();
       const other = await generatedValidationFixture();
-      await alter((tx) => tx.$executeRaw`UPDATE question_source_links SET knowledge_item_id = ${other.knowledgeItemId}::uuid WHERE assessment_question_id = ${f.questionId}::uuid`);
+      await alter(
+        (tx) =>
+          tx.$executeRaw`UPDATE question_source_links SET knowledge_item_id = ${other.knowledgeItemId}::uuid WHERE assessment_question_id = ${f.questionId}::uuid`,
+      );
       await validate(f, [sourceFailure, currentFailure]);
     }
     {
       const f = await generatedValidationFixture();
-      await alter((tx) => tx.$executeRaw`UPDATE question_source_links SET knowledge_item_id = '00000000-0000-4000-8000-000000000017'::uuid WHERE assessment_question_id = ${f.questionId}::uuid`);
+      await alter(
+        (tx) =>
+          tx.$executeRaw`UPDATE question_source_links SET knowledge_item_id = '00000000-0000-4000-8000-000000000017'::uuid WHERE assessment_question_id = ${f.questionId}::uuid`,
+      );
       await validate(f, allFailures);
     }
     {
       const f = await generatedValidationFixture();
       const other = await generatedValidationFixture();
-      await alter((tx) => tx.$executeRaw`UPDATE question_source_links SET source_version_id = ${other.sourceVersionId}::uuid WHERE assessment_question_id = ${f.questionId}::uuid`);
+      await alter(
+        (tx) =>
+          tx.$executeRaw`UPDATE question_source_links SET source_version_id = ${other.sourceVersionId}::uuid WHERE assessment_question_id = ${f.questionId}::uuid`,
+      );
       await validate(f, [sourceFailure]);
     }
     {
       const f = await generatedValidationFixture();
-      await alter((tx) => tx.$executeRaw`UPDATE question_source_links SET source_version_id = '00000000-0000-4000-8000-000000000018'::uuid WHERE assessment_question_id = ${f.questionId}::uuid`);
+      await alter(
+        (tx) =>
+          tx.$executeRaw`UPDATE question_source_links SET source_version_id = '00000000-0000-4000-8000-000000000018'::uuid WHERE assessment_question_id = ${f.questionId}::uuid`,
+      );
       await validate(f, allFailures);
     }
     {
       const f = await generatedValidationFixture();
       const other = await generatedValidationFixture();
-      await alter((tx) => tx.$executeRaw`UPDATE knowledge_items SET source_version_id = ${other.sourceVersionId}::uuid, locator = 'parent-mismatch-locator' WHERE id = ${f.knowledgeItemId}::uuid`);
+      await alter(
+        (tx) =>
+          tx.$executeRaw`UPDATE knowledge_items SET source_version_id = ${other.sourceVersionId}::uuid, locator = 'parent-mismatch-locator' WHERE id = ${f.knowledgeItemId}::uuid`,
+      );
       await validate(f, [sourceFailure]);
     }
     {
       const f = await generatedValidationFixture();
-      await alter((tx) => tx.$executeRaw`UPDATE question_source_links SET locator = 'forged-locator' WHERE assessment_question_id = ${f.questionId}::uuid`);
+      await alter(
+        (tx) =>
+          tx.$executeRaw`UPDATE question_source_links SET locator = 'forged-locator' WHERE assessment_question_id = ${f.questionId}::uuid`,
+      );
       await validate(f, [sourceFailure]);
     }
     {
       const f = await generatedValidationFixture();
-      await alter((tx) => tx.$executeRaw`UPDATE question_source_links SET text_hash = ${'f'.repeat(64)} WHERE assessment_question_id = ${f.questionId}::uuid`);
+      await alter(
+        (tx) =>
+          tx.$executeRaw`UPDATE question_source_links SET text_hash = ${'f'.repeat(64)} WHERE assessment_question_id = ${f.questionId}::uuid`,
+      );
       await validate(f, [sourceFailure]);
     }
     {
       const f = await generatedValidationFixture();
       await alter(async (tx) => {
-        const foreign = await tx.organization.create({ data: { name: `phase50-foreign-${sequence}`, workspaceType: 'SCHOOL' } });
+        const foreign = await tx.organization.create({
+          data: { name: `phase50-foreign-${sequence}`, workspaceType: 'SCHOOL' },
+        });
         await tx.$executeRaw`UPDATE knowledge_sources SET organization_id = ${foreign.id}::uuid WHERE id = ${f.sourceId}::uuid`;
       });
       await validate(f, [sourceFailure]);
@@ -672,28 +715,43 @@ describe('Phase 50 persisted validation operations', () => {
     {
       const f = await generatedValidationFixture();
       const outside = await generatedValidationFixture();
-      await alter((tx) => tx.$executeRaw`UPDATE question_source_links SET assessment_question_id = ${outside.questionId}::uuid WHERE assessment_question_id = ${f.questionId}::uuid`);
+      await alter(
+        (tx) =>
+          tx.$executeRaw`UPDATE question_source_links SET assessment_question_id = ${outside.questionId}::uuid WHERE assessment_question_id = ${f.questionId}::uuid`,
+      );
       await validate(f, [sourceFailure, currentFailure, provenanceFailure]);
     }
     {
       const f = await generatedValidationFixture();
       const other = await generatedValidationFixture();
-      await alter((tx) => tx.$executeRaw`UPDATE generation_runs SET organization_id = ${other.workspace.organization.id}::uuid WHERE id = ${f.generationRunId}::uuid`);
+      await alter(
+        (tx) =>
+          tx.$executeRaw`UPDATE generation_runs SET organization_id = ${other.workspace.organization.id}::uuid WHERE id = ${f.generationRunId}::uuid`,
+      );
       await validate(f, allFailures);
     }
     {
       const f = await generatedValidationFixture();
-      await alter((tx) => tx.$executeRaw`UPDATE generation_runs SET output_revision_id = '00000000-0000-4000-8000-000000000019'::uuid WHERE id = ${f.generationRunId}::uuid`);
+      await alter(
+        (tx) =>
+          tx.$executeRaw`UPDATE generation_runs SET output_revision_id = '00000000-0000-4000-8000-000000000019'::uuid WHERE id = ${f.generationRunId}::uuid`,
+      );
       await validate(f, allFailures);
     }
     {
       const f = await generatedValidationFixture();
-      await alter((tx) => tx.$executeRaw`UPDATE question_source_links SET curriculum_node_id = '00000000-0000-4000-8000-000000000020'::uuid WHERE assessment_question_id = ${f.questionId}::uuid`);
+      await alter(
+        (tx) =>
+          tx.$executeRaw`UPDATE question_source_links SET curriculum_node_id = '00000000-0000-4000-8000-000000000020'::uuid WHERE assessment_question_id = ${f.questionId}::uuid`,
+      );
       await validate(f, [sourceFailure, currentFailure]);
     }
     {
       const f = await generatedValidationFixture();
-      await alter((tx) => tx.$executeRaw`UPDATE generation_runs SET prompt_template_hash = ${'a'.repeat(64)} WHERE id = ${f.generationRunId}::uuid`);
+      await alter(
+        (tx) =>
+          tx.$executeRaw`UPDATE generation_runs SET prompt_template_hash = ${'a'.repeat(64)} WHERE id = ${f.generationRunId}::uuid`,
+      );
       await validate(f, [sourceFailure, provenanceFailure]);
     }
     {
