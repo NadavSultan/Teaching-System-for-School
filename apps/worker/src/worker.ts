@@ -1,11 +1,5 @@
-import {
-  claimOutbox,
-  finishOutbox,
-  prisma,
-  processGenerationRun,
-  processValidationRun,
-  runIngestion,
-} from '@teach/db';
+import { claimOutbox, finishOutbox, prisma, processGenerationRun, runIngestion } from '@teach/db';
+import { processValidationOutboxEvent } from './validation-worker.js';
 
 export type WorkerLogger = (event: Readonly<Record<string, unknown>>) => void;
 export type OutboxHandler = (event: {
@@ -36,15 +30,8 @@ export class OutboxWorker {
         await processGenerationRun(
           String((event.payload as { generationRunId: unknown }).generationRunId),
         );
-      if (
-        event.eventType === 'validation.requested' &&
-        typeof event.payload === 'object' &&
-        event.payload &&
-        'validationRunId' in event.payload
-      )
-        await processValidationRun(
-          String((event.payload as { validationRunId: unknown }).validationRunId),
-        );
+      if (event.eventType === 'validation.requested')
+        await processValidationOutboxEvent(event.payload);
     },
   ) {}
   async pollOnce(): Promise<boolean> {

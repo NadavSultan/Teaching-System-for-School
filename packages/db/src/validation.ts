@@ -7,11 +7,17 @@ import {
   validationResultSchema,
   validationStatusSchema,
 } from '@teach/contracts';
-import { authorizeWorkspace, evaluateDeterministicRules, type AccessContext } from '@teach/domain';
+import {
+  authorizeWorkspace,
+  evaluateDeterministicRules,
+  type AccessContext,
+  type ValidationReadiness,
+} from '@teach/domain';
 import { getGenerationModelConfiguration, getGenerationPromptTemplate } from '@teach/ai';
 import {
   DeterministicFakeSemanticEvaluator,
-  parseSemanticEvaluatorOutput,
+  evaluateSemanticWithRetry,
+  SemanticEvaluatorFailure,
   semanticEvaluatorRegistry,
 } from '@teach/ai';
 import { IdempotencyConflictError, prisma } from './index.js';
@@ -68,6 +74,20 @@ function status(run: any) {
   });
 }
 
+function resultEvidence(value: unknown, identity: string, revisionId: string) {
+  const record = value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+  return {
+    identity:
+      record && typeof (record as { identity?: unknown }).identity === 'string'
+        ? (record as { identity: string }).identity
+        : identity,
+    revisionId:
+      record && typeof (record as { revisionId?: unknown }).revisionId === 'string'
+        ? (record as { revisionId: string }).revisionId
+        : revisionId,
+  };
+}
+
 async function ownedRun(context: AccessContext, runId: string, client: Db) {
   return client.validationRun.findFirst({
     where: { id: runId, organizationId: context.organizationId },
@@ -76,7 +96,10 @@ async function ownedRun(context: AccessContext, runId: string, client: Db) {
         include: { ruleDefinition: true },
         orderBy: { ruleDefinition: { deterministicOrder: 'asc' } },
       },
-      findings: { orderBy: [{ path: 'asc' }, { id: 'asc' }] },
+      findings: {
+        include: { acknowledgements: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] } },
+        orderBy: [{ kind: 'asc' }, { path: 'asc' }, { code: 'asc' }, { id: 'asc' }],
+      },
       semanticEvaluation: true,
     },
   });
@@ -373,71 +396,79 @@ export async function requestRevisionValidation(
     assessmentId: parsed.assessmentId,
     assessmentRevisionId: parsed.assessmentRevisionId,
   });
-  return client.$transaction(
-    async (tx) => {
-      const revisionRows = await tx.$queryRaw<
-        Array<{ id: string }>
-      >`SELECT r.id FROM assessment_revisions r JOIN assessments a ON a.id = r.assessment_id WHERE r.id = ${parsed.assessmentRevisionId}::uuid AND r.assessment_id = ${parsed.assessmentId}::uuid AND a.organization_id = ${trustedContext.organizationId}::uuid AND r.state = 'FINALIZED' FOR UPDATE`;
-      if (!revisionRows[0]) throw new Error('Resource not found or unavailable');
-      const existing = await tx.validationRun.findUnique({
-        where: {
-          organizationId_assessmentRevisionId_idempotencyKey: {
-            organizationId: trustedContext.organizationId,
-            assessmentRevisionId: parsed.assessmentRevisionId,
-            idempotencyKey: parsed.idempotencyKey,
-          },
-        },
-      });
-      if (existing) {
-        if (existing.requestFingerprint !== requestFingerprint)
-          throw new IdempotencyConflictError();
-        return status(existing);
-      }
-      const sequence =
-        (
-          await tx.validationRun.aggregate({
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await client.$transaction(
+        async (tx) => {
+          const revisionRows = await tx.$queryRaw<
+            Array<{ id: string }>
+          >`SELECT r.id FROM assessment_revisions r JOIN assessments a ON a.id = r.assessment_id WHERE r.id = ${parsed.assessmentRevisionId}::uuid AND r.assessment_id = ${parsed.assessmentId}::uuid AND a.organization_id = ${trustedContext.organizationId}::uuid AND r.state = 'FINALIZED' FOR UPDATE`;
+          if (!revisionRows[0]) throw new Error('Resource not found or unavailable');
+          const existing = await tx.validationRun.findUnique({
             where: {
-              organizationId: trustedContext.organizationId,
-              assessmentRevisionId: parsed.assessmentRevisionId,
+              organizationId_assessmentRevisionId_idempotencyKey: {
+                organizationId: trustedContext.organizationId,
+                assessmentRevisionId: parsed.assessmentRevisionId,
+                idempotencyKey: parsed.idempotencyKey,
+              },
             },
-            _max: { revisionSequence: true },
-          })
-        )._max.revisionSequence ?? 0;
-      const run = await tx.validationRun.create({
-        data: {
-          organizationId: trustedContext.organizationId,
-          assessmentId: parsed.assessmentId,
-          assessmentRevisionId: parsed.assessmentRevisionId,
-          requestingUserId: trustedContext.principal.userId,
-          rulesetVersion: RULESET_VERSION,
-          evaluatorVersion: EVALUATOR_VERSION,
-          revisionSequence: sequence + 1,
-          idempotencyKey: parsed.idempotencyKey,
-          requestFingerprint,
+          });
+          if (existing) {
+            if (existing.requestFingerprint !== requestFingerprint)
+              throw new IdempotencyConflictError();
+            return status(existing);
+          }
+          const sequence =
+            (
+              await tx.validationRun.aggregate({
+                where: {
+                  organizationId: trustedContext.organizationId,
+                  assessmentRevisionId: parsed.assessmentRevisionId,
+                },
+                _max: { revisionSequence: true },
+              })
+            )._max.revisionSequence ?? 0;
+          const run = await tx.validationRun.create({
+            data: {
+              organizationId: trustedContext.organizationId,
+              assessmentId: parsed.assessmentId,
+              assessmentRevisionId: parsed.assessmentRevisionId,
+              requestingUserId: trustedContext.principal.userId,
+              rulesetVersion: RULESET_VERSION,
+              evaluatorVersion: EVALUATOR_VERSION,
+              revisionSequence: sequence + 1,
+              idempotencyKey: parsed.idempotencyKey,
+              requestFingerprint,
+            },
+          });
+          await tx.outboxEvent.create({
+            data: {
+              organizationId: trustedContext.organizationId,
+              eventType: 'validation.requested',
+              payload: { validationRunId: run.id },
+              idempotencyKey: `validation:${run.id}`,
+            },
+          });
+          await tx.auditEvent.create({
+            data: {
+              actorUserId: trustedContext.principal.userId,
+              organizationId: trustedContext.organizationId,
+              eventType: 'validation.requested',
+              targetType: 'validation_run',
+              targetId: run.id,
+              metadata: { rulesetVersion: RULESET_VERSION, evaluatorVersion: EVALUATOR_VERSION },
+            },
+          });
+          return status(run);
         },
-      });
-      await tx.outboxEvent.create({
-        data: {
-          organizationId: trustedContext.organizationId,
-          eventType: 'validation.requested',
-          payload: { validationRunId: run.id },
-          idempotencyKey: `validation:${run.id}`,
-        },
-      });
-      await tx.auditEvent.create({
-        data: {
-          actorUserId: trustedContext.principal.userId,
-          organizationId: trustedContext.organizationId,
-          eventType: 'validation.requested',
-          targetType: 'validation_run',
-          targetId: run.id,
-          metadata: { rulesetVersion: RULESET_VERSION, evaluatorVersion: EVALUATOR_VERSION },
-        },
-      });
-      return status(run);
-    },
-    { isolationLevel: 'Serializable' },
-  );
+        { isolationLevel: 'Serializable' },
+      );
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+      if (code !== 'P2034' || attempt === 2) throw error;
+    }
+  }
+  throw new Error('Validation request transaction retry exhausted');
 }
 
 export async function getValidationStatus(
@@ -469,7 +500,7 @@ export async function getValidationResult(
       ruleId: row.ruleDefinition.ruleId,
       ruleVersion: row.ruleDefinition.ruleVersion,
       outcome: row.outcome,
-      evidence: row.evidence,
+      evidence: resultEvidence(row.evidence, row.ruleDefinition.ruleId, run.assessmentRevisionId),
     })),
     findings: run.findings.map((finding) => ({
       id: finding.id,
@@ -479,7 +510,11 @@ export async function getValidationResult(
       severity: finding.severity,
       path: finding.path,
       messageKey: finding.messageKey,
-      evidence: finding.evidence,
+      evidence: resultEvidence(finding.evidence, finding.code, run.assessmentRevisionId),
+      confidenceBasisPoints: finding.confidenceBasisPoints,
+      ruleVersion: finding.ruleVersion,
+      evaluatorVersion: finding.evaluatorVersion,
+      schemaVersion: finding.kind === 'SEMANTIC' ? run.semanticEvaluation?.schemaVersion : null,
     })),
     semanticEvaluation: run.semanticEvaluation
       ? {
@@ -506,10 +541,14 @@ export async function acknowledgeSemanticWarning(
   const parsed = validationAcknowledgementSchema.parse(input);
   const reasonHash = createHash('sha256').update(parsed.reason).digest('hex');
   return client.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${trustedContext.organizationId}:${trustedContext.principal.userId}:${parsed.idempotencyKey}`}, 0))`;
     const finding = await tx.validationFinding.findFirst({
       where: { id: parsed.findingId, organizationId: trustedContext.organizationId },
+      include: { validationRun: true },
     });
     if (!finding) throw new Error('Resource not found or unavailable');
+    if (finding.kind !== 'SEMANTIC' || finding.severity !== 'WARNING')
+      throw new Error('Validation finding is not acknowledgeable');
     const existing = await tx.validationFindingAcknowledgement.findUnique({
       where: {
         organizationId_findingId_idempotencyKey: {
@@ -523,7 +562,15 @@ export async function acknowledgeSemanticWarning(
       if (existing.reasonHash !== reasonHash) throw new IdempotencyConflictError();
       return existing;
     }
-    return tx.validationFindingAcknowledgement.create({
+    const reusedKey = await tx.validationFindingAcknowledgement.findFirst({
+      where: {
+        organizationId: trustedContext.organizationId,
+        actorUserId: trustedContext.principal.userId,
+        idempotencyKey: parsed.idempotencyKey,
+      },
+    });
+    if (reusedKey) throw new IdempotencyConflictError();
+    const acknowledgement = await tx.validationFindingAcknowledgement.create({
       data: {
         organizationId: trustedContext.organizationId,
         findingId: finding.id,
@@ -533,6 +580,22 @@ export async function acknowledgeSemanticWarning(
         reasonHash,
       },
     });
+    await tx.auditEvent.create({
+      data: {
+        actorUserId: trustedContext.principal.userId,
+        organizationId: trustedContext.organizationId,
+        eventType: 'validation.warning_acknowledged',
+        targetType: 'validation_finding',
+        targetId: finding.id,
+        metadata: {
+          validationRunId: finding.validationRunId,
+          findingId: finding.id,
+          reasonHash: reasonHash.slice(0, 64),
+          reasonClass: 'ACKNOWLEDGEMENT',
+        },
+      },
+    });
+    return acknowledgement;
   });
 }
 
@@ -541,42 +604,86 @@ export async function getRevisionValidationReadiness(
   assessmentId: string,
   assessmentRevisionId: string,
   client: PrismaClient = prisma,
-) {
-  const trustedContext = await reloadValidationContext(context, client);
-  authorizeWorkspace(trustedContext, trustedContext.organizationId, 'READ_ASSESSMENT');
-  const run = await client.validationRun.findFirst({
-    where: { organizationId: trustedContext.organizationId, assessmentId, assessmentRevisionId },
-    orderBy: { revisionSequence: 'desc' },
-    include: { findings: { include: { acknowledgements: true } } },
-  });
-  let reasonCode: string | null = null;
-  if (!run) reasonCode = 'VALIDATION_REQUIRED';
-  else if (run.state !== 'SUCCEEDED')
-    reasonCode =
-      run.state === 'FAILED'
-        ? 'VALIDATION_FAILED'
-        : run.state === 'PENDING'
-          ? 'VALIDATION_PENDING'
-          : 'VALIDATION_PROCESSING';
-  else if (run.rulesetVersion !== RULESET_VERSION || run.evaluatorVersion !== EVALUATOR_VERSION)
-    reasonCode = 'VALIDATION_VERSION_STALE';
-  else if (
-    run.findings.some(
-      (finding) =>
-        finding.severity === 'BLOCKING' ||
-        (finding.severity === 'WARNING' && finding.acknowledgements.length === 0),
+): Promise<ValidationReadiness> {
+  return client.$transaction(async (tx) => {
+    const trustedContext = await reloadValidationContext(context, tx);
+    authorizeWorkspace(trustedContext, trustedContext.organizationId, 'READ_ASSESSMENT');
+    const revision = await tx.assessmentRevision.findFirst({
+      where: {
+        id: assessmentRevisionId,
+        assessmentId,
+        assessment: { organizationId: trustedContext.organizationId },
+      },
+    });
+    if (!revision)
+      return validationReadinessSchema.parse({
+        version: '1.0.0',
+        status: 'BLOCKED',
+        reasonCode: 'VALIDATION_REQUIRED',
+        validationRunId: null,
+      });
+    const run = await tx.validationRun.findFirst({
+      where: { organizationId: trustedContext.organizationId, assessmentId, assessmentRevisionId },
+      orderBy: { revisionSequence: 'desc' },
+      include: {
+        findings: { include: { acknowledgements: true } },
+        executions: true,
+        semanticEvaluation: true,
+      },
+    });
+    let reasonCode: string | null = null;
+    if (!run) reasonCode = 'VALIDATION_REQUIRED';
+    else if (run.state !== 'SUCCEEDED')
+      reasonCode =
+        run.state === 'FAILED'
+          ? 'VALIDATION_FAILED'
+          : run.state === 'PENDING'
+            ? 'VALIDATION_PENDING'
+            : 'VALIDATION_PROCESSING';
+    else if (run.rulesetVersion !== RULESET_VERSION || run.evaluatorVersion !== EVALUATOR_VERSION)
+      reasonCode = 'VALIDATION_VERSION_STALE';
+    else if (
+      run.findings.some(
+        (finding) =>
+          finding.severity === 'BLOCKING' ||
+          (finding.severity === 'WARNING' && finding.acknowledgements.length === 0),
+      )
     )
-  )
-    reasonCode = run.findings.some((finding) => finding.kind === 'DETERMINISTIC')
-      ? 'DETERMINISTIC_BLOCKER'
-      : run.findings.some((finding) => finding.severity === 'BLOCKING')
-        ? 'SEMANTIC_BLOCKER'
-        : 'WARNING_ACKNOWLEDGEMENT_REQUIRED';
-  return validationReadinessSchema.parse({
-    version: '1.0.0',
-    status: reasonCode ? 'BLOCKED' : 'READY',
-    reasonCode,
-    validationRunId: run?.id ?? null,
+      reasonCode = run.findings.some((finding) => finding.kind === 'DETERMINISTIC')
+        ? 'DETERMINISTIC_BLOCKER'
+        : run.findings.some((finding) => finding.severity === 'BLOCKING')
+          ? 'SEMANTIC_BLOCKER'
+          : 'WARNING_ACKNOWLEDGEMENT_REQUIRED';
+    else if (
+      run.executions.length !== 11 ||
+      !run.semanticEvaluation ||
+      run.semanticEvaluation.state !== 'SUCCEEDED'
+    )
+      reasonCode = 'VALIDATION_FAILED';
+    if (!reasonCode && run) {
+      try {
+        const rows = await tx.$queryRaw<
+          Array<{ assert_revision_approvable: string }>
+        >`SELECT assert_revision_approvable(${trustedContext.organizationId}::uuid, ${assessmentRevisionId}::uuid)`;
+        if (rows[0]?.assert_revision_approvable !== run.id) reasonCode = 'VALIDATION_FAILED';
+      } catch (error) {
+        const dbCode =
+          error && typeof error === 'object'
+            ? String(
+                (error as { code?: unknown }).code === 'P2010'
+                  ? (error as { meta?: { code?: unknown } }).meta?.code
+                  : (error as { code?: unknown }).code,
+              )
+            : '';
+        reasonCode = dbCode === 'P5030' ? 'SOURCE_ELIGIBILITY_CHANGED' : 'VALIDATION_FAILED';
+      }
+    }
+    return validationReadinessSchema.parse({
+      version: '1.0.0',
+      status: reasonCode ? 'BLOCKED' : 'READY',
+      reasonCode,
+      validationRunId: run?.id ?? null,
+    });
   });
 }
 
@@ -622,7 +729,12 @@ export async function processValidationRun(validationRunId: string, client: Pris
       return status(
         await tx.validationRun.update({
           where: { id: claimed.id },
-          data: { state: 'FAILED', failureCode: 'RULESET_INTEGRITY', completedAt: new Date() },
+          data: {
+            state: 'FAILED',
+            failureCode: 'RULESET_INTEGRITY',
+            completedAt: new Date(),
+            leaseExpiresAt: null,
+          },
         }),
       );
     let revision: any = null;
@@ -716,19 +828,44 @@ export async function processValidationRun(validationRunId: string, client: Pris
     );
     const evaluator = new DeterministicFakeSemanticEvaluator();
     try {
-      parseSemanticEvaluatorOutput(
-        await evaluator.evaluate({
-          revisionId: claimed.assessmentRevisionId,
-          operationId: claimed.id,
-          signal: new AbortController().signal,
-        }),
-        claimed.assessmentRevisionId,
+      const semantic = await evaluateSemanticWithRetry(evaluator, {
+        revisionId: claimed.assessmentRevisionId,
+        operationId: claimed.id,
+      });
+      const evaluation = await tx.semanticEvaluation.create({
+        data: {
+          validationRunId: claimed.id,
+          evaluatorVersion: semantic.evaluatorVersion,
+          promptVersion: semantic.promptVersion,
+          modelConfigurationVersion: semantic.modelConfigurationVersion,
+          schemaVersion: semantic.schemaVersion,
+          state: 'SUCCEEDED',
+        },
+      });
+      await Promise.all(
+        semantic.findings.map((finding) =>
+          tx.validationFinding.create({
+            data: {
+              organizationId: claimed.organizationId,
+              validationRunId: claimed.id,
+              assessmentRevisionId: claimed.assessmentRevisionId,
+              semanticEvaluationId: evaluation.id,
+              kind: 'SEMANTIC',
+              code: finding.code,
+              category: finding.category,
+              severity: finding.severity,
+              path: finding.path,
+              messageKey: finding.messageKey,
+              evidence: finding.evidence as Prisma.InputJsonValue,
+              confidenceBasisPoints: finding.confidenceBasisPoints ?? null,
+              evaluatorVersion: semantic.evaluatorVersion,
+            },
+          }),
+        ),
       );
     } catch (error) {
       const failureCode =
-        error instanceof Error && error.message
-          ? error.message.slice(0, 80)
-          : 'SEMANTIC_EVALUATION_FAILED';
+        error instanceof SemanticEvaluatorFailure ? error.code : 'PERMANENT_EVALUATOR_ERROR';
       await tx.semanticEvaluation.create({
         data: {
           validationRunId: claimed.id,
@@ -744,7 +881,7 @@ export async function processValidationRun(validationRunId: string, client: Pris
         where: { id: claimed.id },
         data: {
           state: 'FAILED',
-          failureCode: 'SEMANTIC_EVALUATION_FAILED',
+          failureCode,
           deterministicPassCount:
             rules.length - results.filter((result) => result.outcome === 'FAIL').length,
           deterministicFailCount: results.filter((result) => result.outcome === 'FAIL').length,
@@ -752,18 +889,18 @@ export async function processValidationRun(validationRunId: string, client: Pris
           leaseExpiresAt: null,
         },
       });
+      await tx.auditEvent.create({
+        data: {
+          actorUserId: claimed.requestingUserId,
+          organizationId: claimed.organizationId,
+          eventType: 'validation.failed',
+          targetType: 'validation_run',
+          targetId: claimed.id,
+          metadata: { failureCode, deterministicFailCount: failedRun.deterministicFailCount },
+        },
+      });
       return status(failedRun);
     }
-    await tx.semanticEvaluation.create({
-      data: {
-        validationRunId: claimed.id,
-        evaluatorVersion: semanticEvaluatorRegistry.evaluatorVersion,
-        promptVersion: semanticEvaluatorRegistry.promptVersion,
-        modelConfigurationVersion: semanticEvaluatorRegistry.modelConfigurationVersion,
-        schemaVersion: semanticEvaluatorRegistry.schemaVersion,
-        state: 'SUCCEEDED',
-      },
-    });
     const failed = results.filter((result) => result.outcome === 'FAIL').length;
     const complete = await tx.validationRun.update({
       where: { id: claimed.id },
@@ -772,8 +909,24 @@ export async function processValidationRun(validationRunId: string, client: Pris
         failureCode: null,
         deterministicPassCount: rules.length - failed,
         deterministicFailCount: failed,
+        semanticFindingCount: await tx.validationFinding.count({
+          where: { validationRunId: claimed.id, kind: 'SEMANTIC' },
+        }),
         completedAt: new Date(),
         leaseExpiresAt: null,
+      },
+    });
+    await tx.auditEvent.create({
+      data: {
+        actorUserId: claimed.requestingUserId,
+        organizationId: claimed.organizationId,
+        eventType: 'validation.succeeded',
+        targetType: 'validation_run',
+        targetId: claimed.id,
+        metadata: {
+          deterministicFailCount: failed,
+          semanticFindingCount: complete.semanticFindingCount,
+        },
       },
     });
     return status(complete);
