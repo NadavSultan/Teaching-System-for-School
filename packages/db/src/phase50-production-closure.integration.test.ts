@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import {
   createAssessmentRevision,
   createPersonalWorkspace,
+  acknowledgeSemanticWarning,
   getValidationResult,
   getRevisionValidationReadiness,
   prisma,
@@ -11,6 +12,7 @@ import {
   resolveAccessContext,
 } from './index.js';
 import { validationResultSchema } from '@teach/contracts';
+import { DeterministicFakeSemanticEvaluator } from '@teach/ai';
 
 async function fixture() {
   const workspace = await createPersonalWorkspace({
@@ -159,5 +161,157 @@ describe('Phase 50 production service closure', () => {
         ),
       ),
     );
+    for (const finding of result!.findings) {
+      expect(finding.confidenceBasisPoints).toBe(finding.kind === 'SEMANTIC' ? null : null);
+      expect(finding.ruleVersion).toBe(finding.kind === 'DETERMINISTIC' ? '1.0.0' : null);
+      expect(finding.evaluatorVersion).toBe(
+        finding.kind === 'SEMANTIC' ? 'local-disabled-v1' : null,
+      );
+      expect(finding.schemaVersion).toBe(finding.kind === 'SEMANTIC' ? '1.0.0' : null);
+    }
+  });
+
+  it('converges semantic warning acknowledgement and records exactly one safe audit', async () => {
+    const f = await fixture();
+    const run = await requestRevisionValidation(f.context, {
+      version: '1.0.0',
+      assessmentId: f.assessment.id,
+      assessmentRevisionId: f.revision.id,
+      idempotencyKey: `ack-run-${crypto.randomUUID()}`,
+    });
+    await processValidationRun(run.id);
+    const evaluation = await prisma.semanticEvaluation.findUniqueOrThrow({
+      where: { validationRunId: run.id },
+    });
+    const finding = await prisma.validationFinding.create({
+      data: {
+        organizationId: f.workspace.organization.id,
+        validationRunId: run.id,
+        assessmentRevisionId: f.revision.id,
+        semanticEvaluationId: evaluation.id,
+        kind: 'SEMANTIC',
+        code: 'AMBIGUITY_V1',
+        category: 'AMBIGUITY',
+        severity: 'WARNING',
+        path: 'question[0]',
+        messageKey: 'ambiguity.warning',
+        evaluatorVersion: 'local-disabled-v1',
+      },
+    });
+    const input = {
+      version: '1.0.0' as const,
+      findingId: finding.id,
+      reason: 'Reviewed by owner',
+      idempotencyKey: `ack-${crypto.randomUUID()}`,
+    };
+    const [left, right] = await Promise.all([
+      acknowledgeSemanticWarning(f.context, input),
+      acknowledgeSemanticWarning(f.context, input),
+    ]);
+    expect(left.id).toBe(right.id);
+    expect(
+      await prisma.validationFindingAcknowledgement.count({ where: { findingId: finding.id } }),
+    ).toBe(1);
+    const audits = await prisma.auditEvent.findMany({
+      where: { eventType: 'validation.warning_acknowledged', targetId: finding.id },
+    });
+    expect(audits).toHaveLength(1);
+    expect(JSON.stringify(audits[0]!.metadata)).not.toContain(input.reason);
+  });
+
+  it('rejects reused acknowledgement keys and non-warning findings without creating evidence', async () => {
+    const f = await fixture();
+    const run = await requestRevisionValidation(f.context, {
+      version: '1.0.0',
+      assessmentId: f.assessment.id,
+      assessmentRevisionId: f.revision.id,
+      idempotencyKey: `reject-run-${crypto.randomUUID()}`,
+    });
+    await processValidationRun(run.id);
+    const evaluation = await prisma.semanticEvaluation.findUniqueOrThrow({
+      where: { validationRunId: run.id },
+    });
+    const warning = await prisma.validationFinding.create({
+      data: {
+        organizationId: f.workspace.organization.id,
+        validationRunId: run.id,
+        assessmentRevisionId: f.revision.id,
+        semanticEvaluationId: evaluation.id,
+        kind: 'SEMANTIC',
+        code: 'AMBIGUITY_V1',
+        category: 'AMBIGUITY',
+        severity: 'WARNING',
+        path: 'warning',
+        messageKey: 'warning',
+        evaluatorVersion: 'local-disabled-v1',
+      },
+    });
+    const info = await prisma.validationFinding.create({
+      data: {
+        organizationId: f.workspace.organization.id,
+        validationRunId: run.id,
+        assessmentRevisionId: f.revision.id,
+        semanticEvaluationId: evaluation.id,
+        kind: 'SEMANTIC',
+        code: 'AMBIGUITY_V1',
+        category: 'AMBIGUITY',
+        severity: 'INFO',
+        path: 'info',
+        messageKey: 'info',
+        evaluatorVersion: 'local-disabled-v1',
+      },
+    });
+    const key = `conflict-${crypto.randomUUID()}`;
+    await acknowledgeSemanticWarning(f.context, {
+      version: '1.0.0',
+      findingId: warning.id,
+      reason: 'first',
+      idempotencyKey: key,
+    });
+    await expect(
+      acknowledgeSemanticWarning(f.context, {
+        version: '1.0.0',
+        findingId: warning.id,
+        reason: 'different',
+        idempotencyKey: key,
+      }),
+    ).rejects.toThrow('Idempotency key conflicts');
+    await expect(
+      acknowledgeSemanticWarning(f.context, {
+        version: '1.0.0',
+        findingId: info.id,
+        reason: 'not allowed',
+        idempotencyKey: `info-${crypto.randomUUID()}`,
+      }),
+    ).rejects.toThrow('not acknowledgeable');
+    expect(
+      await prisma.validationFindingAcknowledgement.count({ where: { findingId: info.id } }),
+    ).toBe(0);
+  });
+
+  it('persists bounded semantic failure as one terminal run with a cleared lease and safe audit', async () => {
+    const f = await fixture();
+    const requested = await requestRevisionValidation(f.context, {
+      version: '1.0.0',
+      assessmentId: f.assessment.id,
+      assessmentRevisionId: f.revision.id,
+      idempotencyKey: `semantic-failure-${crypto.randomUUID()}`,
+    });
+    const evaluator = new DeterministicFakeSemanticEvaluator(undefined, () => {
+      throw new Error('credential=redacted');
+    });
+    const completed = await processValidationRun(requested.id, prisma, evaluator);
+    expect(completed).toMatchObject({ state: 'FAILED', failureCode: 'PERMANENT_EVALUATOR_ERROR' });
+    const stored = await prisma.validationRun.findUniqueOrThrow({ where: { id: requested.id } });
+    expect(stored.leaseExpiresAt).toBeNull();
+    expect(
+      await prisma.semanticEvaluation.count({
+        where: { validationRunId: requested.id, state: 'FAILED' },
+      }),
+    ).toBe(1);
+    const audit = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: 'validation.failed', targetId: requested.id },
+    });
+    expect(JSON.stringify(audit.metadata)).not.toContain('credential');
   });
 });

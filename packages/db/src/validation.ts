@@ -18,6 +18,7 @@ import {
   DeterministicFakeSemanticEvaluator,
   evaluateSemanticWithRetry,
   SemanticEvaluatorFailure,
+  type SemanticEvaluator,
   semanticEvaluatorRegistry,
 } from '@teach/ai';
 import { IdempotencyConflictError, prisma } from './index.js';
@@ -698,7 +699,11 @@ export async function assertRevisionApprovable(
   return rows[0]?.assert_revision_approvable;
 }
 
-export async function processValidationRun(validationRunId: string, client: PrismaClient = prisma) {
+export async function processValidationRun(
+  validationRunId: string,
+  client: PrismaClient = prisma,
+  evaluator: SemanticEvaluator = new DeterministicFakeSemanticEvaluator(),
+) {
   return client.$transaction(async (tx) => {
     const run = await tx.validationRun.findUnique({ where: { id: validationRunId } });
     if (!run || run.state === 'SUCCEEDED' || run.state === 'FAILED')
@@ -826,7 +831,6 @@ export async function processValidationRun(validationRunId: string, client: Pris
           : [];
       }),
     );
-    const evaluator = new DeterministicFakeSemanticEvaluator();
     try {
       const semantic = await evaluateSemanticWithRetry(evaluator, {
         revisionId: claimed.assessmentRevisionId,
