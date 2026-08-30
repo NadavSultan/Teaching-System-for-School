@@ -10,9 +10,12 @@ import {
   processValidationRun,
   requestRevisionValidation,
   resolveAccessContext,
+  setSourceLifecycle,
 } from './index.js';
 import { validationResultSchema } from '@teach/contracts';
-import { DeterministicFakeSemanticEvaluator } from '@teach/ai';
+import { DeterministicFakeModelGateway, DeterministicFakeSemanticEvaluator } from '@teach/ai';
+import { createGenerationFixture } from './phase40.acceptance.fixtures.js';
+import { processGenerationRun } from './generation.js';
 
 async function fixture() {
   const workspace = await createPersonalWorkspace({
@@ -136,7 +139,29 @@ describe('Phase 50 production service closure', () => {
       assessmentRevisionId: f.revision.id,
       idempotencyKey: `result-${crypto.randomUUID()}`,
     });
-    await processValidationRun(requested.id);
+    await processValidationRun(
+      requested.id,
+      prisma,
+      new DeterministicFakeSemanticEvaluator({
+        version: '1.0.0',
+        evaluatorVersion: 'local-disabled-v1',
+        promptVersion: 'validation-prompt-v1',
+        modelConfigurationVersion: 'local-none-v1',
+        schemaVersion: '1.0.0',
+        revisionId: f.revision.id,
+        findings: [
+          {
+            category: 'AMBIGUITY',
+            code: 'AMBIGUITY_V1',
+            severity: 'WARNING',
+            path: 'semantic[0]',
+            messageKey: 'ambiguity.persisted',
+            evidence: { identity: 'semantic-persisted', revisionId: f.revision.id },
+            confidenceBasisPoints: 8734,
+          },
+        ],
+      }),
+    );
     const result = await getValidationResult(f.context, requested.id);
     expect(result).not.toBeNull();
     expect(validationResultSchema.parse(result)).toEqual(result);
@@ -161,14 +186,46 @@ describe('Phase 50 production service closure', () => {
         ),
       ),
     );
-    for (const finding of result!.findings) {
-      expect(finding.confidenceBasisPoints).toBe(finding.kind === 'SEMANTIC' ? null : null);
-      expect(finding.ruleVersion).toBe(finding.kind === 'DETERMINISTIC' ? '1.0.0' : null);
-      expect(finding.evaluatorVersion).toBe(
-        finding.kind === 'SEMANTIC' ? 'local-disabled-v1' : null,
-      );
-      expect(finding.schemaVersion).toBe(finding.kind === 'SEMANTIC' ? '1.0.0' : null);
-    }
+    const deterministic = result!.findings.find((finding) => finding.kind === 'DETERMINISTIC');
+    const semantic = result!.findings.find((finding) => finding.kind === 'SEMANTIC');
+    expect(deterministic).toMatchObject({
+      ruleVersion: '1.0.0',
+      evaluatorVersion: null,
+      schemaVersion: null,
+      confidenceBasisPoints: null,
+    });
+    expect(semantic).toMatchObject({
+      confidenceBasisPoints: 8734,
+      ruleVersion: null,
+      evaluatorVersion: 'local-disabled-v1',
+      schemaVersion: '1.0.0',
+    });
+    const stored = await prisma.validationRun.findUniqueOrThrow({ where: { id: requested.id } });
+    expect(stored).toMatchObject({
+      state: 'SUCCEEDED',
+      deterministicPassCount: 0,
+      deterministicFailCount: 11,
+      semanticFindingCount: 1,
+      leaseExpiresAt: null,
+    });
+    expect(
+      await prisma.validationRun.count({ where: { id: requested.id, state: 'SUCCEEDED' } }),
+    ).toBe(1);
+    expect(
+      await prisma.semanticEvaluation.findUniqueOrThrow({
+        where: { validationRunId: requested.id },
+      }),
+    ).toMatchObject({
+      state: 'SUCCEEDED',
+      evaluatorVersion: 'local-disabled-v1',
+      promptVersion: 'validation-prompt-v1',
+      modelConfigurationVersion: 'local-none-v1',
+      schemaVersion: '1.0.0',
+    });
+    const successAudit = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: 'validation.succeeded', targetId: requested.id },
+    });
+    expect(successAudit.metadata).toEqual({ deterministicFailCount: 11, semanticFindingCount: 1 });
   });
 
   it('converges semantic warning acknowledgement and records exactly one safe audit', async () => {
@@ -216,7 +273,25 @@ describe('Phase 50 production service closure', () => {
       where: { eventType: 'validation.warning_acknowledged', targetId: finding.id },
     });
     expect(audits).toHaveLength(1);
-    expect(JSON.stringify(audits[0]!.metadata)).not.toContain(input.reason);
+    expect(audits[0]).toMatchObject({
+      actorUserId: f.workspace.user.id,
+      organizationId: f.workspace.organization.id,
+      targetId: finding.id,
+    });
+    const metadata = audits[0]!.metadata as Record<string, unknown>;
+    expect(Object.keys(metadata).sort()).toEqual([
+      'findingId',
+      'reasonClass',
+      'reasonHash',
+      'validationRunId',
+    ]);
+    expect(metadata).toMatchObject({
+      findingId: finding.id,
+      validationRunId: run.id,
+      reasonClass: 'ACKNOWLEDGEMENT',
+    });
+    expect(metadata.reasonHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(metadata)).not.toContain(input.reason);
   });
 
   it('rejects reused acknowledgement keys and non-warning findings without creating evidence', async () => {
@@ -261,6 +336,39 @@ describe('Phase 50 production service closure', () => {
         evaluatorVersion: 'local-disabled-v1',
       },
     });
+    const blocking = await prisma.validationFinding.create({
+      data: {
+        organizationId: f.workspace.organization.id,
+        validationRunId: run.id,
+        assessmentRevisionId: f.revision.id,
+        semanticEvaluationId: evaluation.id,
+        kind: 'SEMANTIC',
+        code: 'AMBIGUITY_V1',
+        category: 'AMBIGUITY',
+        severity: 'BLOCKING',
+        path: 'blocking',
+        messageKey: 'blocking',
+        evaluatorVersion: 'local-disabled-v1',
+      },
+    });
+    const alternateWarning = await prisma.validationFinding.create({
+      data: {
+        organizationId: f.workspace.organization.id,
+        validationRunId: run.id,
+        assessmentRevisionId: f.revision.id,
+        semanticEvaluationId: evaluation.id,
+        kind: 'SEMANTIC',
+        code: 'AMBIGUITY_V1',
+        category: 'AMBIGUITY',
+        severity: 'WARNING',
+        path: 'alternate-warning',
+        messageKey: 'alternate-warning',
+        evaluatorVersion: 'local-disabled-v1',
+      },
+    });
+    const deterministic = await prisma.validationFinding.findFirstOrThrow({
+      where: { validationRunId: run.id, kind: 'DETERMINISTIC' },
+    });
     const key = `conflict-${crypto.randomUUID()}`;
     await acknowledgeSemanticWarning(f.context, {
       version: '1.0.0',
@@ -275,18 +383,47 @@ describe('Phase 50 production service closure', () => {
         reason: 'different',
         idempotencyKey: key,
       }),
-    ).rejects.toThrow('Idempotency key conflicts');
+    ).rejects.toThrow('Idempotency key was already used with different content');
+    const beforeConflictAcks = await prisma.validationFindingAcknowledgement.count();
+    const beforeConflictAudits = await prisma.auditEvent.count({
+      where: { eventType: 'validation.warning_acknowledged' },
+    });
     await expect(
       acknowledgeSemanticWarning(f.context, {
         version: '1.0.0',
-        findingId: info.id,
-        reason: 'not allowed',
-        idempotencyKey: `info-${crypto.randomUUID()}`,
+        findingId: alternateWarning.id,
+        reason: 'different finding',
+        idempotencyKey: key,
       }),
-    ).rejects.toThrow('not acknowledgeable');
+    ).rejects.toThrow('Idempotency key was already used with different content');
+    expect(await prisma.validationFindingAcknowledgement.count()).toBe(beforeConflictAcks);
     expect(
-      await prisma.validationFindingAcknowledgement.count({ where: { findingId: info.id } }),
-    ).toBe(0);
+      await prisma.auditEvent.count({ where: { eventType: 'validation.warning_acknowledged' } }),
+    ).toBe(beforeConflictAudits);
+    for (const finding of [deterministic, blocking, info]) {
+      const acknowledgements = await prisma.validationFindingAcknowledgement.count({
+        where: { findingId: finding.id },
+      });
+      const audits = await prisma.auditEvent.count({
+        where: { eventType: 'validation.warning_acknowledged', targetId: finding.id },
+      });
+      await expect(
+        acknowledgeSemanticWarning(f.context, {
+          version: '1.0.0',
+          findingId: finding.id,
+          reason: 'not acknowledgeable',
+          idempotencyKey: `reject-${finding.id}`,
+        }),
+      ).rejects.toThrow('not acknowledgeable');
+      expect(
+        await prisma.validationFindingAcknowledgement.count({ where: { findingId: finding.id } }),
+      ).toBe(acknowledgements);
+      expect(
+        await prisma.auditEvent.count({
+          where: { eventType: 'validation.warning_acknowledged', targetId: finding.id },
+        }),
+      ).toBe(audits);
+    }
   });
 
   it('persists bounded semantic failure as one terminal run with a cleared lease and safe audit', async () => {
@@ -303,7 +440,24 @@ describe('Phase 50 production service closure', () => {
     const completed = await processValidationRun(requested.id, prisma, evaluator);
     expect(completed).toMatchObject({ state: 'FAILED', failureCode: 'PERMANENT_EVALUATOR_ERROR' });
     const stored = await prisma.validationRun.findUniqueOrThrow({ where: { id: requested.id } });
-    expect(stored.leaseExpiresAt).toBeNull();
+    expect(stored).toMatchObject({
+      state: 'FAILED',
+      failureCode: 'PERMANENT_EVALUATOR_ERROR',
+      leaseExpiresAt: null,
+      semanticFindingCount: 0,
+      deterministicPassCount: 0,
+      deterministicFailCount: 11,
+    });
+    expect(
+      await prisma.validationRuleExecution.count({ where: { validationRunId: requested.id } }),
+    ).toBe(11);
+    const executions = await prisma.validationRuleExecution.findMany({
+      where: { validationRunId: requested.id },
+      orderBy: { ruleDefinition: { deterministicOrder: 'asc' } },
+    });
+    expect(executions).toHaveLength(11);
+    expect(executions.every((execution) => execution.outcome === 'FAIL')).toBe(true);
+    expect(executions.every((execution) => typeof execution.evidence === 'object')).toBe(true);
     expect(
       await prisma.semanticEvaluation.count({
         where: { validationRunId: requested.id, state: 'FAILED' },
@@ -312,6 +466,130 @@ describe('Phase 50 production service closure', () => {
     const audit = await prisma.auditEvent.findFirstOrThrow({
       where: { eventType: 'validation.failed', targetId: requested.id },
     });
-    expect(JSON.stringify(audit.metadata)).not.toContain('credential');
+    expect(
+      await prisma.auditEvent.count({
+        where: { eventType: 'validation.failed', targetId: requested.id },
+      }),
+    ).toBe(1);
+    expect(audit.metadata).toEqual({
+      failureCode: 'PERMANENT_EVALUATOR_ERROR',
+      deterministicFailCount: 11,
+    });
+  });
+
+  it('uses the real assertion for owned readiness, P5030 eligibility change, and fail-closed errors', async () => {
+    const f = await createGenerationFixture();
+    const generated = await processGenerationRun(
+      f.generationRunId,
+      prisma,
+      new DeterministicFakeModelGateway(),
+    );
+    expect(generated?.state).toBe('SUCCEEDED');
+    const revision = await prisma.assessmentRevision.findFirstOrThrow({
+      where: { assessmentId: f.assessmentId },
+      orderBy: { createdAt: 'desc' },
+    });
+    const question = await prisma.assessmentQuestion.findFirstOrThrow({
+      where: { section: { revisionId: revision.id } },
+    });
+    const link = await prisma.questionSourceLink.findFirstOrThrow({
+      where: { assessmentQuestionId: question.id },
+      include: { sourceVersion: true },
+    });
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
+      await tx.answer.create({
+        data: {
+          questionId: question.id,
+          key: 'closure-answer',
+          order: 0,
+          text: 'תשובה תקינה',
+          answerData: {},
+        },
+      });
+      await tx.$executeRaw`UPDATE knowledge_sources SET organization_id=${f.context.organizationId}::uuid WHERE id=${link.sourceVersion.sourceId}::uuid`;
+      await tx.$executeRaw`UPDATE source_versions SET lifecycle='ACTIVE' WHERE id=${f.sourceVersionId}::uuid`;
+      await tx.$executeRaw`UPDATE knowledge_items SET organization_id=${f.context.organizationId}::uuid WHERE id=${link.knowledgeItemId}::uuid`;
+      await tx.$executeRaw`UPDATE question_source_links SET curriculum_version_id=${f.curriculumVersionId}::uuid, curriculum_node_id=${f.curriculumNodeId}::uuid WHERE assessment_question_id=${question.id}::uuid`;
+      await tx.$executeRaw`UPDATE generation_context_items SET curriculum_version_id=${f.curriculumVersionId}::uuid, curriculum_node_id=${f.curriculumNodeId}::uuid WHERE generation_run_id=${f.generationRunId}::uuid AND knowledge_item_id=${link.knowledgeItemId}::uuid`;
+    });
+    const run = await prisma.validationRun.create({
+      data: {
+        organizationId: f.context.organizationId,
+        assessmentId: f.assessmentId,
+        assessmentRevisionId: revision.id,
+        requestingUserId: f.workspace.user.id,
+        rulesetVersion: 'v1',
+        evaluatorVersion: 'local-disabled-v1',
+        revisionSequence: 1,
+        idempotencyKey: `ready-${crypto.randomUUID()}`,
+        requestFingerprint: 'r'.repeat(64),
+      },
+    });
+    const rules = await prisma.validationRuleDefinition.findMany({
+      where: { rulesetVersion: 'v1' },
+      orderBy: { deterministicOrder: 'asc' },
+    });
+    for (const rule of rules)
+      await prisma.validationRuleExecution.create({
+        data: {
+          validationRunId: run.id,
+          ruleDefinitionId: rule.id,
+          outcome: 'PASS',
+          evidence: { identity: rule.ruleId, revisionId: revision.id },
+        },
+      });
+    await prisma.semanticEvaluation.create({
+      data: {
+        validationRunId: run.id,
+        evaluatorVersion: 'local-disabled-v1',
+        promptVersion: 'validation-prompt-v1',
+        modelConfigurationVersion: 'local-none-v1',
+        schemaVersion: '1.0.0',
+        state: 'SUCCEEDED',
+      },
+    });
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
+      await tx.$executeRaw`UPDATE validation_runs SET state='SUCCEEDED', completed_at=now(), lease_expires_at=NULL, deterministic_pass_count=11, deterministic_fail_count=0 WHERE id=${run.id}::uuid`;
+    });
+    await expect(
+      getRevisionValidationReadiness(f.context, f.assessmentId, revision.id),
+    ).resolves.toEqual({
+      version: '1.0.0',
+      status: 'READY',
+      reasonCode: null,
+      validationRunId: run.id,
+    });
+    await setSourceLifecycle(
+      f.context,
+      f.sourceVersionId,
+      'SUSPENDED',
+      'closure eligibility change',
+    );
+    await expect(
+      getRevisionValidationReadiness(f.context, f.assessmentId, revision.id),
+    ).resolves.toMatchObject({
+      status: 'BLOCKED',
+      reasonCode: 'SOURCE_ELIGIBILITY_CHANGED',
+      validationRunId: run.id,
+    });
+    await setSourceLifecycle(
+      f.context,
+      f.sourceVersionId,
+      'ACTIVE',
+      'closure eligibility restored',
+    );
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
+      await tx.$executeRaw`UPDATE validation_runs SET deterministic_pass_count=10 WHERE id=${run.id}::uuid`;
+    });
+    await expect(
+      getRevisionValidationReadiness(f.context, f.assessmentId, revision.id),
+    ).resolves.toMatchObject({
+      status: 'BLOCKED',
+      reasonCode: 'VALIDATION_FAILED',
+      validationRunId: run.id,
+    });
   });
 });
