@@ -616,8 +616,8 @@ export function evaluateDeterministicRules(input: unknown): DeterministicRuleRes
               p.revisionId === s.id &&
               p.questionId === x.id &&
               p.sourceVersionId === l.sourceVersionId &&
-              p.knowledgeItemId === l.knowledgeItemId
-              && (l.canonical as R).pinnedProvenanceMatches === true
+              p.knowledgeItemId === l.knowledgeItemId &&
+              (l.canonical as R).pinnedProvenanceMatches === true
             );
           }),
       ),
