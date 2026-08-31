@@ -138,7 +138,12 @@ async function completeRun(f: Awaited<ReturnType<typeof fixture>>) {
   });
   for (const rule of rules)
     await prisma.validationRuleExecution.create({
-      data: { validationRunId: value.id, ruleDefinitionId: rule.id, outcome: 'PASS', evidence: {} },
+      data: {
+        validationRunId: value.id,
+        ruleDefinitionId: rule.id,
+        outcome: 'PASS',
+        evidence: { identity: rule.ruleId, revisionId: f.revision.id },
+      },
     });
   await prisma.semanticEvaluation.create({
     data: {
@@ -162,7 +167,12 @@ async function incompleteRun(f: Awaited<ReturnType<typeof fixture>>) {
   });
   for (const rule of rules.slice(0, 10))
     await prisma.validationRuleExecution.create({
-      data: { validationRunId: value.id, ruleDefinitionId: rule.id, outcome: 'PASS', evidence: {} },
+      data: {
+        validationRunId: value.id,
+        ruleDefinitionId: rule.id,
+        outcome: 'PASS',
+        evidence: { identity: rule.ruleId, revisionId: f.revision.id },
+      },
     });
   return value;
 }
@@ -277,7 +287,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
     const duplicateRule = duplicate.rules[0]!;
     await reject(
       () =>
-        prisma.$executeRaw`INSERT INTO validation_rule_executions (validation_run_id,rule_definition_id,outcome,evidence) VALUES (${duplicate.value.id}::uuid,${duplicateRule.id}::uuid,'PASS','{}'::jsonb)`,
+        prisma.$executeRaw`INSERT INTO validation_rule_executions (validation_run_id,rule_definition_id,outcome,evidence) VALUES (${duplicate.value.id}::uuid,${duplicateRule.id}::uuid,'PASS',jsonb_build_object('identity',${duplicateRule.ruleId},'revisionId',${duplicate.value.assessmentRevisionId}))`,
       '23505',
       `Key (validation_run_id, rule_definition_id)=(${duplicate.value.id}, ${duplicateRule.id}) already exists.`,
     );
@@ -369,7 +379,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
           validationRunId: value.id,
           ruleDefinitionId: rule.id,
           outcome: 'PASS',
-          evidence: {},
+          evidence: { identity: rule.ruleId, revisionId: f.revision.id },
         },
       });
     await reject(
@@ -399,7 +409,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
             validationRunId: value.id,
             ruleDefinitionId: foreign.id,
             outcome: 'PASS',
-            evidence: {},
+            evidence: { identity: foreign.ruleId, revisionId: f.revision.id },
           },
         }),
       'P5023',
@@ -545,6 +555,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
         severity: 'BLOCKING',
         path: 'p',
         messageKey: 'm',
+        evidence: { identity: 'X', revisionId: f.revision.id },
         ruleVersion: rules[0]!.ruleVersion,
       },
     });
@@ -573,6 +584,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
         severity: 'BLOCKING',
         path: 'p',
         messageKey: 'm',
+        evidence: { identity: 'ANSWER_VALIDITY_V1', revisionId: f.revision.id },
         evaluatorVersion: 'local-disabled-v1',
       },
     });
@@ -594,6 +606,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
         severity: 'INFO',
         path: 'p-info',
         messageKey: 'm-info',
+        evidence: { identity: 'DIFFICULTY_FIT_V1', revisionId: f.revision.id },
         evaluatorVersion: 'local-disabled-v1',
       },
     });
@@ -631,6 +644,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
         severity: 'WARNING',
         path: 'p',
         messageKey: 'm',
+        evidence: { identity: 'ANSWER_VALIDITY_V1', revisionId: f.revision.id },
         evaluatorVersion: 'local-disabled-v1',
       },
     });
@@ -689,6 +703,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
         severity: 'WARNING',
         path: 'p',
         messageKey: 'm',
+        evidence: { identity: 'ANSWER_VALIDITY_V1', revisionId: f.revision.id },
         evaluatorVersion: 'local-disabled-v1',
       },
     });
@@ -715,6 +730,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
         severity: 'WARNING',
         path: 'alternate',
         messageKey: 'alternate',
+        evidence: { identity: 'AMBIGUITY_V1', revisionId: f.revision.id },
         evaluatorVersion: 'local-disabled-v1',
       },
     });
@@ -806,7 +822,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
           validationRunId: sourceRun.id,
           ruleDefinitionId: rule.id,
           outcome: 'PASS',
-          evidence: {},
+          evidence: { identity: rule.ruleId, revisionId: generatedRevision.id },
         },
       });
     await prisma.semanticEvaluation.create({
@@ -942,6 +958,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
         severity: 'WARNING',
         path: 'b16',
         messageKey: 'b16-warning',
+        evidence: { identity: 'AMBIGUITY_V1', revisionId: warningFixture.revision.id },
         evaluatorVersion: 'local-disabled-v1',
       },
     });
@@ -979,6 +996,63 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
     }
   });
 
+  it('rejects missing or forged execution and finding evidence at the direct database boundary', async () => {
+    const f = await fixture();
+    const value = await run(f);
+    const rule = await prisma.validationRuleDefinition.findFirstOrThrow({
+      where: { rulesetVersion: 'v1' },
+      orderBy: { deterministicOrder: 'asc' },
+    });
+    await reject(
+      () =>
+        prisma.validationRuleExecution.create({
+          data: {
+            validationRunId: value.id,
+            ruleDefinitionId: rule.id,
+            outcome: 'PASS',
+            evidence: {},
+          },
+        }),
+      'P5031',
+      'phase50 execution evidence identity is invalid',
+    );
+    expect(
+      await prisma.validationRuleExecution.count({ where: { validationRunId: value.id } }),
+    ).toBe(0);
+
+    const complete = await completeRun(await fixture());
+    const semantic = await prisma.semanticEvaluation.findUniqueOrThrow({
+      where: { validationRunId: complete.value.id },
+    });
+    await reject(
+      () =>
+        prisma.validationFinding.create({
+          data: {
+            organizationId: complete.value.organizationId,
+            validationRunId: complete.value.id,
+            assessmentRevisionId: complete.value.assessmentRevisionId,
+            semanticEvaluationId: semantic.id,
+            kind: 'SEMANTIC',
+            code: 'AMBIGUITY_V1',
+            category: 'AMBIGUITY',
+            severity: 'WARNING',
+            path: 'evidence',
+            messageKey: 'evidence.invalid',
+            evidence: {
+              identity: 'FORGED',
+              revisionId: complete.value.assessmentRevisionId,
+            },
+            evaluatorVersion: 'local-disabled-v1',
+          },
+        }),
+      'P5032',
+      'phase50 finding evidence identity is invalid',
+    );
+    expect(
+      await prisma.validationFinding.count({ where: { validationRunId: complete.value.id } }),
+    ).toBe(0);
+  });
+
   it('completed validation retains findings and defers blocker policy to readiness', async () => {
     const deterministic = await fixture();
     const deterministicRun = await completeRun(deterministic);
@@ -997,6 +1071,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
         severity: 'BLOCKING',
         path: 'revision',
         messageKey: 'RULE_FAIL',
+        evidence: { identity: 'RULE_FAIL', revisionId: deterministic.revision.id },
         ruleVersion: deterministicRun.rules[0]!.ruleVersion,
       },
     });
@@ -1028,6 +1103,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
         severity: 'BLOCKING',
         path: 'question',
         messageKey: 'ANSWER_INVALID',
+        evidence: { identity: 'ANSWER_VALIDITY_V1', revisionId: semanticBlock.revision.id },
         evaluatorVersion: 'local-disabled-v1',
       },
     });
@@ -1059,6 +1135,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
         severity: 'WARNING',
         path: 'question',
         messageKey: 'AMBIGUOUS',
+        evidence: { identity: 'AMBIGUITY_V1', revisionId: warning.revision.id },
         evaluatorVersion: 'local-disabled-v1',
       },
     });
@@ -1090,6 +1167,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
         severity: 'INFO',
         path: 'question',
         messageKey: 'INFO_ONLY',
+        evidence: { identity: 'DIFFICULTY_FIT_V1', revisionId: info.revision.id },
         evaluatorVersion: 'local-disabled-v1',
       },
     });

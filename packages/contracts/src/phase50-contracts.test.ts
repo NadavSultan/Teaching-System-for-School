@@ -11,11 +11,11 @@ import {
 } from './phase50.js';
 const id = '00000000-0000-4000-8000-000000000001';
 const execs = () =>
-  validationRuleIdSchema.options.map((ruleId, i) => ({
+  validationRuleIdSchema.options.map((ruleId) => ({
     ruleId,
     ruleVersion: 'v1',
     outcome: 'PASS' as const,
-    evidence: { identity: `e${i}`, revisionId: id },
+    evidence: { identity: ruleId, revisionId: id },
   }));
 const stat = () => ({
   version: '1.0.0' as const,
@@ -70,7 +70,7 @@ describe('Phase 50 contracts', () => {
       severity: 'BLOCKING' as const,
       path: 'p',
       messageKey: 'm',
-      evidence: { identity: 'd', revisionId: id },
+      evidence: { identity: 'C', revisionId: id },
       confidenceBasisPoints: null,
       ruleVersion: 'v1',
       evaluatorVersion: null,
@@ -84,7 +84,7 @@ describe('Phase 50 contracts', () => {
       severity: 'WARNING' as const,
       path: 'p',
       messageKey: 'm',
-      evidence: { identity: 's', revisionId: id },
+      evidence: { identity: 'S', revisionId: id },
       confidenceBasisPoints: null,
       ruleVersion: null,
       evaluatorVersion: 'v1',
@@ -227,7 +227,7 @@ describe('Phase 50 contracts', () => {
       severity: 'BLOCKING' as const,
       path: 'p',
       messageKey: 'm',
-      evidence: { identity: 'x', revisionId: id },
+      evidence: { identity: 'C', revisionId: id },
       confidenceBasisPoints: null,
       ruleVersion: 'v1',
       evaluatorVersion: null,
@@ -244,7 +244,7 @@ describe('Phase 50 contracts', () => {
       severity,
       path: 'p',
       messageKey: 'm',
-      evidence: { identity: 's', revisionId: id },
+      evidence: { identity: 'S', revisionId: id },
       confidenceBasisPoints: 5000,
       ruleVersion: null,
       evaluatorVersion: 'v1',
@@ -306,7 +306,7 @@ describe('Phase 50 contracts', () => {
       severity: 'WARNING' as const,
       path: 'p',
       messageKey: 'm',
-      evidence: { identity: 's', revisionId: id },
+      evidence: { identity: 'S', revisionId: id },
       confidenceBasisPoints: null,
       ruleVersion: null,
       evaluatorVersion: 'v1',

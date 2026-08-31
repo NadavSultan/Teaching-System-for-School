@@ -88,7 +88,7 @@ async function fixture() {
 describe('Phase 50 production service closure', () => {
   afterAll(() => prisma.$disconnect());
 
-  it('converges concurrent same-key validation requests into one run and one ID-only outbox row', async () => {
+  it('C01 converges concurrent identical requests to one run/outbox and the same ID', async () => {
     const f = await fixture();
     const input = {
       version: '1.0.0' as const,
@@ -131,7 +131,7 @@ describe('Phase 50 production service closure', () => {
     ).resolves.toEqual(expected);
   });
 
-  it('maps a persisted completed run through the strict result schema in registry order', async () => {
+  it('A07 maps persisted result IDs, versions, codes, counts and deterministic order losslessly', async () => {
     const f = await fixture();
     const requested = await requestRevisionValidation(f.context, {
       version: '1.0.0',
@@ -156,7 +156,7 @@ describe('Phase 50 production service closure', () => {
             severity: 'WARNING',
             path: 'semantic[0]',
             messageKey: 'ambiguity.persisted',
-            evidence: { identity: 'semantic-persisted', revisionId: f.revision.id },
+            evidence: { identity: 'AMBIGUITY_V1', revisionId: f.revision.id },
             confidenceBasisPoints: 8734,
           },
         ],
@@ -228,7 +228,7 @@ describe('Phase 50 production service closure', () => {
     expect(successAudit.metadata).toEqual({ deterministicFailCount: 11, semanticFindingCount: 1 });
   });
 
-  it('converges semantic warning acknowledgement and records exactly one safe audit', async () => {
+  it('C07 converges concurrent identical warning acknowledgements to one row and ID', async () => {
     const f = await fixture();
     const run = await requestRevisionValidation(f.context, {
       version: '1.0.0',
@@ -252,6 +252,7 @@ describe('Phase 50 production service closure', () => {
         severity: 'WARNING',
         path: 'question[0]',
         messageKey: 'ambiguity.warning',
+        evidence: { identity: 'AMBIGUITY_V1', revisionId: f.revision.id },
         evaluatorVersion: 'local-disabled-v1',
       },
     });
@@ -318,6 +319,7 @@ describe('Phase 50 production service closure', () => {
         severity: 'WARNING',
         path: 'warning',
         messageKey: 'warning',
+        evidence: { identity: 'AMBIGUITY_V1', revisionId: f.revision.id },
         evaluatorVersion: 'local-disabled-v1',
       },
     });
@@ -333,6 +335,7 @@ describe('Phase 50 production service closure', () => {
         severity: 'INFO',
         path: 'info',
         messageKey: 'info',
+        evidence: { identity: 'AMBIGUITY_V1', revisionId: f.revision.id },
         evaluatorVersion: 'local-disabled-v1',
       },
     });
@@ -348,6 +351,7 @@ describe('Phase 50 production service closure', () => {
         severity: 'BLOCKING',
         path: 'blocking',
         messageKey: 'blocking',
+        evidence: { identity: 'AMBIGUITY_V1', revisionId: f.revision.id },
         evaluatorVersion: 'local-disabled-v1',
       },
     });
@@ -363,6 +367,7 @@ describe('Phase 50 production service closure', () => {
         severity: 'WARNING',
         path: 'alternate-warning',
         messageKey: 'alternate-warning',
+        evidence: { identity: 'AMBIGUITY_V1', revisionId: f.revision.id },
         evaluatorVersion: 'local-disabled-v1',
       },
     });
@@ -426,7 +431,7 @@ describe('Phase 50 production service closure', () => {
     }
   });
 
-  it('persists bounded semantic failure as one terminal run with a cleared lease and safe audit', async () => {
+  it('A03 persists a bounded evaluator failure audit without raw evaluator content', async () => {
     const f = await fixture();
     const requested = await requestRevisionValidation(f.context, {
       version: '1.0.0',
@@ -477,7 +482,7 @@ describe('Phase 50 production service closure', () => {
     });
   });
 
-  it('uses the real assertion for owned readiness, P5030 eligibility change, and fail-closed errors', async () => {
+  it('P11 re-checks persisted current source eligibility and blocks a revoked source', async () => {
     const f = await createGenerationFixture();
     const generated = await processGenerationRun(
       f.generationRunId,

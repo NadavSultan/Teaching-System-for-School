@@ -33,19 +33,22 @@ const expected = (from: string, to: string) => {
   expect(r.allowed).toBe(legal);
 };
 describe('Package 1B lifecycle matrix', () => {
-  it('PENDING to PENDING is rejected', () => expected('PENDING', 'PENDING'));
-  it('PENDING to PROCESSING is claimed', () => expected('PENDING', 'PROCESSING'));
-  it('PENDING to SUCCEEDED is rejected', () => expected('PENDING', 'SUCCEEDED'));
-  it('PENDING to FAILED is rejected', () => expected('PENDING', 'FAILED'));
-  it('PROCESSING to PENDING requires explicit stale attempt', () => {
+  it('L01 rejects PENDING to PENDING as an illegal pair', () => expected('PENDING', 'PENDING'));
+  it('L02 allows PENDING to PROCESSING as a claim', () => expected('PENDING', 'PROCESSING'));
+  it('L03 rejects PENDING to SUCCEEDED as an illegal pair', () => expected('PENDING', 'SUCCEEDED'));
+  it('L04 rejects PENDING to FAILED as an illegal pair', () => expected('PENDING', 'FAILED'));
+  it('L05 allows PROCESSING to PENDING only for an expired permitted retry', () => {
     expected('PROCESSING', 'PENDING');
     expect(
       decideValidationRunTransition({ from: 'PROCESSING', to: 'PENDING', stale: true }),
     ).toMatchObject({ allowed: false, reason: 'LEASE_NOT_STALE' });
   });
-  it('PROCESSING to PROCESSING is rejected', () => expected('PROCESSING', 'PROCESSING'));
-  it('D20 completion rejects absent duplicate reordered unknown and wrong-version execution sets', () => {
+  it('L06 rejects PROCESSING to PROCESSING as an illegal pair', () =>
+    expected('PROCESSING', 'PROCESSING'));
+  it('L07 allows PROCESSING to SUCCEEDED only with the exact complete evidence shape', () => {
     expected('PROCESSING', 'SUCCEEDED');
+  });
+  it('D20 rejects absent, reordered, unknown, wrong-version, and duplicate execution sets', () => {
     expect(
       decideValidationRunTransition({
         from: 'PROCESSING',
@@ -93,7 +96,7 @@ describe('Package 1B lifecycle matrix', () => {
       }),
     ).toMatchObject({ allowed: false, reason: 'SUCCESS_SHAPE_INVALID' });
   });
-  it('PROCESSING to FAILED requires safe failure shape', () => {
+  it('L08 allows PROCESSING to FAILED only with an exact safe failure shape', () => {
     expected('PROCESSING', 'FAILED');
     expect(
       decideValidationRunTransition({
@@ -112,12 +115,13 @@ describe('Package 1B lifecycle matrix', () => {
       }),
     ).toMatchObject({ allowed: false, reason: 'SUCCESS_SHAPE_INVALID' });
   });
-  it('SUCCEEDED to PENDING is terminally rejected', () => expected('SUCCEEDED', 'PENDING'));
-  it('SUCCEEDED to PROCESSING is terminally rejected', () => expected('SUCCEEDED', 'PROCESSING'));
-  it('SUCCEEDED to SUCCEEDED is terminally rejected', () => expected('SUCCEEDED', 'SUCCEEDED'));
-  it('SUCCEEDED to FAILED is terminally rejected', () => expected('SUCCEEDED', 'FAILED'));
-  it('FAILED to PENDING is terminally rejected', () => expected('FAILED', 'PENDING'));
-  it('FAILED to PROCESSING is terminally rejected', () => expected('FAILED', 'PROCESSING'));
-  it('FAILED to SUCCEEDED is terminally rejected', () => expected('FAILED', 'SUCCEEDED'));
-  it('FAILED to FAILED is terminally rejected', () => expected('FAILED', 'FAILED'));
+  it('L09 terminally rejects SUCCEEDED to PENDING', () => expected('SUCCEEDED', 'PENDING'));
+  it('L10 terminally rejects SUCCEEDED to PROCESSING', () => expected('SUCCEEDED', 'PROCESSING'));
+  it('L11 terminally rejects SUCCEEDED to SUCCEEDED', () => expected('SUCCEEDED', 'SUCCEEDED'));
+  it('L12 terminally rejects SUCCEEDED to FAILED', () => expected('SUCCEEDED', 'FAILED'));
+  it('L13 terminally rejects FAILED to PENDING and requires a new run', () =>
+    expected('FAILED', 'PENDING'));
+  it('L14 terminally rejects FAILED to PROCESSING', () => expected('FAILED', 'PROCESSING'));
+  it('L15 terminally rejects FAILED to SUCCEEDED', () => expected('FAILED', 'SUCCEEDED'));
+  it('L16 terminally rejects FAILED to FAILED', () => expected('FAILED', 'FAILED'));
 });
