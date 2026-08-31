@@ -2,17 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   validationAcknowledgementSchema,
   validationRequestSchema,
-  validationRuleIdSchema,
   validationRunStateSchema,
-  validationSeveritySchema,
 } from '../packages/contracts/src/index.js';
 import {
   canTransitionValidationRun,
   decideValidationReadiness,
   decideValidationRunTransition,
-  hasExactAnswerLeakage,
-  normalizeValidationText,
-  validationRules,
 } from '../packages/domain/src/index.js';
 import {
   DeterministicFakeSemanticEvaluator,

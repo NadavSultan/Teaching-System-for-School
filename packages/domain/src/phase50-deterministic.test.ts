@@ -193,7 +193,8 @@ describe('Package 1B deterministic matrix', () => {
     expectFails({}, [...validationRules]);
   });
   it('D04 required revision field absent fails strict contract', () => {
-    const { ownerOrganizationId: _ownerOrganizationId, ...withoutOwner } = snapshot();
+    const withoutOwner = { ...snapshot() };
+    Reflect.deleteProperty(withoutOwner, 'ownerOrganizationId');
     expectFails(withoutOwner, [...validationRules]);
   });
   it('missing strict field fails closed at contract boundary', () => {
