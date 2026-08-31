@@ -611,7 +611,7 @@ model ValidationRuleExecution {
   validationRunId  String                   @map("validation_run_id") @db.Uuid
   ruleDefinitionId String                   @map("rule_definition_id") @db.Uuid
   outcome          ValidationRuleOutcome
-  evidence         Json                     @default("{}")
+  evidence         Json
   createdAt        DateTime                 @default(now()) @map("created_at")
   validationRun    ValidationRun            @relation(fields: [validationRunId], references: [id], onDelete: Restrict)
   ruleDefinition   ValidationRuleDefinition @relation(fields: [ruleDefinitionId], references: [id], onDelete: Restrict)
@@ -652,7 +652,7 @@ model ValidationFinding {
   severity              ValidationSeverity
   path                  String                             @db.VarChar(500)
   messageKey            String                             @map("message_key") @db.VarChar(160)
-  evidence              Json                               @default("{}")
+  evidence              Json
   confidenceBasisPoints Int?                               @map("confidence_basis_points")
   ruleVersion           String?                            @map("rule_version") @db.VarChar(40)
   evaluatorVersion      String?                            @map("evaluator_version") @db.VarChar(40)

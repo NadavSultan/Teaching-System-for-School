@@ -29,7 +29,7 @@ CREATE INDEX "validation_runs_lease_idx" ON "validation_runs" ("state", "lease_e
 CREATE TABLE "validation_rule_executions" (
   "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(), "validation_run_id" UUID NOT NULL REFERENCES "validation_runs"("id") ON DELETE RESTRICT,
   "rule_definition_id" UUID NOT NULL REFERENCES "validation_rule_definitions"("id") ON DELETE RESTRICT, "outcome" "ValidationRuleOutcome" NOT NULL,
-  "evidence" JSONB NOT NULL DEFAULT '{}', "created_at" TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE ("validation_run_id", "rule_definition_id")
+  "evidence" JSONB NOT NULL, "created_at" TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE ("validation_run_id", "rule_definition_id")
 );
 CREATE TABLE "semantic_evaluations" (
   "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(), "validation_run_id" UUID NOT NULL UNIQUE REFERENCES "validation_runs"("id") ON DELETE RESTRICT,
@@ -42,7 +42,7 @@ CREATE TABLE "validation_findings" (
   "validation_run_id" UUID NOT NULL REFERENCES "validation_runs"("id") ON DELETE RESTRICT, "assessment_revision_id" UUID NOT NULL REFERENCES "assessment_revisions"("id") ON DELETE RESTRICT,
   "execution_id" UUID UNIQUE REFERENCES "validation_rule_executions"("id") ON DELETE RESTRICT, "semantic_evaluation_id" UUID REFERENCES "semantic_evaluations"("id") ON DELETE RESTRICT,
   "kind" "ValidationFindingKind" NOT NULL, "code" VARCHAR(120) NOT NULL, "category" VARCHAR(120) NOT NULL, "severity" "ValidationSeverity" NOT NULL,
-  "path" VARCHAR(500) NOT NULL, "message_key" VARCHAR(160) NOT NULL, "evidence" JSONB NOT NULL DEFAULT '{}',
+  "path" VARCHAR(500) NOT NULL, "message_key" VARCHAR(160) NOT NULL, "evidence" JSONB NOT NULL,
   "confidence_basis_points" INTEGER CHECK ("confidence_basis_points" IS NULL OR "confidence_basis_points" BETWEEN 0 AND 10000), "rule_version" VARCHAR(40), "evaluator_version" VARCHAR(40), "created_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK (("kind" = 'DETERMINISTIC' AND "execution_id" IS NOT NULL AND "semantic_evaluation_id" IS NULL AND "severity" = 'BLOCKING' AND "rule_version" IS NOT NULL AND "evaluator_version" IS NULL) OR ("kind" = 'SEMANTIC' AND "execution_id" IS NULL AND "semantic_evaluation_id" IS NOT NULL AND "rule_version" IS NULL AND "evaluator_version" IS NOT NULL))
 );
@@ -100,8 +100,11 @@ END; $$;
 CREATE TRIGGER phase50_validation_run_guard BEFORE INSERT OR UPDATE ON validation_runs FOR EACH ROW EXECUTE FUNCTION phase50_validation_run_guard();
 
 CREATE OR REPLACE FUNCTION phase50_execution_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE v_revision_id UUID; v_rule_id text;
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM validation_runs r JOIN validation_rule_definitions d ON d.id=NEW.rule_definition_id WHERE r.id=NEW.validation_run_id AND r.ruleset_version='v1' AND d.ruleset_version='v1' AND d.rule_version='1.0.0' AND d.deterministic_order BETWEEN 1 AND 11) THEN PERFORM phase50_raise('P5023','phase50 execution rule is unknown or wrong version'); END IF;
+  SELECT r.assessment_revision_id, d.rule_id INTO v_revision_id, v_rule_id FROM validation_runs r JOIN validation_rule_definitions d ON d.id=NEW.rule_definition_id WHERE r.id=NEW.validation_run_id AND r.ruleset_version='v1' AND d.ruleset_version='v1' AND d.rule_version='1.0.0' AND d.deterministic_order BETWEEN 1 AND 11;
+  IF v_revision_id IS NULL THEN PERFORM phase50_raise('P5023','phase50 execution rule is unknown or wrong version'); END IF;
+  IF NEW.evidence IS DISTINCT FROM jsonb_build_object('identity',v_rule_id,'revisionId',v_revision_id::text) THEN PERFORM phase50_raise('P5031','phase50 execution evidence identity is invalid'); END IF;
   RETURN NEW;
 END; $$;
 CREATE TRIGGER phase50_execution_guard BEFORE INSERT ON validation_rule_executions FOR EACH ROW EXECUTE FUNCTION phase50_execution_guard();
@@ -116,6 +119,7 @@ BEGIN
   IF NEW.kind='DETERMINISTIC' AND NOT EXISTS (SELECT 1 FROM validation_rule_executions e JOIN validation_runs r ON r.id=e.validation_run_id JOIN validation_rule_definitions d ON d.id=e.rule_definition_id WHERE e.id=NEW.execution_id AND e.validation_run_id=NEW.validation_run_id AND r.organization_id=NEW.organization_id AND r.assessment_revision_id=NEW.assessment_revision_id AND d.rule_version=NEW.rule_version AND NEW.severity='BLOCKING') THEN PERFORM phase50_raise('P5025','phase50 deterministic finding identity does not match execution'); END IF;
   IF NEW.kind='SEMANTIC' AND NOT EXISTS (SELECT 1 FROM semantic_evaluations s JOIN validation_runs r ON r.id=s.validation_run_id WHERE s.id=NEW.semantic_evaluation_id AND s.validation_run_id=NEW.validation_run_id AND r.organization_id=NEW.organization_id AND r.assessment_revision_id=NEW.assessment_revision_id AND s.evaluator_version=NEW.evaluator_version AND NEW.severity IN ('BLOCKING','WARNING','INFO')) THEN PERFORM phase50_raise('P5026','phase50 semantic finding identity does not match evaluation'); END IF;
   IF NEW.kind='SEMANTIC' AND NEW.category NOT IN ('HEBREW_CORRECTNESS','AMBIGUITY','ANSWER_VALIDITY','DIFFICULTY_FIT','CURRICULUM_FIT','DUPLICATION','ANSWER_LEAKAGE') THEN PERFORM phase50_raise('P5027','phase50 semantic finding category is not registered'); END IF;
+  IF NEW.evidence IS DISTINCT FROM jsonb_build_object('identity',NEW.code,'revisionId',NEW.assessment_revision_id::text) THEN PERFORM phase50_raise('P5032','phase50 finding evidence identity is invalid'); END IF;
   RETURN NEW;
 END; $$;
 CREATE TRIGGER phase50_finding_guard BEFORE INSERT ON validation_findings FOR EACH ROW EXECUTE FUNCTION phase50_finding_guard();
@@ -149,11 +153,13 @@ BEGIN
       AND (SELECT count(*) FROM validation_rule_executions e JOIN validation_rule_definitions d ON d.id=e.rule_definition_id WHERE e.validation_run_id=r.id AND d.ruleset_version='v1' AND d.rule_version='1.0.0' AND d.deterministic_order BETWEEN 1 AND 11)=11
       AND (SELECT count(DISTINCT d.rule_id) FROM validation_rule_executions e JOIN validation_rule_definitions d ON d.id=e.rule_definition_id WHERE e.validation_run_id=r.id AND d.ruleset_version='v1' AND d.rule_version='1.0.0' AND d.deterministic_order BETWEEN 1 AND 11)=11
       AND NOT EXISTS (SELECT 1 FROM validation_rule_definitions d WHERE d.ruleset_version='v1' AND d.rule_version='1.0.0' AND d.deterministic_order BETWEEN 1 AND 11 AND NOT EXISTS (SELECT 1 FROM validation_rule_executions e WHERE e.validation_run_id=r.id AND e.rule_definition_id=d.id))
+      AND NOT EXISTS (SELECT 1 FROM validation_rule_executions e JOIN validation_rule_definitions d ON d.id=e.rule_definition_id WHERE e.validation_run_id=r.id AND e.evidence IS DISTINCT FROM jsonb_build_object('identity',d.rule_id,'revisionId',r.assessment_revision_id::text))
       AND r.deterministic_pass_count=(SELECT count(*) FROM validation_rule_executions e WHERE e.validation_run_id=r.id AND e.outcome='PASS')
       AND r.deterministic_fail_count=(SELECT count(*) FROM validation_rule_executions e WHERE e.validation_run_id=r.id AND e.outcome='FAIL')
       AND (SELECT count(*) FROM semantic_evaluations s WHERE s.validation_run_id=r.id)=1
       AND (SELECT count(*) FROM semantic_evaluations s WHERE s.validation_run_id=r.id AND s.state='SUCCEEDED' AND s.evaluator_version='local-disabled-v1' AND s.prompt_version='validation-prompt-v1' AND s.model_configuration_version='local-none-v1' AND s.schema_version='1.0.0')=1
       AND r.semantic_finding_count=(SELECT count(*) FROM validation_findings f WHERE f.validation_run_id=r.id AND f.kind='SEMANTIC')
+      AND NOT EXISTS (SELECT 1 FROM validation_findings f WHERE f.validation_run_id=r.id AND f.evidence IS DISTINCT FROM jsonb_build_object('identity',f.code,'revisionId',r.assessment_revision_id::text))
       AND NOT EXISTS (SELECT 1 FROM validation_findings f WHERE f.validation_run_id=r.id AND ((f.kind='DETERMINISTIC' AND NOT EXISTS (SELECT 1 FROM validation_rule_executions e JOIN validation_rule_definitions d ON d.id=e.rule_definition_id WHERE e.id=f.execution_id AND e.validation_run_id=r.id AND r.organization_id=f.organization_id AND r.assessment_revision_id=f.assessment_revision_id AND d.ruleset_version='v1' AND d.rule_version='1.0.0' AND f.rule_version=d.rule_version AND f.code=d.rule_id AND f.category=d.category AND f.severity='BLOCKING' AND NULLIF(f.message_key,'') IS NOT NULL)) OR (f.kind='SEMANTIC' AND NOT EXISTS (SELECT 1 FROM semantic_evaluations s WHERE s.id=f.semantic_evaluation_id AND s.validation_run_id=r.id AND r.organization_id=f.organization_id AND r.assessment_revision_id=f.assessment_revision_id AND s.evaluator_version=f.evaluator_version AND f.category IN ('HEBREW_CORRECTNESS','AMBIGUITY','ANSWER_VALIDITY','DIFFICULTY_FIT','CURRICULUM_FIT','DUPLICATION','ANSWER_LEAKAGE') AND f.severity IN ('BLOCKING','WARNING','INFO') AND NULLIF(f.code,'') IS NOT NULL AND NULLIF(f.message_key,'') IS NOT NULL))))
   ) OR EXISTS (SELECT 1 FROM validation_findings f WHERE f.validation_run_id=v_run AND (f.severity='BLOCKING' OR (f.severity='WARNING' AND NOT EXISTS (SELECT 1 FROM validation_finding_acknowledgements a JOIN users u ON u.id=a.actor_user_id JOIN memberships m ON m.user_id=u.id WHERE a.finding_id=f.id AND a.organization_id=f.organization_id AND u.status='ACTIVE' AND m.organization_id=f.organization_id AND m.status='ACTIVE')))) THEN RAISE EXCEPTION 'phase50 revision is not approvable' USING ERRCODE='P5029'; END IF;
   IF EXISTS (

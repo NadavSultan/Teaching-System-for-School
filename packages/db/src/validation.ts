@@ -31,6 +31,8 @@ const RESPONSE_SCHEMA_HASH = createHash('sha256')
 type Db = PrismaClient | Prisma.TransactionClient;
 
 async function reloadValidationContext(context: AccessContext, client: Db): Promise<AccessContext> {
+  if (!context?.principal?.userId || !context.organizationId)
+    throw new Error('Resource not found or unavailable');
   const membership = await client.membership.findUnique({
     where: {
       userId_organizationId: {
@@ -76,17 +78,16 @@ function status(run: any) {
 }
 
 function resultEvidence(value: unknown, identity: string, revisionId: string) {
-  const record = value && typeof value === 'object' && !Array.isArray(value) ? value : null;
-  return {
-    identity:
-      record && typeof (record as { identity?: unknown }).identity === 'string'
-        ? (record as { identity: string }).identity
-        : identity,
-    revisionId:
-      record && typeof (record as { revisionId?: unknown }).revisionId === 'string'
-        ? (record as { revisionId: string }).revisionId
-        : revisionId,
-  };
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new Error('Validation evidence integrity mismatch');
+  const record = value as Record<string, unknown>;
+  if (
+    Object.keys(record).sort().join(',') !== 'identity,revisionId' ||
+    record.identity !== identity ||
+    record.revisionId !== revisionId
+  )
+    throw new Error('Validation evidence integrity mismatch');
+  return { identity, revisionId };
 }
 
 async function ownedRun(context: AccessContext, runId: string, client: Db) {
@@ -405,6 +406,15 @@ export async function requestRevisionValidation(
             Array<{ id: string }>
           >`SELECT r.id FROM assessment_revisions r JOIN assessments a ON a.id = r.assessment_id WHERE r.id = ${parsed.assessmentRevisionId}::uuid AND r.assessment_id = ${parsed.assessmentId}::uuid AND a.organization_id = ${trustedContext.organizationId}::uuid AND r.state = 'FINALIZED' FOR UPDATE`;
           if (!revisionRows[0]) throw new Error('Resource not found or unavailable');
+          const reusedKey = await tx.validationRun.findFirst({
+            where: {
+              organizationId: trustedContext.organizationId,
+              requestingUserId: trustedContext.principal.userId,
+              idempotencyKey: parsed.idempotencyKey,
+            },
+          });
+          if (reusedKey && reusedKey.requestFingerprint !== requestFingerprint)
+            throw new IdempotencyConflictError();
           const existing = await tx.validationRun.findUnique({
             where: {
               organizationId_assessmentRevisionId_idempotencyKey: {
@@ -709,10 +719,21 @@ export async function processValidationRun(
     if (!run || run.state === 'SUCCEEDED' || run.state === 'FAILED')
       return run ? status(run) : null;
     const now = new Date();
+    if (run.state === 'PROCESSING') {
+      if (!run.leaseExpiresAt || run.leaseExpiresAt >= now) return status(run);
+      await tx.validationRun.update({
+        where: { id: run.id },
+        data: {
+          state: 'PENDING',
+          processingStartedAt: null,
+          leaseExpiresAt: null,
+        },
+      });
+    }
     const claimedRows = await tx.validationRun.updateMany({
       where: {
         id: run.id,
-        OR: [{ state: 'PENDING' }, { state: 'PROCESSING', leaseExpiresAt: { lt: now } }],
+        state: 'PENDING',
       },
       data: {
         state: 'PROCESSING',
@@ -798,9 +819,10 @@ export async function processValidationRun(
             validationRunId: claimed.id,
             ruleDefinitionId: rule.id,
             outcome: byRule.get(rule.ruleId as never)?.outcome ?? 'FAIL',
-            evidence: (byRule.get(rule.ruleId as never)?.evidence ?? {
-              missingRuleResult: true,
-            }) as Prisma.InputJsonValue,
+            evidence: {
+              identity: rule.ruleId,
+              revisionId: claimed.assessmentRevisionId,
+            },
           },
         }),
       ),
@@ -823,7 +845,10 @@ export async function processValidationRun(
                   severity: 'BLOCKING',
                   path: result.path,
                   messageKey: result.messageKey!,
-                  evidence: result.evidence as Prisma.InputJsonValue,
+                  evidence: {
+                    identity: rule.ruleId,
+                    revisionId: claimed.assessmentRevisionId,
+                  },
                   ruleVersion: rule.ruleVersion,
                 },
               }),

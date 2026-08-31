@@ -178,6 +178,21 @@ export const validationResultSchema = z
   })
   .strict()
   .superRefine((v, c) => {
+    for (const execution of v.executions)
+      if (
+        execution.evidence.identity !== execution.ruleId ||
+        execution.evidence.revisionId !== v.status.assessmentRevisionId
+      )
+        c.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'execution evidence identity mismatch',
+        });
+    for (const finding of v.findings)
+      if (
+        finding.evidence.identity !== finding.code ||
+        finding.evidence.revisionId !== v.status.assessmentRevisionId
+      )
+        c.addIssue({ code: z.ZodIssueCode.custom, message: 'finding evidence identity mismatch' });
     if (v.status.state !== 'SUCCEEDED') return;
     const p = v.executions.filter((x) => x.outcome === 'PASS').length,
       s = v.findings.filter((x) => x.kind === 'SEMANTIC').length;

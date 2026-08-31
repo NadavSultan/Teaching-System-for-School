@@ -148,6 +148,10 @@ export function parseSemanticEvaluatorOutput(
       raw.messageKey.length === 0 ||
       raw.messageKey.length > 160 ||
       !isRecord(raw.evidence) ||
+      !exactKeys(raw.evidence, ['identity', 'revisionId']) ||
+      typeof raw.evidence.identity !== 'string' ||
+      raw.evidence.identity.length === 0 ||
+      raw.evidence.identity !== raw.code ||
       !bounded(raw.evidence, revisionId) ||
       raw.evidence.revisionId !== revisionId ||
       (raw.confidenceBasisPoints !== undefined &&
