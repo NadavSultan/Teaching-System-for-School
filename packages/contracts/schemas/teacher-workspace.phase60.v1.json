@@ -1,0 +1,229 @@
+{
+  "$ref": "#/definitions/TeacherWorkspacePhase60V1",
+  "definitions": {
+    "TeacherWorkspacePhase60V1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "assessment": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "const": "1.0.0"
+            },
+            "id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "WORKSHEET",
+                "TEST"
+              ]
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "latestRevisionNumber": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "latestRevisionId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/assessment/properties/id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "latestApprovalRevisionId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/assessment/properties/id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "version",
+            "id",
+            "type",
+            "title",
+            "latestRevisionNumber",
+            "latestRevisionId",
+            "latestApprovalRevisionId",
+            "updatedAt"
+          ],
+          "additionalProperties": false
+        },
+        "revision": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "const": "1.0.0"
+            },
+            "id": {
+              "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/assessment/properties/id"
+            },
+            "assessmentId": {
+              "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/assessment/properties/id"
+            },
+            "revisionNumber": {
+              "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/assessment/properties/latestRevisionNumber/anyOf/0"
+            },
+            "curriculumVersionId": {
+              "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/assessment/properties/id"
+            },
+            "scoringMode": {
+              "type": "string",
+              "enum": [
+                "NONE",
+                "POINTS"
+              ]
+            },
+            "totalScoreUnits": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000000
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "finalized": {
+              "type": "boolean",
+              "const": true
+            },
+            "curriculumNodeIds": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/assessment/properties/id"
+              },
+              "maxItems": 1000
+            },
+            "sections": {
+              "type": "array",
+              "items": {},
+              "maxItems": 100
+            },
+            "baseRevisionId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/assessment/properties/id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "version",
+            "id",
+            "assessmentId",
+            "revisionNumber",
+            "curriculumVersionId",
+            "scoringMode",
+            "totalScoreUnits",
+            "finalized",
+            "curriculumNodeIds",
+            "sections",
+            "baseRevisionId"
+          ],
+          "additionalProperties": false
+        },
+        "history": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/assessment/properties/id"
+              },
+              "assessmentId": {
+                "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/assessment/properties/id"
+              },
+              "revisionNumber": {
+                "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/assessment/properties/latestRevisionNumber/anyOf/0"
+              },
+              "baseRevisionId": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/assessment/properties/id"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "approvedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "isLatest": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "assessmentId",
+              "revisionNumber",
+              "baseRevisionId",
+              "createdAt",
+              "approvedAt",
+              "isLatest"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 1000
+        }
+      },
+      "required": [
+        "version",
+        "assessment",
+        "revision",
+        "history"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

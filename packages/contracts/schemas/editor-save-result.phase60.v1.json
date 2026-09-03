@@ -1,0 +1,37 @@
+{
+  "$ref": "#/definitions/EditorSaveResultPhase60V1",
+  "definitions": {
+    "EditorSaveResultPhase60V1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "assessmentId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "revisionId": {
+          "$ref": "#/definitions/EditorSaveResultPhase60V1/properties/assessmentId"
+        },
+        "revisionNumber": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "baseRevisionId": {
+          "$ref": "#/definitions/EditorSaveResultPhase60V1/properties/assessmentId"
+        }
+      },
+      "required": [
+        "version",
+        "assessmentId",
+        "revisionId",
+        "revisionNumber",
+        "baseRevisionId"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

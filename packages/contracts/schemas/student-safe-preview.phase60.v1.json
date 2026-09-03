@@ -1,0 +1,103 @@
+{
+  "$ref": "#/definitions/StudentSafePreviewPhase60V1",
+  "definitions": {
+    "StudentSafePreviewPhase60V1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "assessmentId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "revisionId": {
+          "$ref": "#/definitions/StudentSafePreviewPhase60V1/properties/assessmentId"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "order": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000
+              },
+              "questions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "logicalId": {
+                      "$ref": "#/definitions/StudentSafePreviewPhase60V1/properties/assessmentId"
+                    },
+                    "prompt": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 20000
+                    },
+                    "instructions": {
+                      "type": "string",
+                      "maxLength": 5000
+                    },
+                    "order": {
+                      "$ref": "#/definitions/StudentSafePreviewPhase60V1/properties/sections/items/properties/order"
+                    },
+                    "scoreUnits": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 1000000
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "logicalId",
+                    "prompt",
+                    "order",
+                    "scoreUnits"
+                  ],
+                  "additionalProperties": false
+                },
+                "maxItems": 1000
+              }
+            },
+            "required": [
+              "title",
+              "order",
+              "questions"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 100
+        }
+      },
+      "required": [
+        "version",
+        "assessmentId",
+        "revisionId",
+        "title",
+        "sections"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

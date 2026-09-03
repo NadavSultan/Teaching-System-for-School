@@ -1,0 +1,35 @@
+{
+  "$ref": "#/definitions/QuestionRegenerationStatusPhase60V1",
+  "definitions": {
+    "QuestionRegenerationStatusPhase60V1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "generationRunId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "PENDING",
+            "PROCESSING",
+            "SUCCEEDED",
+            "INSUFFICIENT_CONTEXT",
+            "FAILED"
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "generationRunId",
+        "state"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

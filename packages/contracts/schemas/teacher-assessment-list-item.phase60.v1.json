@@ -1,0 +1,77 @@
+{
+  "$ref": "#/definitions/TeacherAssessmentListItemPhase60V1",
+  "definitions": {
+    "TeacherAssessmentListItemPhase60V1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "WORKSHEET",
+            "TEST"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "latestRevisionNumber": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latestRevisionId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TeacherAssessmentListItemPhase60V1/properties/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latestApprovalRevisionId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TeacherAssessmentListItemPhase60V1/properties/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "version",
+        "id",
+        "type",
+        "title",
+        "latestRevisionNumber",
+        "latestRevisionId",
+        "latestApprovalRevisionId",
+        "updatedAt"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

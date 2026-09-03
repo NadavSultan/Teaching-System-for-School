@@ -131,6 +131,7 @@ model User {
   generationRuns             GenerationRun[]
   validationRuns             ValidationRun[]
   validationAcknowledgements ValidationFindingAcknowledgement[]
+  assessmentApprovals        AssessmentApproval[]
 
   @@map("users")
 }
@@ -162,6 +163,7 @@ model Organization {
   validationRuns             ValidationRun[]
   validationFindings         ValidationFinding[]
   validationAcknowledgements ValidationFindingAcknowledgement[]
+  assessmentApprovals        AssessmentApproval[]
   knowledgeSources           KnowledgeSource[]
   auditSourceEvents          SourceLifecycleEvent[]
 
@@ -523,6 +525,7 @@ model Assessment {
   revisions       AssessmentRevision[]
   generationRuns  GenerationRun[]
   validationRuns  ValidationRun[]
+  approvals       AssessmentApproval[]
 
   @@map("assessments")
 }
@@ -546,9 +549,14 @@ model AssessmentRevision {
   outputGenerationRuns GenerationRun[]              @relation("GenerationOutputRevision")
   validationRuns       ValidationRun[]
   validationFindings   ValidationFinding[]
+  baseRevisionId       String?                      @map("base_revision_id") @db.Uuid
+  baseRevision         AssessmentRevision?          @relation("TeacherRevisionLineage", fields: [baseRevisionId], references: [id], onDelete: Restrict)
+  derivedRevisions     AssessmentRevision[]         @relation("TeacherRevisionLineage")
+  approvals            AssessmentApproval[]
 
   @@unique([assessmentId, revisionNumber])
   @@unique([assessmentId, idempotencyKey])
+  @@index([assessmentId, baseRevisionId, revisionNumber])
   @@map("assessment_revisions")
 }
 
@@ -598,6 +606,7 @@ model ValidationRun {
   executions             ValidationRuleExecution[]
   semanticEvaluation     SemanticEvaluation?
   findings               ValidationFinding[]
+  approvals              AssessmentApproval[]
 
   @@unique([organizationId, assessmentRevisionId, revisionSequence])
   @@unique([organizationId, assessmentRevisionId, idempotencyKey])
@@ -712,6 +721,7 @@ model AssessmentSection {
 model AssessmentQuestion {
   id                   String                  @id @default(uuid()) @db.Uuid
   sectionId            String                  @map("section_id") @db.Uuid
+  logicalId            String                  @default(uuid()) @map("logical_id") @db.Uuid
   key                  String
   type                 String
   prompt               String
@@ -727,6 +737,33 @@ model AssessmentQuestion {
   targetGenerationRuns GenerationRun[]         @relation("GenerationTargetQuestion")
 
   @@map("assessment_questions")
+}
+
+model AssessmentApproval {
+  id                       String             @id @default(uuid()) @db.Uuid
+  organizationId           String             @map("organization_id") @db.Uuid
+  assessmentId             String             @map("assessment_id") @db.Uuid
+  assessmentRevisionId     String             @map("assessment_revision_id") @db.Uuid
+  validationRunId          String             @map("validation_run_id") @db.Uuid
+  approvingUserId          String             @map("approving_user_id") @db.Uuid
+  approvalSequence         Int                @map("approval_sequence")
+  idempotencyKey           String             @map("idempotency_key") @db.VarChar(255)
+  requestFingerprint       String             @map("request_fingerprint") @db.Char(64)
+  contractVersion          String             @map("contract_version") @db.VarChar(40)
+  validationRulesetVersion String             @map("validation_ruleset_version") @db.VarChar(40)
+  createdAt                DateTime           @default(now()) @map("created_at")
+  organization             Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  assessment               Assessment         @relation(fields: [assessmentId], references: [id], onDelete: Restrict)
+  assessmentRevision       AssessmentRevision @relation(fields: [assessmentRevisionId], references: [id], onDelete: Restrict)
+  validationRun            ValidationRun      @relation(fields: [validationRunId], references: [id], onDelete: Restrict)
+  approvingUser            User               @relation(fields: [approvingUserId], references: [id], onDelete: Restrict)
+
+  @@unique([assessmentRevisionId])
+  @@unique([assessmentId, approvalSequence])
+  @@unique([organizationId, approvingUserId, idempotencyKey])
+  @@index([organizationId, assessmentId, createdAt])
+  @@index([assessmentId, approvalSequence])
+  @@map("assessment_approvals")
 }
 
 model AssessmentSubQuestion {

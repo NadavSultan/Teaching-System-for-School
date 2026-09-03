@@ -1,6 +1,7 @@
 import { z } from 'zod';
 export { z } from 'zod';
 export * from './phase50.js';
+export * from './phase60.js';
 
 export const CONTRACT_VERSION = '1.0.0' as const;
 export const uuidSchema = z.string().uuid();

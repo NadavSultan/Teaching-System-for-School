@@ -45,6 +45,18 @@ import {
   validationReadinessSchema,
   validationAcknowledgementSchema,
   semanticCategorySchema,
+  teacherAssessmentListItemSchema,
+  teacherAssessmentListResponseSchema,
+  teacherWorkspaceSchema,
+  editorSaveRequestSchema,
+  editorSaveResultSchema,
+  teacherQuestionRegenerationRequestSchema,
+  teacherQuestionRegenerationStatusSchema,
+  teacherQuestionRegenerationResultSchema,
+  studentSafePreviewSchema,
+  approvalRequestSchema,
+  approvalResultSchema,
+  approvalStatusSchema,
 } from '../dist/index.js';
 
 const outputDirectory = join(dirname(fileURLToPath(import.meta.url)), '..', 'schemas');
@@ -123,6 +135,38 @@ const schemas = [
     'ValidationAcknowledgementV1',
   ],
   ['semantic-category.v1.json', semanticCategorySchema, 'SemanticCategoryV1'],
+  [
+    'teacher-assessment-list-item.phase60.v1.json',
+    teacherAssessmentListItemSchema,
+    'TeacherAssessmentListItemPhase60V1',
+  ],
+  [
+    'teacher-assessment-list-response.phase60.v1.json',
+    teacherAssessmentListResponseSchema,
+    'TeacherAssessmentListResponsePhase60V1',
+  ],
+  ['teacher-workspace.phase60.v1.json', teacherWorkspaceSchema, 'TeacherWorkspacePhase60V1'],
+  ['editor-save-request.phase60.v1.json', editorSaveRequestSchema, 'EditorSaveRequestPhase60V1'],
+  ['editor-save-result.phase60.v1.json', editorSaveResultSchema, 'EditorSaveResultPhase60V1'],
+  [
+    'question-regeneration-request.phase60.v1.json',
+    teacherQuestionRegenerationRequestSchema,
+    'QuestionRegenerationRequestPhase60V1',
+  ],
+  [
+    'question-regeneration-status.phase60.v1.json',
+    teacherQuestionRegenerationStatusSchema,
+    'QuestionRegenerationStatusPhase60V1',
+  ],
+  [
+    'question-regeneration-result.phase60.v1.json',
+    teacherQuestionRegenerationResultSchema,
+    'QuestionRegenerationResultPhase60V1',
+  ],
+  ['student-safe-preview.phase60.v1.json', studentSafePreviewSchema, 'StudentSafePreviewPhase60V1'],
+  ['approval-request.phase60.v1.json', approvalRequestSchema, 'ApprovalRequestPhase60V1'],
+  ['approval-result.phase60.v1.json', approvalResultSchema, 'ApprovalResultPhase60V1'],
+  ['approval-status.phase60.v1.json', approvalStatusSchema, 'ApprovalStatusPhase60V1'],
 ];
 let drift = false;
 for (const [file, schema, name] of schemas) {

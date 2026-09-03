@@ -1,0 +1,38 @@
+{
+  "$ref": "#/definitions/QuestionRegenerationRequestPhase60V1",
+  "definitions": {
+    "QuestionRegenerationRequestPhase60V1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "assessmentId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "baseRevisionId": {
+          "$ref": "#/definitions/QuestionRegenerationRequestPhase60V1/properties/assessmentId"
+        },
+        "logicalQuestionId": {
+          "$ref": "#/definitions/QuestionRegenerationRequestPhase60V1/properties/assessmentId"
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        }
+      },
+      "required": [
+        "version",
+        "assessmentId",
+        "baseRevisionId",
+        "logicalQuestionId",
+        "idempotencyKey"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

@@ -1,0 +1,51 @@
+{
+  "$ref": "#/definitions/ApprovalStatusPhase60V1",
+  "definitions": {
+    "ApprovalStatusPhase60V1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "assessmentRevisionId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "approved": {
+          "type": "boolean"
+        },
+        "approvalId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalStatusPhase60V1/properties/assessmentRevisionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "approvalSequence": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "assessmentRevisionId",
+        "approved",
+        "approvalId",
+        "approvalSequence"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}
