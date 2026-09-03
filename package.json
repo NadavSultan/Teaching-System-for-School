@@ -21,6 +21,7 @@
     "test-integration:phase40-upgrade": "node scripts/phase40-upgrade-test.mjs",
     "verify:phase40": "node scripts/verify-phase40-control.mjs",
     "verify:phase50": "node scripts/verify-phase50-control.mjs",
+    "verify:phase60": "node scripts/verify-phase60-control.mjs",
     "test-integration:phase50-upgrade": "node scripts/phase50-upgrade-test.mjs",
     "live-evaluation:preflight": "node scripts/live-evaluation-preflight.mjs",
     "test:architecture": "vitest run tests/architecture.test.ts",
