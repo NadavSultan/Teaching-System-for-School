@@ -102,6 +102,7 @@ CREATE TRIGGER phase50_validation_run_guard BEFORE INSERT OR UPDATE ON validatio
 CREATE OR REPLACE FUNCTION phase50_execution_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE v_revision_id UUID; v_rule_id text;
 BEGIN
+  IF NOT EXISTS (SELECT 1 FROM validation_runs r WHERE r.id=NEW.validation_run_id AND r.state='PROCESSING') THEN PERFORM phase50_raise('P5033','phase50 evidence requires PROCESSING validation run'); END IF;
   SELECT r.assessment_revision_id, d.rule_id INTO v_revision_id, v_rule_id FROM validation_runs r JOIN validation_rule_definitions d ON d.id=NEW.rule_definition_id WHERE r.id=NEW.validation_run_id AND r.ruleset_version='v1' AND d.ruleset_version='v1' AND d.rule_version='1.0.0' AND d.deterministic_order BETWEEN 1 AND 11;
   IF v_revision_id IS NULL THEN PERFORM phase50_raise('P5023','phase50 execution rule is unknown or wrong version'); END IF;
   IF NEW.evidence IS DISTINCT FROM jsonb_build_object('identity',v_rule_id,'revisionId',v_revision_id::text) THEN PERFORM phase50_raise('P5031','phase50 execution evidence identity is invalid'); END IF;
@@ -110,12 +111,14 @@ END; $$;
 CREATE TRIGGER phase50_execution_guard BEFORE INSERT ON validation_rule_executions FOR EACH ROW EXECUTE FUNCTION phase50_execution_guard();
 CREATE OR REPLACE FUNCTION phase50_semantic_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+  IF NOT EXISTS (SELECT 1 FROM validation_runs r WHERE r.id=NEW.validation_run_id AND r.state='PROCESSING') THEN PERFORM phase50_raise('P5033','phase50 evidence requires PROCESSING validation run'); END IF;
   IF NOT EXISTS (SELECT 1 FROM validation_runs r WHERE r.id=NEW.validation_run_id AND r.ruleset_version='v1' AND r.evaluator_version='local-disabled-v1') OR NEW.evaluator_version<>'local-disabled-v1' OR NEW.prompt_version<>'validation-prompt-v1' OR NEW.model_configuration_version<>'local-none-v1' OR NEW.schema_version<>'1.0.0' OR (NEW.state='FAILED' AND NEW.failure_code IS NULL) OR (NEW.state='SUCCEEDED' AND NEW.failure_code IS NOT NULL) THEN PERFORM phase50_raise('P5024','phase50 semantic evaluation configuration or terminal shape is invalid'); END IF;
   RETURN NEW;
 END; $$;
 CREATE TRIGGER phase50_semantic_guard BEFORE INSERT ON semantic_evaluations FOR EACH ROW EXECUTE FUNCTION phase50_semantic_guard();
 CREATE OR REPLACE FUNCTION phase50_finding_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+  IF NOT EXISTS (SELECT 1 FROM validation_runs r WHERE r.id=NEW.validation_run_id AND r.state='PROCESSING') THEN PERFORM phase50_raise('P5033','phase50 evidence requires PROCESSING validation run'); END IF;
   IF NEW.kind='DETERMINISTIC' AND NOT EXISTS (SELECT 1 FROM validation_rule_executions e JOIN validation_runs r ON r.id=e.validation_run_id JOIN validation_rule_definitions d ON d.id=e.rule_definition_id WHERE e.id=NEW.execution_id AND e.validation_run_id=NEW.validation_run_id AND r.organization_id=NEW.organization_id AND r.assessment_revision_id=NEW.assessment_revision_id AND d.rule_version=NEW.rule_version AND NEW.severity='BLOCKING') THEN PERFORM phase50_raise('P5025','phase50 deterministic finding identity does not match execution'); END IF;
   IF NEW.kind='SEMANTIC' AND NOT EXISTS (SELECT 1 FROM semantic_evaluations s JOIN validation_runs r ON r.id=s.validation_run_id WHERE s.id=NEW.semantic_evaluation_id AND s.validation_run_id=NEW.validation_run_id AND r.organization_id=NEW.organization_id AND r.assessment_revision_id=NEW.assessment_revision_id AND s.evaluator_version=NEW.evaluator_version AND NEW.severity IN ('BLOCKING','WARNING','INFO')) THEN PERFORM phase50_raise('P5026','phase50 semantic finding identity does not match evaluation'); END IF;
   IF NEW.kind='SEMANTIC' AND NEW.category NOT IN ('HEBREW_CORRECTNESS','AMBIGUITY','ANSWER_VALIDITY','DIFFICULTY_FIT','CURRICULUM_FIT','DUPLICATION','ANSWER_LEAKAGE') THEN PERFORM phase50_raise('P5027','phase50 semantic finding category is not registered'); END IF;

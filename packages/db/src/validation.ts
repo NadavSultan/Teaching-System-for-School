@@ -615,6 +615,7 @@ export async function getRevisionValidationReadiness(
   assessmentId: string,
   assessmentRevisionId: string,
   client: PrismaClient = prisma,
+  onBeforeApprovabilityAssertion: () => void = () => undefined,
 ): Promise<ValidationReadiness> {
   return client.$transaction(async (tx) => {
     const trustedContext = await reloadValidationContext(context, tx);
@@ -673,6 +674,7 @@ export async function getRevisionValidationReadiness(
       reasonCode = 'VALIDATION_FAILED';
     if (!reasonCode && run) {
       try {
+        onBeforeApprovabilityAssertion();
         const rows = await tx.$queryRaw<
           Array<{ assert_revision_approvable: string }>
         >`SELECT assert_revision_approvable(${trustedContext.organizationId}::uuid, ${assessmentRevisionId}::uuid)`;
