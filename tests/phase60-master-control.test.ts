@@ -34,9 +34,12 @@ describe('Phase 60 protected master control', () => {
     expect(qaPlan).toContain('Grade 7–9');
   });
 
-  it('requires autonomous execution through all packages and the complete final gate', () => {
-    expect(handoff).toContain('Execute P60-0 through P60-8');
-    expect(handoff).toContain('Do not return control after a package');
+  it('requires five sequential sessions and reserves the complete final gate for Session 5', () => {
+    expect(controlPack).toContain('five sequential executor sessions');
+    expect(controlPack).toContain('1 — Foundation');
+    expect(controlPack).toContain('5 — Final Closure');
+    expect(handoff).toContain('Do not enter a later session');
+    expect(handoff).toContain('Session 5 alone');
     expect(handoff).toContain('Do not push, merge, deploy, rewrite history, self-approve');
     expect(controlPack).toContain('MATRIX_MANIFEST=125');
     expect(controlPack).toContain('test-integration:phase60-upgrade');

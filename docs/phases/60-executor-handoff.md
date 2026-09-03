@@ -40,11 +40,11 @@ Read every governing/protected file listed in the Control Pack, plus all product
 9. Implement all 125 named cases as explicit permanent tests with real arrangements and exact assertions. No callback/proxy acceptance table, skip, todo, only, or expected-failure case.
 10. Capture real API/worker/browser logging surfaces for redaction evidence; string inspection of a fake payload alone is insufficient.
 
-## Autonomous packages
+## Sequential session assignment
 
-Execute P60-0 through P60-8 in the exact order defined by the Control Pack. After each package, inspect the diff and run focused gates, then continue automatically. Do not return control after a package, after a test run, or after an ordinary failure.
+The master dispatch prompt specifies one of the five authorized sessions and its exact package range. Execute every package in that range in the Control Pack's order. After each assigned package, inspect the diff and run focused gates, then continue automatically to the next assigned package. Do not enter a later session's package, return progress-only output, or ask for continuation.
 
-Use the mechanical pre-report stop. Do not create or edit `docs/phases/60-implementation-report.md` until all eight stop conditions pass with inspected output. Then run the complete final gate, create coherent forward commits, create one final report-only commit, and leave the branch clean.
+Sessions 1–4 end with focused evidence, forward commits, and a clean tree, using status `READY FOR NEXT PHASE 60 SESSION`. Session 5 alone uses the mechanical pre-report stop, runs the complete final gate, creates the final report-only commit, and may use `READY FOR INDEPENDENT PHASE 60 REVIEW`.
 
 ## Stop policy
 
@@ -56,5 +56,6 @@ Do not push, merge, deploy, rewrite history, self-approve, or start Phase 70.
 
 Final status must be exactly one of:
 
+- `READY FOR NEXT PHASE 60 SESSION` for Sessions 1–4
 - `READY FOR INDEPENDENT PHASE 60 REVIEW`
 - `BLOCKED`

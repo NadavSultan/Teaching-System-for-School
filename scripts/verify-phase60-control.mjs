@@ -20,9 +20,9 @@ const protectedDigests = {
   'docs/phases/50-phase-review.md':
     '65034e103503e86b7a23cc1afca692e680be74ecc433dba3aed59ee411d222f0',
   'docs/phases/60-phase-control-pack.md':
-    'bc189c7c411ba6eacc91da66de16c457f23d73ca214494a64024a26842f3bde3',
+    'e221ceed32733f2ace1081926b08206e9e31adad247da5c56e730cd170cbfdeb',
   'docs/phases/60-executor-handoff.md':
-    '24b6de295d36ae638b35a2ebaf77fc23732b17e1eeb24beed724c3ece488b8aa',
+    '47095585e83e658ce793ed64e4d4e7f03ac6de0a8104521ee8b674e680c7f37a',
   'docs/phases/60-master-gate-baseline.md':
     'ce66a8a458ba1f6b5d9aea9c4965cf1c7825a7d58897be190e81b90408dc7f33',
   'docs/phases/60-manual-qa-plan.md':
@@ -32,7 +32,7 @@ const protectedDigests = {
   'tests/phase60-acceptance-manifest.json':
     '2b85278a400695617c0e29e4be23a592950ebcb0a04c541507d39df597a066e2',
   'tests/phase60-master-control.test.ts':
-    '5198dbedec7d227986fc1cb3836696697d2d552f711e77d903266ac473aa3a6d',
+    '1982f01d7c136b8fd5e0ddd67770c8c5d2a8c6bf75b8e801a69c57ed719a529b',
 };
 
 const requiredImplementationFiles = [

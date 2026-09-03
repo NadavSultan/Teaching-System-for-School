@@ -439,7 +439,7 @@ All commands must record exact exit code, file/test count, skip count, migration
 
 ## Work packages and autonomous order
 
-The executor must continue through all packages without returning a progress-only final response:
+The packages are implemented in five sequential executor sessions. Sessions must never overlap. Each session starts from the exact clean commit handed off by its predecessor, completes every assigned package autonomously, and stops at its assigned boundary with focused evidence and a clean committed tree. Only Session 5 runs the complete final gate and writes the implementation report.
 
 1. **P60-0 — Baseline:** verify branch, starting commit, clean tree, protected hashes, frozen migrations, manifest, and expected-red control gate.
 2. **P60-1 — Contracts and migration:** strict Phase 60 schemas, stable identities, edit lineage, approval table/guards/indexes, direct DB tests.
@@ -452,6 +452,16 @@ The executor must continue through all packages without returning a progress-onl
 9. **P60-8 — Commits and report:** implementation commits by coherent package, one evidence/QA commit if useful, then one report-only commit.
 
 After each package, inspect the substantive diff and run its focused tests. Do not stop or ask for “continue” after a passing package.
+
+| Session              | Assigned packages | Required handoff                                                                                                           |
+| -------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| 1 — Foundation       | P60-0–P60-1       | Verified baseline; contracts, schemas, exact `06000` migration, database guards, focused tests, forward commit, clean tree |
+| 2 — Editor Core      | P60-2             | Immutable revision editor/persistence, focused behavioral and rollback evidence, forward commit, clean tree                |
+| 3 — Approval Backend | P60-3–P60-4       | Authorization, validation/readiness/approval integration and O1–O10 API evidence, forward commit, clean tree               |
+| 4 — Teacher UI       | P60-5–P60-6       | Hebrew RTL workspace, Grades 7–9 isolation, Grade 8 browser journey, forward commit, clean tree                            |
+| 5 — Final Closure    | P60-7–P60-8       | Upgrade, full final gate, manual smoke, implementation commits, report-only final commit, clean tree                       |
+
+The master dispatch prompt identifies the active session and exact package range. An executor must not enter a later session's packages. A nonfinal session reports `READY FOR NEXT PHASE 60 SESSION`; only Session 5 may report `READY FOR INDEPENDENT PHASE 60 REVIEW`.
 
 ## Commit and report plan
 
