@@ -177,6 +177,64 @@ async function incompleteRun(f: Awaited<ReturnType<typeof fixture>>) {
   return value;
 }
 
+async function rejectTerminalEvidenceInserts(
+  f: Awaited<ReturnType<typeof fixture>>,
+  validationRunId: string,
+  rule: { id: string; ruleId: string },
+  semanticEvaluationId: string,
+  pathPrefix: string,
+) {
+  await reject(
+    () =>
+      prisma.validationRuleExecution.create({
+        data: {
+          validationRunId,
+          ruleDefinitionId: rule.id,
+          outcome: 'PASS',
+          evidence: { identity: rule.ruleId, revisionId: f.revision.id },
+        },
+      }),
+    'P5033',
+    'phase50 evidence requires PROCESSING validation run',
+  );
+  await reject(
+    () =>
+      prisma.semanticEvaluation.create({
+        data: {
+          validationRunId,
+          evaluatorVersion: 'local-disabled-v1',
+          promptVersion: 'validation-prompt-v1',
+          modelConfigurationVersion: 'local-none-v1',
+          schemaVersion: '1.0.0',
+          state: 'SUCCEEDED',
+        },
+      }),
+    'P5033',
+    'phase50 evidence requires PROCESSING validation run',
+  );
+  await reject(
+    () =>
+      prisma.validationFinding.create({
+        data: {
+          organizationId: f.workspace.organization.id,
+          validationRunId,
+          assessmentRevisionId: f.revision.id,
+          semanticEvaluationId,
+          kind: 'SEMANTIC',
+          code: 'AMBIGUITY_V1',
+          category: 'AMBIGUITY',
+          severity: 'WARNING',
+          path: pathPrefix,
+          messageKey: 'terminal.insert.rejected',
+          evidence: { identity: 'AMBIGUITY_V1', revisionId: f.revision.id },
+          evaluatorVersion: 'local-disabled-v1',
+        },
+      }),
+    'P5033',
+    'phase50 evidence requires PROCESSING validation run',
+  );
+}
+
 describe('Phase 50 direct PostgreSQL database invariants', () => {
   afterAll(() => prisma.$disconnect());
 
@@ -293,6 +351,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
     );
     const wrongVersion = await fixture();
     const wrongRun = await run(wrongVersion);
+    await prisma.$executeRaw`UPDATE validation_runs SET state='PROCESSING', attempts=1, processing_started_at=now(), lease_expires_at=now()+interval '1 minute' WHERE id=${wrongRun.id}::uuid`;
     const wrongRule = await prisma.validationRuleDefinition.create({
       data: {
         rulesetVersion: 'v2',
@@ -392,6 +451,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
   it('B09 execution using unknown rule/version is rejected', async () => {
     const f = await fixture();
     const value = await run(f);
+    await prisma.$executeRaw`UPDATE validation_runs SET state='PROCESSING', attempts=1, processing_started_at=now(), lease_expires_at=now()+interval '1 minute' WHERE id=${value.id}::uuid`;
     const foreign = await prisma.validationRuleDefinition.create({
       data: {
         rulesetVersion: 'v2',
@@ -423,6 +483,8 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
       where: { validationRunId: valid.value.id },
     });
     const foreign = await fixture();
+    const alternateRun = await run(base, 2, 'b10-run');
+    await prisma.$executeRaw`UPDATE validation_runs SET state='PROCESSING', attempts=1, processing_started_at=now(), lease_expires_at=now()+interval '1 minute' WHERE id=${alternateRun.id}::uuid`;
     const cases = [
       [
         'organization',
@@ -435,7 +497,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
       [
         'run',
         base.workspace.organization.id,
-        (await run(base, 2, 'b10-run')).id,
+        alternateRun.id,
         base.revision.id,
         execution.id,
         'P5025',
@@ -472,6 +534,8 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
     const semantic = await prisma.semanticEvaluation.findUniqueOrThrow({
       where: { validationRunId: valid.value.id },
     });
+    const alternateSemanticRun = await run(base, 3, 'b10-semantic-run');
+    await prisma.$executeRaw`UPDATE validation_runs SET state='PROCESSING', attempts=1, processing_started_at=now(), lease_expires_at=now()+interval '1 minute' WHERE id=${alternateSemanticRun.id}::uuid`;
     const semanticCases = [
       [
         'organization',
@@ -484,7 +548,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
       [
         'run',
         base.workspace.organization.id,
-        (await run(base, 3, 'b10-semantic-run')).id,
+        alternateSemanticRun.id,
         base.revision.id,
         semantic.id,
         'local-disabled-v1',
@@ -684,6 +748,66 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
     expect(await prisma.validationFinding.findUniqueOrThrow({ where: { id: finding.id } })).toEqual(
       snapshots.finding,
     );
+  });
+  it('rejects execution, semantic evaluation, and finding inserts after SUCCEEDED', async () => {
+    const f = await fixture();
+    const arranged = await completeRun(f);
+    const semantic = await prisma.semanticEvaluation.findUniqueOrThrow({
+      where: { validationRunId: arranged.value.id },
+    });
+    await prisma.$executeRaw`UPDATE validation_runs SET state='SUCCEEDED', completed_at=now(), lease_expires_at=NULL WHERE id=${arranged.value.id}::uuid`;
+    await rejectTerminalEvidenceInserts(
+      f,
+      arranged.value.id,
+      arranged.rules[0]!,
+      semantic.id,
+      'terminal-succeeded',
+    );
+    expect(
+      await prisma.validationRuleExecution.count({
+        where: { validationRunId: arranged.value.id },
+      }),
+    ).toBe(11);
+    expect(
+      await prisma.semanticEvaluation.count({ where: { validationRunId: arranged.value.id } }),
+    ).toBe(1);
+    expect(
+      await prisma.validationFinding.count({ where: { validationRunId: arranged.value.id } }),
+    ).toBe(0);
+  });
+  it('rejects execution, semantic evaluation, and finding inserts after FAILED', async () => {
+    const f = await fixture();
+    const value = await run(f);
+    await prisma.$executeRaw`UPDATE validation_runs SET state='PROCESSING', attempts=1, processing_started_at=now(), lease_expires_at=now()+interval '1 minute' WHERE id=${value.id}::uuid`;
+    const rules = await prisma.validationRuleDefinition.findMany({
+      where: { rulesetVersion: 'v1' },
+      orderBy: { deterministicOrder: 'asc' },
+    });
+    await prisma.validationRuleExecution.create({
+      data: {
+        validationRunId: value.id,
+        ruleDefinitionId: rules[0]!.id,
+        outcome: 'PASS',
+        evidence: { identity: rules[0]!.ruleId, revisionId: f.revision.id },
+      },
+    });
+    const semantic = await prisma.semanticEvaluation.create({
+      data: {
+        validationRunId: value.id,
+        evaluatorVersion: 'local-disabled-v1',
+        promptVersion: 'validation-prompt-v1',
+        modelConfigurationVersion: 'local-none-v1',
+        schemaVersion: '1.0.0',
+        state: 'SUCCEEDED',
+      },
+    });
+    await prisma.$executeRaw`UPDATE validation_runs SET state='FAILED', failure_code='PERMANENT_EVALUATOR_ERROR', completed_at=now(), lease_expires_at=NULL WHERE id=${value.id}::uuid`;
+    await rejectTerminalEvidenceInserts(f, value.id, rules[1]!, semantic.id, 'terminal-failed');
+    expect(
+      await prisma.validationRuleExecution.count({ where: { validationRunId: value.id } }),
+    ).toBe(1);
+    expect(await prisma.semanticEvaluation.count({ where: { validationRunId: value.id } })).toBe(1);
+    expect(await prisma.validationFinding.count({ where: { validationRunId: value.id } })).toBe(0);
   });
   it('B14 UPDATE/DELETE/reparent acknowledgement is rejected', async () => {
     const f = await fixture();
@@ -999,6 +1123,7 @@ describe('Phase 50 direct PostgreSQL database invariants', () => {
   it('rejects missing or forged execution and finding evidence at the direct database boundary', async () => {
     const f = await fixture();
     const value = await run(f);
+    await prisma.$executeRaw`UPDATE validation_runs SET state='PROCESSING', attempts=1, processing_started_at=now(), lease_expires_at=now()+interval '1 minute' WHERE id=${value.id}::uuid`;
     const rule = await prisma.validationRuleDefinition.findFirstOrThrow({
       where: { rulesetVersion: 'v1' },
       orderBy: { deterministicOrder: 'asc' },

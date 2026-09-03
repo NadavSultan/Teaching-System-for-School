@@ -17,6 +17,28 @@ import { DeterministicFakeModelGateway, DeterministicFakeSemanticEvaluator } fro
 import { createGenerationFixture } from './phase40.acceptance.fixtures.js';
 import { processGenerationRun } from './generation.js';
 
+const semanticEvaluatorWith = (
+  findings: ReadonlyArray<{
+    code: string;
+    category: 'AMBIGUITY';
+    severity: 'BLOCKING' | 'WARNING' | 'INFO';
+    path: string;
+    messageKey: string;
+  }>,
+) =>
+  new DeterministicFakeSemanticEvaluator(undefined, async (input) => ({
+    version: '1.0.0',
+    evaluatorVersion: 'local-disabled-v1',
+    promptVersion: 'validation-prompt-v1',
+    modelConfigurationVersion: 'local-none-v1',
+    schemaVersion: '1.0.0',
+    revisionId: input.revisionId,
+    findings: findings.map((finding) => ({
+      ...finding,
+      evidence: { identity: finding.code, revisionId: input.revisionId },
+    })),
+  }));
+
 async function fixture() {
   const workspace = await createPersonalWorkspace({
     email: `phase50-closure-${crypto.randomUUID()}@example.test`,
@@ -236,24 +258,25 @@ describe('Phase 50 production service closure', () => {
       assessmentRevisionId: f.revision.id,
       idempotencyKey: `ack-run-${crypto.randomUUID()}`,
     });
-    await processValidationRun(run.id);
-    const evaluation = await prisma.semanticEvaluation.findUniqueOrThrow({
-      where: { validationRunId: run.id },
-    });
-    const finding = await prisma.validationFinding.create({
-      data: {
-        organizationId: f.workspace.organization.id,
+    await processValidationRun(
+      run.id,
+      prisma,
+      semanticEvaluatorWith([
+        {
+          code: 'AMBIGUITY_V1',
+          category: 'AMBIGUITY',
+          severity: 'WARNING',
+          path: 'question[0]',
+          messageKey: 'ambiguity.warning',
+        },
+      ]),
+    );
+    const finding = await prisma.validationFinding.findFirstOrThrow({
+      where: {
         validationRunId: run.id,
-        assessmentRevisionId: f.revision.id,
-        semanticEvaluationId: evaluation.id,
         kind: 'SEMANTIC',
-        code: 'AMBIGUITY_V1',
-        category: 'AMBIGUITY',
         severity: 'WARNING',
         path: 'question[0]',
-        messageKey: 'ambiguity.warning',
-        evidence: { identity: 'AMBIGUITY_V1', revisionId: f.revision.id },
-        evaluatorVersion: 'local-disabled-v1',
       },
     });
     const input = {
@@ -303,74 +326,50 @@ describe('Phase 50 production service closure', () => {
       assessmentRevisionId: f.revision.id,
       idempotencyKey: `reject-run-${crypto.randomUUID()}`,
     });
-    await processValidationRun(run.id);
-    const evaluation = await prisma.semanticEvaluation.findUniqueOrThrow({
-      where: { validationRunId: run.id },
-    });
-    const warning = await prisma.validationFinding.create({
-      data: {
-        organizationId: f.workspace.organization.id,
-        validationRunId: run.id,
-        assessmentRevisionId: f.revision.id,
-        semanticEvaluationId: evaluation.id,
-        kind: 'SEMANTIC',
-        code: 'AMBIGUITY_V1',
-        category: 'AMBIGUITY',
-        severity: 'WARNING',
-        path: 'warning',
-        messageKey: 'warning',
-        evidence: { identity: 'AMBIGUITY_V1', revisionId: f.revision.id },
-        evaluatorVersion: 'local-disabled-v1',
-      },
-    });
-    const info = await prisma.validationFinding.create({
-      data: {
-        organizationId: f.workspace.organization.id,
-        validationRunId: run.id,
-        assessmentRevisionId: f.revision.id,
-        semanticEvaluationId: evaluation.id,
-        kind: 'SEMANTIC',
-        code: 'AMBIGUITY_V1',
-        category: 'AMBIGUITY',
-        severity: 'INFO',
-        path: 'info',
-        messageKey: 'info',
-        evidence: { identity: 'AMBIGUITY_V1', revisionId: f.revision.id },
-        evaluatorVersion: 'local-disabled-v1',
-      },
-    });
-    const blocking = await prisma.validationFinding.create({
-      data: {
-        organizationId: f.workspace.organization.id,
-        validationRunId: run.id,
-        assessmentRevisionId: f.revision.id,
-        semanticEvaluationId: evaluation.id,
-        kind: 'SEMANTIC',
-        code: 'AMBIGUITY_V1',
-        category: 'AMBIGUITY',
-        severity: 'BLOCKING',
-        path: 'blocking',
-        messageKey: 'blocking',
-        evidence: { identity: 'AMBIGUITY_V1', revisionId: f.revision.id },
-        evaluatorVersion: 'local-disabled-v1',
-      },
-    });
-    const alternateWarning = await prisma.validationFinding.create({
-      data: {
-        organizationId: f.workspace.organization.id,
-        validationRunId: run.id,
-        assessmentRevisionId: f.revision.id,
-        semanticEvaluationId: evaluation.id,
-        kind: 'SEMANTIC',
-        code: 'AMBIGUITY_V1',
-        category: 'AMBIGUITY',
-        severity: 'WARNING',
-        path: 'alternate-warning',
-        messageKey: 'alternate-warning',
-        evidence: { identity: 'AMBIGUITY_V1', revisionId: f.revision.id },
-        evaluatorVersion: 'local-disabled-v1',
-      },
-    });
+    await processValidationRun(
+      run.id,
+      prisma,
+      semanticEvaluatorWith([
+        {
+          code: 'AMBIGUITY_V1',
+          category: 'AMBIGUITY',
+          severity: 'WARNING',
+          path: 'warning',
+          messageKey: 'warning',
+        },
+        {
+          code: 'AMBIGUITY_V1',
+          category: 'AMBIGUITY',
+          severity: 'INFO',
+          path: 'info',
+          messageKey: 'info',
+        },
+        {
+          code: 'AMBIGUITY_V1',
+          category: 'AMBIGUITY',
+          severity: 'BLOCKING',
+          path: 'blocking',
+          messageKey: 'blocking',
+        },
+        {
+          code: 'AMBIGUITY_V1',
+          category: 'AMBIGUITY',
+          severity: 'WARNING',
+          path: 'alternate-warning',
+          messageKey: 'alternate-warning',
+        },
+      ]),
+    );
+    const findSemantic = (path: string) =>
+      prisma.validationFinding.findFirstOrThrow({
+        where: { validationRunId: run.id, kind: 'SEMANTIC', path },
+      });
+    const [warning, info, blocking, alternateWarning] = await Promise.all([
+      findSemantic('warning'),
+      findSemantic('info'),
+      findSemantic('blocking'),
+      findSemantic('alternate-warning'),
+    ]);
     const deterministic = await prisma.validationFinding.findFirstOrThrow({
       where: { validationRunId: run.id, kind: 'DETERMINISTIC' },
     });
@@ -531,6 +530,15 @@ describe('Phase 50 production service closure', () => {
         requestFingerprint: 'r'.repeat(64),
       },
     });
+    await prisma.validationRun.update({
+      where: { id: run.id },
+      data: {
+        state: 'PROCESSING',
+        attempts: 1,
+        processingStartedAt: new Date(),
+        leaseExpiresAt: new Date(Date.now() + 60_000),
+      },
+    });
     const rules = await prisma.validationRuleDefinition.findMany({
       where: { rulesetVersion: 'v1' },
       orderBy: { deterministicOrder: 'asc' },
@@ -554,10 +562,7 @@ describe('Phase 50 production service closure', () => {
         state: 'SUCCEEDED',
       },
     });
-    await prisma.$transaction(async (tx) => {
-      await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica');
-      await tx.$executeRaw`UPDATE validation_runs SET state='SUCCEEDED', completed_at=now(), lease_expires_at=NULL, deterministic_pass_count=11, deterministic_fail_count=0 WHERE id=${run.id}::uuid`;
-    });
+    await prisma.$executeRaw`UPDATE validation_runs SET state='SUCCEEDED', completed_at=now(), lease_expires_at=NULL, deterministic_pass_count=11, deterministic_fail_count=0 WHERE id=${run.id}::uuid`;
     await expect(
       getRevisionValidationReadiness(f.context, f.assessmentId, revision.id),
     ).resolves.toEqual({
