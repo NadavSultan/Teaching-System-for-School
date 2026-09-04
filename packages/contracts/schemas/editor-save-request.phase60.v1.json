@@ -36,8 +36,15 @@
                 "maxLength": 200
               },
               "instructions": {
-                "type": "string",
-                "maxLength": 5000
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 5000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "order": {
                 "type": "integer",
@@ -80,8 +87,15 @@
                       "maxLength": 20000
                     },
                     "instructions": {
-                      "type": "string",
-                      "maxLength": 5000
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 5000
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "order": {
                       "$ref": "#/definitions/EditorSaveRequestPhase60V1/properties/sections/items/properties/order"
@@ -107,8 +121,15 @@
                             "maxLength": 10000
                           },
                           "explanation": {
-                            "type": "string",
-                            "maxLength": 10000
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "maxLength": 10000
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [

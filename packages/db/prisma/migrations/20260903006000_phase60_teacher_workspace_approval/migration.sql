@@ -48,6 +48,11 @@ CREATE TRIGGER phase60_question_identity_guard BEFORE INSERT OR UPDATE OF sectio
 
 CREATE OR REPLACE FUNCTION phase60_revision_lineage_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+  PERFORM pg_advisory_xact_lock(hashtextextended(NEW.assessment_id::text, 60));
+  IF TG_OP='UPDATE' AND OLD.assessment_id IS DISTINCT FROM NEW.assessment_id THEN
+    PERFORM pg_advisory_xact_lock(hashtextextended(OLD.assessment_id::text, 60));
+    PERFORM phase60_raise('P6004','phase60 revision assessment identity is immutable');
+  END IF;
   IF NEW.base_revision_id IS NOT NULL AND NOT EXISTS (
     SELECT 1 FROM assessment_revisions b WHERE b.id=NEW.base_revision_id AND b.assessment_id=NEW.assessment_id AND b.state='FINALIZED'
   ) THEN PERFORM phase60_raise('P6003','phase60 base revision must be finalized and owned by the same assessment'); END IF;
@@ -56,7 +61,7 @@ BEGIN
   END IF;
   RETURN NEW;
 END; $$;
-CREATE TRIGGER phase60_revision_lineage_guard BEFORE INSERT OR UPDATE OF base_revision_id ON "assessment_revisions" FOR EACH ROW EXECUTE FUNCTION phase60_revision_lineage_guard();
+CREATE TRIGGER phase60_revision_lineage_guard BEFORE INSERT OR UPDATE OF base_revision_id, assessment_id ON "assessment_revisions" FOR EACH ROW EXECUTE FUNCTION phase60_revision_lineage_guard();
 
 CREATE OR REPLACE FUNCTION phase60_approval_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE v_run UUID; v_existing assessment_approvals%ROWTYPE;

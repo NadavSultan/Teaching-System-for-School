@@ -49,8 +49,15 @@
                       "maxLength": 20000
                     },
                     "instructions": {
-                      "type": "string",
-                      "maxLength": 5000
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 5000
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "order": {
                       "$ref": "#/definitions/StudentSafePreviewPhase60V1/properties/sections/items/properties/order"
@@ -71,6 +78,7 @@
                   "required": [
                     "logicalId",
                     "prompt",
+                    "instructions",
                     "order",
                     "scoreUnits"
                   ],

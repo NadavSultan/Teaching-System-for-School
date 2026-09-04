@@ -9,6 +9,61 @@ const order = z.number().int().min(0).max(1_000_000);
 const scoreUnits = z.number().int().nonnegative().max(1_000_000).nullable();
 
 const assessmentTypeSchema = z.enum(['WORKSHEET', 'TEST']);
+const teacherAnswerSchema = z
+  .object({
+    id: uuidSchema,
+    key: boundedText(100),
+    order,
+    text: z.string().trim().max(10_000),
+    explanation: z.string().trim().max(10_000).nullable(),
+  })
+  .strict();
+const teacherRubricSchema = z
+  .object({
+    id: uuidSchema,
+    key: boundedText(100),
+    description: boundedText(2_000),
+    order,
+    scoreUnits,
+  })
+  .strict();
+const teacherSubQuestionSchema = z
+  .object({
+    id: uuidSchema,
+    key: boundedText(100),
+    prompt: boundedText(10_000),
+    order,
+    scoreUnits,
+    answers: z.array(teacherAnswerSchema).max(100),
+    rubrics: z.array(teacherRubricSchema).max(100),
+  })
+  .strict();
+const teacherQuestionSchema = z
+  .object({
+    id: uuidSchema,
+    logicalId: uuidSchema,
+    key: boundedText(100),
+    type: boundedText(64),
+    prompt: boundedText(20_000),
+    instructions: z.string().trim().max(5_000).nullable(),
+    order,
+    scoreUnits,
+    answers: z.array(teacherAnswerSchema).max(100),
+    rubrics: z.array(teacherRubricSchema).max(100),
+    subQuestions: z.array(teacherSubQuestionSchema).max(100),
+  })
+  .strict();
+const teacherSectionSchema = z
+  .object({
+    id: uuidSchema,
+    key: boundedText(100),
+    title: boundedText(200),
+    instructions: z.string().trim().max(5_000).nullable(),
+    order,
+    scoreUnits,
+    questions: z.array(teacherQuestionSchema).max(1_000),
+  })
+  .strict();
 const teacherRevisionSchema = z
   .object({
     version: z.literal('1.0.0'),
@@ -20,7 +75,7 @@ const teacherRevisionSchema = z
     totalScoreUnits: scoreUnits,
     finalized: z.literal(true),
     curriculumNodeIds: z.array(uuidSchema).max(1_000),
-    sections: z.array(z.unknown()).max(100),
+    sections: z.array(teacherSectionSchema).max(100),
   })
   .strict();
 
@@ -71,7 +126,7 @@ const editorAnswerSchema = z
     key: boundedText(100),
     order,
     text: z.string().trim().max(10_000),
-    explanation: z.string().trim().max(10_000).optional(),
+    explanation: z.string().trim().max(10_000).nullable().optional(),
   })
   .strict();
 const editorRubricSchema = z
@@ -93,7 +148,7 @@ const editorQuestionSchema = z
     key: boundedText(100),
     type: boundedText(64),
     prompt: boundedText(20_000),
-    instructions: z.string().trim().max(5_000).optional(),
+    instructions: z.string().trim().max(5_000).nullable().optional(),
     order,
     scoreUnits,
     answers: z.array(editorAnswerSchema).max(100),
@@ -105,7 +160,7 @@ const editorSectionSchema = z
   .object({
     key: boundedText(100),
     title: boundedText(200),
-    instructions: z.string().trim().max(5_000).optional(),
+    instructions: z.string().trim().max(5_000).nullable().optional(),
     order,
     scoreUnits,
     questions: z.array(editorQuestionSchema).min(1).max(1_000),
@@ -174,7 +229,7 @@ export const studentSafePreviewSchema = z
                   .object({
                     logicalId: uuidSchema,
                     prompt: boundedText(20_000),
-                    instructions: z.string().trim().max(5_000).optional(),
+                    instructions: z.string().trim().max(5_000).nullable(),
                     order,
                     scoreUnits,
                   })
