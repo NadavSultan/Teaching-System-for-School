@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
@@ -109,7 +110,16 @@ const editor = {
           scoreUnits: 6,
           answers: [{ key: 'a', order: 0, text: 'Answer' }],
           rubrics: [{ key: 'r', description: 'Rubric', order: 0, scoreUnits: 6 }],
-          subQuestions: [],
+          subQuestions: [
+            {
+              key: 'sq',
+              prompt: 'Sub question',
+              order: 0,
+              scoreUnits: 3,
+              answers: [{ key: 'sa', order: 0, text: 'Sub answer' }],
+              rubrics: [{ key: 'sr', description: 'Sub rubric', order: 0, scoreUnits: 3 }],
+            },
+          ],
         },
       ],
     },
@@ -128,6 +138,61 @@ const safePreview = {
     },
   ],
 };
+
+type Schema = {
+  $ref?: string;
+  type?: string;
+  additionalProperties?: boolean;
+  definitions?: Record<string, Schema>;
+  properties?: Record<string, Schema>;
+  items?: Schema;
+};
+const phase60Schemas = [
+  'teacher-assessment-list-item.phase60.v1.json',
+  'teacher-assessment-list-response.phase60.v1.json',
+  'teacher-workspace.phase60.v1.json',
+  'editor-save-request.phase60.v1.json',
+  'editor-save-result.phase60.v1.json',
+  'question-regeneration-request.phase60.v1.json',
+  'question-regeneration-status.phase60.v1.json',
+  'question-regeneration-result.phase60.v1.json',
+  'student-safe-preview.phase60.v1.json',
+  'approval-request.phase60.v1.json',
+  'approval-result.phase60.v1.json',
+  'approval-status.phase60.v1.json',
+] as const;
+
+function rejectsOneMutation<T>(
+  schema: { parse(value: unknown): T },
+  valid: unknown,
+  mutate: (value: any) => void,
+) {
+  const pristine = structuredClone(valid);
+  expect(schema.parse(pristine)).toEqual(pristine);
+  const invalid = structuredClone(valid) as any;
+  mutate(invalid);
+  expect(() => schema.parse(invalid)).toThrow();
+}
+
+function assertStrictObjects(schema: Schema, root: Schema, seen = new Set<Schema>()) {
+  if (seen.has(schema)) return;
+  seen.add(schema);
+  if (schema.$ref) {
+    const target = schema.$ref
+      .replace(/^#\//, '')
+      .split('/')
+      .reduce<any>((value, key) => value?.[key.replaceAll('~1', '/').replaceAll('~0', '~')], root);
+    expect(target, `missing ${schema.$ref}`).toBeDefined();
+    assertStrictObjects(target as Schema, root, seen);
+    return;
+  }
+  if (schema.type === 'object') expect(schema.additionalProperties).toBe(false);
+  for (const child of Object.values(schema.properties ?? {}))
+    assertStrictObjects(child, root, seen);
+  if (schema.items) assertStrictObjects(schema.items, root, seen);
+  for (const child of Object.values(schema.definitions ?? {}))
+    assertStrictObjects(child, root, seen);
+}
 
 describe('Phase 60 contracts', () => {
   it('K01 accepts valid fixtures for every Phase 60 request and response boundary', () => {
@@ -204,159 +269,341 @@ describe('Phase 60 contracts', () => {
     ).toBe(false);
   });
   it('K02 rejects added unknown keys at every top-level and nested boundary', () => {
-    expect(() => teacherWorkspaceSchema.parse({ ...workspace, extra: true })).toThrow();
-    expect(() =>
-      teacherWorkspaceSchema.parse({
-        ...workspace,
-        revision: {
-          ...workspace.revision,
-          sections: [
-            { ...section, questions: [{ ...question, answers: [{ ...answer, extra: true }] }] },
-          ],
-        },
-      }),
-    ).toThrow();
-    expect(() =>
-      editorSaveRequestSchema.parse({
-        ...editor,
-        sections: [
-          {
-            ...editor.sections[0]!,
-            questions: [
-              {
-                ...editor.sections[0]!.questions[0]!,
-                rubrics: [{ ...editor.sections[0]!.questions[0]!.rubrics[0]!, extra: true }],
-              },
-            ],
-          },
-        ],
-      }),
-    ).toThrow();
-    expect(() =>
-      studentSafePreviewSchema.parse({
-        ...safePreview,
-        sections: [
-          {
-            ...safePreview.sections[0]!,
-            questions: [{ ...safePreview.sections[0]!.questions[0]!, extra: true }],
-          },
-        ],
-      }),
-    ).toThrow();
-    expect(() =>
-      approvalRequestSchema.parse({
+    rejectsOneMutation(
+      teacherAssessmentListResponseSchema,
+      { version: '1.0.0', items: [workspace.assessment], nextCursor: null },
+      (v) => {
+        v.extra = true;
+      },
+    );
+    rejectsOneMutation(
+      teacherAssessmentListResponseSchema,
+      { version: '1.0.0', items: [workspace.assessment], nextCursor: null },
+      (v) => {
+        v.items[0].extra = true;
+      },
+    );
+    rejectsOneMutation(teacherWorkspaceSchema, workspace, (v) => {
+      v.extra = true;
+    });
+    rejectsOneMutation(teacherWorkspaceSchema, workspace, (v) => {
+      v.assessment.extra = true;
+    });
+    rejectsOneMutation(teacherWorkspaceSchema, workspace, (v) => {
+      v.revision.extra = true;
+    });
+    rejectsOneMutation(teacherWorkspaceSchema, workspace, (v) => {
+      v.revision.sections[0].extra = true;
+    });
+    rejectsOneMutation(teacherWorkspaceSchema, workspace, (v) => {
+      v.revision.sections[0].questions[0].extra = true;
+    });
+    rejectsOneMutation(teacherWorkspaceSchema, workspace, (v) => {
+      v.revision.sections[0].questions[0].answers[0].extra = true;
+    });
+    rejectsOneMutation(teacherWorkspaceSchema, workspace, (v) => {
+      v.revision.sections[0].questions[0].rubrics[0].extra = true;
+    });
+    rejectsOneMutation(teacherWorkspaceSchema, workspace, (v) => {
+      v.revision.sections[0].questions[0].subQuestions[0].extra = true;
+    });
+    rejectsOneMutation(teacherWorkspaceSchema, workspace, (v) => {
+      v.revision.sections[0].questions[0].subQuestions[0].answers[0].extra = true;
+    });
+    rejectsOneMutation(teacherWorkspaceSchema, workspace, (v) => {
+      v.revision.sections[0].questions[0].subQuestions[0].rubrics[0].extra = true;
+    });
+    rejectsOneMutation(teacherWorkspaceSchema, workspace, (v) => {
+      v.history[0].extra = true;
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.extra = true;
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.sections[0].extra = true;
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.sections[0].questions[0].extra = true;
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.sections[0].questions[0].answers[0].extra = true;
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.sections[0].questions[0].rubrics[0].extra = true;
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.sections[0].questions[0].subQuestions[0].extra = true;
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.sections[0].questions[0].subQuestions[0].answers[0].extra = true;
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.sections[0].questions[0].subQuestions[0].rubrics[0].extra = true;
+    });
+    rejectsOneMutation(
+      editorSaveResultSchema,
+      {
+        version: '1.0.0',
+        assessmentId: id,
+        revisionId,
+        revisionNumber: 2,
+        baseRevisionId: revisionId,
+      },
+      (v) => {
+        v.extra = true;
+      },
+    );
+    rejectsOneMutation(
+      teacherQuestionRegenerationRequestSchema,
+      {
+        version: '1.0.0',
+        assessmentId: id,
+        baseRevisionId: revisionId,
+        logicalQuestionId: id,
+        idempotencyKey: 'regen-1',
+      },
+      (v) => {
+        v.extra = true;
+      },
+    );
+    rejectsOneMutation(
+      teacherQuestionRegenerationStatusSchema,
+      { version: '1.0.0', generationRunId: id, state: 'SUCCEEDED' },
+      (v) => {
+        v.extra = true;
+      },
+    );
+    rejectsOneMutation(
+      teacherQuestionRegenerationResultSchema,
+      {
+        version: '1.0.0',
+        generationRunId: id,
+        outputRevisionId: revisionId,
+        logicalQuestionId: id,
+      },
+      (v) => {
+        v.extra = true;
+      },
+    );
+    rejectsOneMutation(studentSafePreviewSchema, safePreview, (v) => {
+      v.extra = true;
+    });
+    rejectsOneMutation(studentSafePreviewSchema, safePreview, (v) => {
+      v.sections[0].extra = true;
+    });
+    rejectsOneMutation(studentSafePreviewSchema, safePreview, (v) => {
+      v.sections[0].questions[0].extra = true;
+    });
+    rejectsOneMutation(
+      approvalRequestSchema,
+      {
         version: '1.0.0',
         assessmentId: id,
         assessmentRevisionId: revisionId,
         idempotencyKey: 'approve',
-        extra: true,
-      }),
-    ).toThrow();
+      },
+      (v) => {
+        v.extra = true;
+      },
+    );
+    rejectsOneMutation(
+      approvalResultSchema,
+      {
+        version: '1.0.0',
+        approvalId: id,
+        assessmentId: id,
+        assessmentRevisionId: revisionId,
+        validationRunId: nodeId,
+        approvalSequence: 1,
+        createdAt: '2026-09-03T00:00:00.000Z',
+      },
+      (v) => {
+        v.extra = true;
+      },
+    );
+    rejectsOneMutation(
+      approvalStatusSchema,
+      {
+        version: '1.0.0',
+        assessmentRevisionId: revisionId,
+        approved: false,
+        approvalId: null,
+        approvalSequence: null,
+      },
+      (v) => {
+        v.extra = true;
+      },
+    );
   });
   it('K03 rejects invalid UUID version text order score-unit and idempotency fixtures', () => {
-    expect(() => editorSaveRequestSchema.parse({ ...editor, assessmentId: 'bad' })).toThrow();
-    expect(() => editorSaveRequestSchema.parse({ ...editor, version: '2.0.0' })).toThrow();
-    expect(() => editorSaveRequestSchema.parse({ ...editor, idempotencyKey: ' ' })).toThrow();
-    expect(() =>
-      editorSaveRequestSchema.parse({
-        ...editor,
-        sections: [
-          {
-            ...editor.sections[0]!,
-            title: ' ',
-            questions: [{ ...editor.sections[0]!.questions[0]!, order: -1, scoreUnits: 1.5 }],
-          },
-        ],
-      }),
-    ).toThrow();
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.assessmentId = 'bad';
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.version = '2.0.0';
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.idempotencyKey = ' ';
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.idempotencyKey = 'x'.repeat(256);
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.sections[0].title = ' ';
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.sections[0].order = -1;
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.sections[0].scoreUnits = 1.5;
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.sections[0].questions[0].prompt = 'x'.repeat(20_001);
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.sections[0].questions[0].answers[0].order = 0.5;
+    });
+    rejectsOneMutation(
+      approvalRequestSchema,
+      {
+        version: '1.0.0',
+        assessmentId: id,
+        assessmentRevisionId: revisionId,
+        idempotencyKey: 'approve',
+      },
+      (v) => {
+        v.assessmentRevisionId = 'bad';
+      },
+    );
   });
   it('K04 rejects every prohibited editor authority and evidence field', () => {
-    for (const key of [
-      'organizationId',
-      'actorUserId',
-      'validationRunId',
-      'approvalSequence',
-      'audit',
-    ] as const)
-      expect(() =>
-        editorSaveRequestSchema.parse({
-          ...editor,
-          [key]: key === 'approvalSequence' ? 1 : key === 'audit' ? {} : id,
-        }),
-      ).toThrow();
-    expect(() =>
-      editorSaveRequestSchema.parse({
-        ...editor,
-        sections: [
-          {
-            ...editor.sections[0]!,
-            questions: [{ ...editor.sections[0]!.questions[0]!, evidence: {} }],
-          },
-        ],
-      }),
-    ).toThrow();
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.organizationId = id;
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.actorUserId = id;
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.revisionNumber = 2;
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.state = 'FINALIZED';
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.provenance = {};
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.validationRunId = id;
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.approvalSequence = 1;
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.audit = {};
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.sections[0].questions[0].evidence = {};
+    });
   });
   it('K05 rejects every prohibited approval authority readiness and evidence field', () => {
-    for (const key of [
-      'organizationId',
-      'approvingUserId',
-      'validationRunId',
-      'readiness',
-      'evidence',
-    ] as const)
-      expect(() =>
-        approvalRequestSchema.parse({
-          version: '1.0.0',
-          assessmentId: id,
-          assessmentRevisionId: revisionId,
-          idempotencyKey: 'approve',
-          [key]: key === 'evidence' ? {} : key === 'readiness' ? 'READY' : id,
-        }),
-      ).toThrow();
+    const valid = {
+      version: '1.0.0',
+      assessmentId: id,
+      assessmentRevisionId: revisionId,
+      idempotencyKey: 'approve',
+    };
+    rejectsOneMutation(approvalRequestSchema, valid, (v) => {
+      v.organizationId = id;
+    });
+    rejectsOneMutation(approvalRequestSchema, valid, (v) => {
+      v.approvingUserId = id;
+    });
+    rejectsOneMutation(approvalRequestSchema, valid, (v) => {
+      v.approvalSequence = 1;
+    });
+    rejectsOneMutation(approvalRequestSchema, valid, (v) => {
+      v.validationRunId = id;
+    });
+    rejectsOneMutation(approvalRequestSchema, valid, (v) => {
+      v.readiness = 'READY';
+    });
+    rejectsOneMutation(approvalRequestSchema, valid, (v) => {
+      v.verdict = 'PASS';
+    });
+    rejectsOneMutation(approvalRequestSchema, valid, (v) => {
+      v.createdAt = '2026-09-03T00:00:00.000Z';
+    });
+    rejectsOneMutation(approvalRequestSchema, valid, (v) => {
+      v.contractVersion = '1.0.0';
+    });
+    rejectsOneMutation(approvalRequestSchema, valid, (v) => {
+      v.validationRulesetVersion = 'v1';
+    });
+    rejectsOneMutation(approvalRequestSchema, valid, (v) => {
+      v.evidence = {};
+    });
   });
   it('K06 accepts nonempty student-safe content and rejects teacher-only keys at every depth', () => {
     expect(studentSafePreviewSchema.parse(safePreview).sections[0]?.questions[0]?.prompt).toBe(
       'שאלה',
     );
-    expect(() => studentSafePreviewSchema.parse({ ...safePreview, answer: 'x' })).toThrow();
-    expect(() =>
-      studentSafePreviewSchema.parse({
-        ...safePreview,
-        sections: [{ ...safePreview.sections[0]!, explanation: 'x' }],
-      }),
-    ).toThrow();
-    expect(() =>
-      studentSafePreviewSchema.parse({
-        ...safePreview,
-        sections: [
-          {
-            ...safePreview.sections[0]!,
-            questions: [
-              {
-                ...safePreview.sections[0]!.questions[0]!,
-                rubric: 'x',
-                internalNote: 'x',
-                teacherOnly: true,
-              },
-            ],
-          },
-        ],
-      }),
-    ).toThrow();
+    rejectsOneMutation(studentSafePreviewSchema, safePreview, (v) => {
+      v.answer = 'x';
+    });
+    rejectsOneMutation(studentSafePreviewSchema, safePreview, (v) => {
+      v.explanation = 'x';
+    });
+    rejectsOneMutation(studentSafePreviewSchema, safePreview, (v) => {
+      v.rubric = 'x';
+    });
+    rejectsOneMutation(studentSafePreviewSchema, safePreview, (v) => {
+      v.internalNote = 'x';
+    });
+    rejectsOneMutation(studentSafePreviewSchema, safePreview, (v) => {
+      v.teacherOnly = true;
+    });
+    rejectsOneMutation(studentSafePreviewSchema, safePreview, (v) => {
+      v.sections[0].answer = 'x';
+    });
+    rejectsOneMutation(studentSafePreviewSchema, safePreview, (v) => {
+      v.sections[0].questions[0].answer = 'x';
+    });
+    rejectsOneMutation(studentSafePreviewSchema, safePreview, (v) => {
+      v.sections[0].questions[0].explanation = 'x';
+    });
+    rejectsOneMutation(studentSafePreviewSchema, safePreview, (v) => {
+      v.sections[0].questions[0].rubric = 'x';
+    });
+    rejectsOneMutation(studentSafePreviewSchema, safePreview, (v) => {
+      v.sections[0].questions[0].internalNote = 'x';
+    });
+    rejectsOneMutation(studentSafePreviewSchema, safePreview, (v) => {
+      v.sections[0].questions[0].teacherOnly = true;
+    });
   });
   it('K07 keeps committed generated schemas strict and exactly generation-checkable', () => {
-    for (const file of [
-      'teacher-workspace.phase60.v1.json',
-      'editor-save-request.phase60.v1.json',
-      'student-safe-preview.phase60.v1.json',
-      'approval-request.phase60.v1.json',
-    ]) {
-      const schema = JSON.parse(readFileSync(`packages/contracts/schemas/${file}`, 'utf8')) as {
-        definitions: Record<string, { additionalProperties?: boolean }>;
-      };
-      expect(
-        Object.values(schema.definitions).some((value) => value.additionalProperties === false),
-      ).toBe(true);
+    expect(phase60Schemas).toHaveLength(12);
+    expect(() =>
+      execFileSync(
+        process.execPath,
+        ['node_modules/typescript/bin/tsc', '-p', 'packages/contracts/tsconfig.json'],
+        {
+          stdio: 'pipe',
+        },
+      ),
+    ).not.toThrow();
+    expect(() =>
+      execFileSync(
+        process.execPath,
+        ['packages/contracts/scripts/generate-schemas.mjs', '--check'],
+        { stdio: 'pipe' },
+      ),
+    ).not.toThrow();
+    for (const file of phase60Schemas) {
+      const schema = JSON.parse(
+        readFileSync(`packages/contracts/schemas/${file}`, 'utf8'),
+      ) as Schema;
+      assertStrictObjects(schema, schema);
     }
   });
   it('K08 preserves logical IDs ordering nullability and integer score units losslessly', () => {
@@ -364,7 +611,21 @@ describe('Phase 60 contracts', () => {
     expect(parsed.revision.sections[0]?.questions[0]?.logicalId).toBe(id);
     expect(parsed.revision.sections[0]?.order).toBe(0);
     expect(parsed.revision.sections[0]?.questions[0]?.instructions).toBeNull();
+    expect(parsed.revision.sections[0]?.questions[0]?.answers[0]?.explanation).toBeNull();
+    expect(parsed.history[0]?.baseRevisionId).toBeNull();
     expect(parsed.revision.sections[0]?.questions[0]?.scoreUnits).toBe(6);
+    expect(Number.isInteger(parsed.revision.sections[0]?.questions[0]?.scoreUnits)).toBe(true);
     expect(parsed.revision.totalScoreUnits).toBe(6);
+    expect(parsed.revision.sections[0]?.questions[0]?.subQuestions[0]?.order).toBe(0);
+    expect(editorSaveRequestSchema.parse(editor).sections[0]?.questions[0]?.logicalId).toBe(id);
+    expect(
+      approvalStatusSchema.parse({
+        version: '1.0.0',
+        assessmentRevisionId: revisionId,
+        approved: false,
+        approvalId: null,
+        approvalSequence: null,
+      }).approvalSequence,
+    ).toBeNull();
   });
 });

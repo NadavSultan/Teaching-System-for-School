@@ -136,11 +136,21 @@ const rejects = async (operation: () => Promise<unknown>, code: string, message:
     await operation();
     throw new Error('operation unexpectedly succeeded');
   } catch (error) {
-    const raw = error instanceof Error ? error.message : String(error);
-    expect(raw).toContain(code);
-    expect(raw).toContain(message);
+    if (error instanceof Error && error.message === 'operation unexpectedly succeeded') throw error;
+    const prismaError = error as { code?: unknown; meta?: { code?: unknown; message?: unknown } };
+    expect(prismaError.code).toBe('P2010');
+    expect(prismaError.meta?.code).toBe(code);
+    expect(prismaError.meta?.message).toBe(`ERROR: ${message}`);
   }
 };
+
+function deferred() {
+  let release!: () => void;
+  const wait = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { wait, release };
+}
 
 describe('Phase 60 direct PostgreSQL database invariants', () => {
   afterAll(() => prisma.$disconnect());
@@ -153,6 +163,9 @@ describe('Phase 60 direct PostgreSQL database invariants', () => {
       'P6010',
       'phase60 approval assessment owner does not match organization',
     );
+    expect(
+      await prisma.assessmentApproval.count({ where: { assessmentId: f.assessment.id } }),
+    ).toBe(0);
   });
   it('D02 rejects a validation run that belongs to another revision', async () => {
     const f = await fixture();
@@ -166,6 +179,9 @@ describe('Phase 60 direct PostgreSQL database invariants', () => {
       'phase60 approval validation identity is not approvable',
     );
     expect(run.id).toBeTruthy();
+    expect(
+      await prisma.assessmentApproval.count({ where: { assessmentId: f.assessment.id } }),
+    ).toBe(0);
   });
   it('D03 rejects inactive persisted actor authority', async () => {
     const f = await fixture();
@@ -179,6 +195,9 @@ describe('Phase 60 direct PostgreSQL database invariants', () => {
       'P6013',
       'phase60 approval requires an active non-platform teacher authority',
     );
+    expect(
+      await prisma.assessmentApproval.count({ where: { assessmentId: f.assessment.id } }),
+    ).toBe(0);
   });
   it('D04 rejects approval of a nonlatest revision', async () => {
     const f = await fixture();
@@ -214,6 +233,9 @@ describe('Phase 60 direct PostgreSQL database invariants', () => {
       'P6012',
       'phase60 approval requires the latest revision',
     );
+    expect(
+      await prisma.assessmentApproval.count({ where: { assessmentId: f.assessment.id } }),
+    ).toBe(0);
   });
   it('D05 rejects approval without complete Phase 50 readiness evidence', async () => {
     const f = await fixture();
@@ -251,6 +273,9 @@ describe('Phase 60 direct PostgreSQL database invariants', () => {
       'P5029',
       'phase50 revision is not approvable',
     );
+    expect(
+      await prisma.assessmentApproval.count({ where: { assessmentId: f.assessment.id } }),
+    ).toBe(0);
     const incomplete = await fixture();
     const incompleteRun = await prisma.validationRun.create({
       data: {
@@ -324,59 +349,60 @@ describe('Phase 60 direct PostgreSQL database invariants', () => {
       'P6002',
       'phase60 logical question identity cannot cross assessments',
     );
+    expect(
+      await prisma.assessmentQuestion.count({ where: { logicalId: otherQuestion.logicalId } }),
+    ).toBe(1);
   });
 
-  it('serializes concurrent revision creation and rejects a stale approval after the newer revision', async () => {
+  it('D09 serializes a real overlapping newer revision creation against approval on one assessment', async () => {
     const f = await fixture();
     const run = await readyRun(f);
-    const create = (key: string) =>
-      createAssessmentRevision(f.context, {
-        version: '1.0.0',
-        assessmentId: f.assessment.id,
-        idempotencyKey: key,
-        curriculumVersionId: f.version.id,
-        curriculumNodeIds: [f.node.id],
-        scoringMode: 'NONE',
-        sections: [
-          {
-            key,
-            title: 'Concurrent',
-            order: 0,
-            questions: [
-              {
-                key: `${key}-q`,
-                type: 'SHORT_TEXT',
-                prompt: 'Concurrent question',
-                order: 0,
-                answers: [{ key: 'a', order: 0, text: 'Answer' }],
-                rubrics: [],
-                subQuestions: [],
-              },
-            ],
-          },
-        ],
+    const barrier = deferred();
+    const revisionHasSharedLock = deferred();
+    const approvalStarted = deferred();
+    const releaseRevision = deferred();
+    const revisionCreation = (async () => {
+      await barrier.wait;
+      return prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${f.assessment.id}::text, 60))`;
+        revisionHasSharedLock.release();
+        await releaseRevision.wait;
+        return tx.$queryRaw<
+          Array<{ revisionNumber: number }>
+        >`INSERT INTO assessment_revisions (assessment_id,revision_number,idempotency_key,request_fingerprint,state,curriculum_version_id,scoring_mode) VALUES (${f.assessment.id}::uuid,2,'d09-revision',${'9'.repeat(64)},'BUILDING',${f.version.id}::uuid,'NONE') RETURNING revision_number AS "revisionNumber"`;
       });
-    const outcomes = await Promise.all([
-      create('lock-a').then(
+    })();
+    const approval = (async () => {
+      await barrier.wait;
+      await revisionHasSharedLock.wait;
+      approvalStarted.release();
+      return insertApproval(f, run.id, crypto.randomUUID());
+    })();
+    const outcomes = Promise.all([
+      revisionCreation.then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
       ),
-      create('lock-b').then(
+      approval.then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
       ),
     ]);
-    const created = outcomes.flatMap((outcome) => ('value' in outcome ? [outcome.value] : []));
-    expect(created).toHaveLength(2);
-    expect(created.map((value) => value.revisionNumber).sort()).toEqual([2, 3]);
-    expect(
-      await prisma.assessmentRevision.count({ where: { assessmentId: f.assessment.id } }),
-    ).toBe(3);
+    barrier.release();
+    await revisionHasSharedLock.wait;
+    await approvalStarted.wait;
+    releaseRevision.release();
+    const [created, rejectedApproval] = await outcomes;
+    expect('value' in created && created.value[0]?.revisionNumber).toBe(2);
+    expect('error' in rejectedApproval).toBe(true);
     await rejects(
-      () => insertApproval(f, run.id),
+      () => Promise.reject((rejectedApproval as { error: unknown }).error),
       'P6012',
       'phase60 approval requires the latest revision',
     );
+    expect(
+      await prisma.assessmentRevision.count({ where: { assessmentId: f.assessment.id } }),
+    ).toBe(2);
     expect(
       await prisma.assessmentApproval.count({ where: { assessmentId: f.assessment.id } }),
     ).toBe(0);
