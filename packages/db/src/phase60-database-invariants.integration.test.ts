@@ -359,24 +359,31 @@ describe('Phase 60 direct PostgreSQL database invariants', () => {
     const run = await readyRun(f);
     const barrier = deferred();
     const revisionHasSharedLock = deferred();
-    const approvalStarted = deferred();
+    const approvalHasBackend = deferred();
     const releaseRevision = deferred();
+    let approvalBackendPid: number | undefined;
     const revisionCreation = (async () => {
       await barrier.wait;
       return prisma.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${f.assessment.id}::text, 60))`;
         revisionHasSharedLock.release();
         await releaseRevision.wait;
-        return tx.$queryRaw<
-          Array<{ revisionNumber: number }>
-        >`INSERT INTO assessment_revisions (assessment_id,revision_number,idempotency_key,request_fingerprint,state,curriculum_version_id,scoring_mode) VALUES (${f.assessment.id}::uuid,2,'d09-revision',${'9'.repeat(64)},'BUILDING',${f.version.id}::uuid,'NONE') RETURNING revision_number AS "revisionNumber"`;
+        const created = await tx.$queryRaw<
+          Array<{ id: string; revisionNumber: number }>
+        >`INSERT INTO assessment_revisions (assessment_id,revision_number,idempotency_key,request_fingerprint,state,curriculum_version_id,scoring_mode,base_revision_id) VALUES (${f.assessment.id}::uuid,2,'d09-revision',${'9'.repeat(64)},'BUILDING',${f.version.id}::uuid,'NONE',${f.revision.id}::uuid) RETURNING id, revision_number AS "revisionNumber"`;
+        await tx.$executeRaw`UPDATE assessment_revisions SET state='FINALIZED' WHERE id=${created[0]!.id}::uuid`;
+        return created;
       });
     })();
     const approval = (async () => {
       await barrier.wait;
       await revisionHasSharedLock.wait;
-      approvalStarted.release();
-      return insertApproval(f, run.id, crypto.randomUUID());
+      return prisma.$transaction(async (tx) => {
+        const backend = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+        approvalBackendPid = backend[0]!.pid;
+        approvalHasBackend.release();
+        return tx.$executeRaw`INSERT INTO assessment_approvals (organization_id,assessment_id,assessment_revision_id,validation_run_id,approving_user_id,approval_sequence,idempotency_key,request_fingerprint,contract_version,validation_ruleset_version) VALUES (${f.workspace.organization.id}::uuid,${f.assessment.id}::uuid,${f.revision.id}::uuid,${run.id}::uuid,${f.workspace.user.id}::uuid,1,${crypto.randomUUID()},${'b'.repeat(64)},'1.0.0','v1')`;
+      });
     })();
     const outcomes = Promise.all([
       revisionCreation.then(
@@ -390,9 +397,24 @@ describe('Phase 60 direct PostgreSQL database invariants', () => {
     ]);
     barrier.release();
     await revisionHasSharedLock.wait;
-    await approvalStarted.wait;
+    await approvalHasBackend.wait;
+    let approvalObservedWaiting = false;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const waiting = await prisma.$queryRaw<Array<{ waiting: boolean }>>`
+        SELECT EXISTS (
+          SELECT 1 FROM pg_locks
+          WHERE pid=${approvalBackendPid!} AND locktype='advisory' AND granted=FALSE
+        ) AS waiting
+      `;
+      if (waiting[0]?.waiting) {
+        approvalObservedWaiting = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     releaseRevision.release();
     const [created, rejectedApproval] = await outcomes;
+    expect(approvalObservedWaiting).toBe(true);
     expect('value' in created && created.value[0]?.revisionNumber).toBe(2);
     expect('error' in rejectedApproval).toBe(true);
     await rejects(
