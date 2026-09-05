@@ -326,6 +326,8 @@ export function validateScoreTree(
   return errors;
 }
 
+export * from './editor.js';
+
 export type EligibilityInput = {
   pedagogicalApproved: boolean;
   usageAllowed: boolean;

@@ -172,6 +172,7 @@ export const editorSaveRequestSchema = z
     version,
     assessmentId: uuidSchema,
     baseRevisionId: uuidSchema,
+    baseRevisionNumber: revisionNumber,
     idempotencyKey: boundedText(255),
     sections: z.array(editorSectionSchema).min(1).max(100),
   })

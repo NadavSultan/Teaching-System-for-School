@@ -33,6 +33,8 @@ import {
 
 export const prisma = new PrismaClient();
 
+export * from './teacher-workspace.js';
+
 export type PlatformAccessContext = {
   kind: 'PLATFORM';
   principal: AccessContext['principal'];

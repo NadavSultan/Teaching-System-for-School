@@ -100,3 +100,61 @@ CREATE TRIGGER phase60_approval_guard BEFORE INSERT ON "assessment_approvals" FO
 CREATE OR REPLACE FUNCTION phase60_reject_approval_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN PERFORM phase60_raise('P6018','phase60 approvals are append-only'); RETURN NULL; END; $$;
 CREATE TRIGGER phase60_approvals_immutable BEFORE UPDATE OR DELETE ON "assessment_approvals" FOR EACH ROW EXECUTE FUNCTION phase60_reject_approval_mutation();
+
+-- Editor revisions preserve source evidence by an explicit immutable copy edge. Generated
+-- links continue to use, and be checked by, the frozen Phase 40 generation-run boundary.
+ALTER TABLE "question_source_links" ALTER COLUMN "generation_run_id" DROP NOT NULL;
+ALTER TABLE "question_source_links" ADD COLUMN "copied_from_question_source_link_id" UUID REFERENCES "question_source_links"("id") ON DELETE RESTRICT;
+ALTER TABLE "question_source_links" ADD CONSTRAINT "question_source_links_origin_ck"
+  CHECK (("generation_run_id" IS NOT NULL) <> ("copied_from_question_source_link_id" IS NOT NULL));
+CREATE UNIQUE INDEX "question_source_links_editor_copy_key"
+  ON "question_source_links" ("assessment_question_id", "copied_from_question_source_link_id")
+  WHERE "copied_from_question_source_link_id" IS NOT NULL;
+
+DROP TRIGGER IF EXISTS question_source_identity ON question_source_links;
+CREATE TRIGGER question_source_identity BEFORE INSERT ON question_source_links
+  FOR EACH ROW WHEN (NEW.generation_run_id IS NOT NULL) EXECUTE FUNCTION phase40_question_source_identity();
+DROP TRIGGER IF EXISTS question_source_commit_guard ON question_source_links;
+CREATE CONSTRAINT TRIGGER question_source_commit_guard AFTER INSERT ON question_source_links
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.generation_run_id IS NOT NULL)
+  EXECUTE FUNCTION phase40_question_source_commit_guard();
+DROP TRIGGER IF EXISTS question_source_complete_output_graph ON question_source_links;
+CREATE CONSTRAINT TRIGGER question_source_complete_output_graph AFTER INSERT ON question_source_links
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.generation_run_id IS NOT NULL)
+  EXECUTE FUNCTION phase40_complete_output_link_guard();
+
+CREATE OR REPLACE FUNCTION phase60_editor_source_link_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE source_row RECORD; target_row RECORD;
+BEGIN
+  SELECT l.*, q.logical_id, r.id AS revision_id, r.assessment_id
+    INTO source_row
+    FROM question_source_links l
+    JOIN assessment_questions q ON q.id=l.assessment_question_id
+    JOIN assessment_sections s ON s.id=q.section_id
+    JOIN assessment_revisions r ON r.id=s.revision_id
+    WHERE l.id=NEW.copied_from_question_source_link_id;
+  SELECT q.logical_id, r.id AS revision_id, r.assessment_id, r.base_revision_id, r.state
+    INTO target_row
+    FROM assessment_questions q
+    JOIN assessment_sections s ON s.id=q.section_id
+    JOIN assessment_revisions r ON r.id=s.revision_id
+    WHERE q.id=NEW.assessment_question_id;
+  IF NEW.generation_run_id IS NOT NULL OR source_row.id IS NULL OR target_row.revision_id IS NULL
+     OR target_row.state <> 'BUILDING' OR target_row.base_revision_id IS DISTINCT FROM source_row.revision_id
+     OR target_row.assessment_id IS DISTINCT FROM source_row.assessment_id
+     OR target_row.logical_id IS DISTINCT FROM source_row.logical_id
+     OR NEW.knowledge_item_id IS DISTINCT FROM source_row.knowledge_item_id
+     OR NEW.source_version_id IS DISTINCT FROM source_row.source_version_id
+     OR NEW.locator IS DISTINCT FROM source_row.locator
+     OR NEW.text_hash IS DISTINCT FROM source_row.text_hash
+     OR NEW.curriculum_version_id IS DISTINCT FROM source_row.curriculum_version_id
+     OR NEW.curriculum_node_id IS DISTINCT FROM source_row.curriculum_node_id
+     OR NEW.lineage IS DISTINCT FROM source_row.lineage
+     OR NEW.prior_question_id IS DISTINCT FROM source_row.prior_question_id THEN
+    PERFORM phase60_raise('P6005','phase60 editor source link copy is invalid');
+  END IF;
+  RETURN NEW;
+END; $$;
+CREATE TRIGGER phase60_editor_source_link_guard BEFORE INSERT ON question_source_links
+  FOR EACH ROW WHEN (NEW.copied_from_question_source_link_id IS NOT NULL)
+  EXECUTE FUNCTION phase60_editor_source_link_guard();

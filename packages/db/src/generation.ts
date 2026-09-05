@@ -742,7 +742,7 @@ async function persistRegeneratedRevision(
   const selectedIds = new Set(selected.map((item) => item.knowledgeItemId));
   const selectedLineage = new Map(selected.map((item) => [item.knowledgeItemId, item.lineage]));
   const assessment = await tx.assessment.findUniqueOrThrow({ where: { id: run.assessmentId } });
-  await tx.$queryRaw`SELECT id FROM assessments WHERE id = ${assessment.id}::uuid FOR UPDATE`;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${assessment.id}::text, 60))`;
   const base = await tx.assessmentRevision.findFirstOrThrow({
     where: { id: run.baseRevisionId, assessmentId: assessment.id, state: 'FINALIZED' },
     include: {
@@ -768,6 +768,13 @@ async function persistRegeneratedRevision(
       },
     },
   });
+  const latest = await tx.assessmentRevision.findFirst({
+    where: { assessmentId: assessment.id, state: 'FINALIZED' },
+    orderBy: [{ revisionNumber: 'desc' }, { id: 'desc' }],
+    select: { id: true, revisionNumber: true, idempotencyKey: true },
+  });
+  if (!latest || (latest.id !== base.id && !latest.idempotencyKey.startsWith('generation:')))
+    throw new Error('CONTEXT_INVALIDATED');
   const target = base.sections
     .flatMap((section: any) => section.questions)
     .find((question: any) => question.id === run.targetQuestionId);
@@ -784,6 +791,7 @@ async function persistRegeneratedRevision(
       scoringMode: base.scoringMode,
       totalScoreUnits: base.totalScoreUnits,
       state: 'BUILDING',
+      baseRevisionId: base.id,
     },
   });
   await tx.assessmentRevisionNodeLink.createMany({
@@ -818,6 +826,7 @@ async function persistRegeneratedRevision(
       const savedQuestion = await tx.assessmentQuestion.create({
         data: {
           sectionId: savedSection.id,
+          logicalId: question.logicalId,
           key: question.key,
           type: question.type,
           prompt: replacement?.prompt ?? question.prompt,

@@ -903,26 +903,30 @@ model GenerationUsage {
 }
 
 model QuestionSourceLink {
-  id                   String             @id @default(uuid()) @db.Uuid
-  assessmentQuestionId String             @map("assessment_question_id") @db.Uuid
-  generationRunId      String             @map("generation_run_id") @db.Uuid
-  knowledgeItemId      String             @map("knowledge_item_id") @db.Uuid
-  sourceVersionId      String             @map("source_version_id") @db.Uuid
-  locator              String             @db.VarChar(500)
-  textHash             String             @map("text_hash") @db.Char(64)
-  curriculumVersionId  String             @map("curriculum_version_id") @db.Uuid
-  curriculumNodeId     String             @map("curriculum_node_id") @db.Uuid
-  lineage              GenerationLineage
-  priorQuestionId      String?            @map("prior_question_id") @db.Uuid
-  createdAt            DateTime           @default(now()) @map("created_at")
-  assessmentQuestion   AssessmentQuestion @relation(fields: [assessmentQuestionId], references: [id], onDelete: Restrict)
-  generationRun        GenerationRun      @relation(fields: [generationRunId], references: [id], onDelete: Restrict)
-  knowledgeItem        KnowledgeItem      @relation(fields: [knowledgeItemId], references: [id], onDelete: Restrict)
-  sourceVersion        SourceVersion      @relation(fields: [sourceVersionId], references: [id], onDelete: Restrict)
-  curriculumVersion    CurriculumVersion  @relation(fields: [curriculumVersionId], references: [id], onDelete: Restrict)
-  curriculumNode       CurriculumNode     @relation(fields: [curriculumNodeId], references: [id], onDelete: Restrict)
+  id                             String               @id @default(uuid()) @db.Uuid
+  assessmentQuestionId           String               @map("assessment_question_id") @db.Uuid
+  generationRunId                String?              @map("generation_run_id") @db.Uuid
+  copiedFromQuestionSourceLinkId String?              @map("copied_from_question_source_link_id") @db.Uuid
+  knowledgeItemId                String               @map("knowledge_item_id") @db.Uuid
+  sourceVersionId                String               @map("source_version_id") @db.Uuid
+  locator                        String               @db.VarChar(500)
+  textHash                       String               @map("text_hash") @db.Char(64)
+  curriculumVersionId            String               @map("curriculum_version_id") @db.Uuid
+  curriculumNodeId               String               @map("curriculum_node_id") @db.Uuid
+  lineage                        GenerationLineage
+  priorQuestionId                String?              @map("prior_question_id") @db.Uuid
+  createdAt                      DateTime             @default(now()) @map("created_at")
+  assessmentQuestion             AssessmentQuestion   @relation(fields: [assessmentQuestionId], references: [id], onDelete: Restrict)
+  generationRun                  GenerationRun?       @relation(fields: [generationRunId], references: [id], onDelete: Restrict)
+  copiedFromQuestionSourceLink   QuestionSourceLink?  @relation("EditorSourceLinkCopy", fields: [copiedFromQuestionSourceLinkId], references: [id], onDelete: Restrict)
+  editorCopies                   QuestionSourceLink[] @relation("EditorSourceLinkCopy")
+  knowledgeItem                  KnowledgeItem        @relation(fields: [knowledgeItemId], references: [id], onDelete: Restrict)
+  sourceVersion                  SourceVersion        @relation(fields: [sourceVersionId], references: [id], onDelete: Restrict)
+  curriculumVersion              CurriculumVersion    @relation(fields: [curriculumVersionId], references: [id], onDelete: Restrict)
+  curriculumNode                 CurriculumNode       @relation(fields: [curriculumNodeId], references: [id], onDelete: Restrict)
 
   @@unique([assessmentQuestionId, generationRunId, knowledgeItemId])
+  @@unique([assessmentQuestionId, copiedFromQuestionSourceLinkId])
   @@index([assessmentQuestionId])
   @@map("question_source_links")
 }

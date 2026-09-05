@@ -93,6 +93,7 @@ const editor = {
   version: '1.0.0',
   assessmentId: id,
   baseRevisionId: revisionId,
+  baseRevisionNumber: 1,
   idempotencyKey: 'save-1',
   sections: [
     {
@@ -441,6 +442,12 @@ describe('Phase 60 contracts', () => {
     });
     rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
       v.version = '2.0.0';
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.baseRevisionNumber = 0;
+    });
+    rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
+      v.baseRevisionNumber = 1.5;
     });
     rejectsOneMutation(editorSaveRequestSchema, editor, (v) => {
       v.idempotencyKey = ' ';
