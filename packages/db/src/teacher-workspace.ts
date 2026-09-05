@@ -123,6 +123,7 @@ export async function saveEditedRevision(
           : [];
         if (
           !curriculum ||
+          nodeIds.length === 0 ||
           new Set(nodeIds).size !== nodeIds.length ||
           linkedNodes.length !== nodeIds.length
         )

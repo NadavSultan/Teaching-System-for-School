@@ -742,8 +742,7 @@ async function persistRegeneratedRevision(
   const selectedIds = new Set(selected.map((item) => item.knowledgeItemId));
   const selectedLineage = new Map(selected.map((item) => [item.knowledgeItemId, item.lineage]));
   const assessment = await tx.assessment.findUniqueOrThrow({ where: { id: run.assessmentId } });
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${assessment.id}::text, 60))`;
-  const base = await tx.assessmentRevision.findFirstOrThrow({
+  const requestedBase = await tx.assessmentRevision.findFirstOrThrow({
     where: { id: run.baseRevisionId, assessmentId: assessment.id, state: 'FINALIZED' },
     include: {
       nodeLinks: true,
@@ -771,20 +770,82 @@ async function persistRegeneratedRevision(
   const latest = await tx.assessmentRevision.findFirst({
     where: { assessmentId: assessment.id, state: 'FINALIZED' },
     orderBy: [{ revisionNumber: 'desc' }, { id: 'desc' }],
-    select: { id: true, revisionNumber: true, idempotencyKey: true },
+    include: {
+      nodeLinks: true,
+      sections: {
+        orderBy: { order: 'asc' },
+        include: {
+          questions: {
+            orderBy: { order: 'asc' },
+            include: {
+              answers: { orderBy: { order: 'asc' } },
+              rubrics: { orderBy: { order: 'asc' } },
+              subQuestions: {
+                orderBy: { order: 'asc' },
+                include: {
+                  answers: { orderBy: { order: 'asc' } },
+                  rubrics: { orderBy: { order: 'asc' } },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
   });
-  if (!latest || (latest.id !== base.id && !latest.idempotencyKey.startsWith('generation:')))
+  if (!latest) throw new Error('CONTEXT_INVALIDATED');
+  const chain = await tx.assessmentRevision.findMany({
+    where: {
+      assessmentId: assessment.id,
+      state: 'FINALIZED',
+      revisionNumber: {
+        gte: requestedBase.revisionNumber,
+        lte: latest.revisionNumber,
+      },
+    },
+    orderBy: { revisionNumber: 'asc' },
+    select: {
+      id: true,
+      revisionNumber: true,
+      baseRevisionId: true,
+      idempotencyKey: true,
+    },
+  });
+  if (
+    chain.length !== latest.revisionNumber - requestedBase.revisionNumber + 1 ||
+    chain[0]?.id !== requestedBase.id ||
+    chain.at(-1)?.id !== latest.id ||
+    chain.some(
+      (revision, index) =>
+        index > 0 &&
+        (revision.revisionNumber !== chain[index - 1]!.revisionNumber + 1 ||
+          revision.baseRevisionId !== chain[index - 1]!.id ||
+          !revision.idempotencyKey.startsWith('generation:')),
+    )
+  )
     throw new Error('CONTEXT_INVALIDATED');
-  const target = base.sections
+  const requestedTarget = requestedBase.sections
     .flatMap((section: any) => section.questions)
-    .find((question: any) => question.id === run.targetQuestionId);
-  if (!target) throw new AccessDeniedError();
-  const revisionNumber =
-    (await tx.assessmentRevision.count({ where: { assessmentId: assessment.id } })) + 1;
+    .filter((question: any) => question.id === run.targetQuestionId);
+  if (requestedTarget.length !== 1) throw new Error('CONTEXT_INVALIDATED');
+  const requestedLogicalId = requestedTarget[0]!.logicalId;
+  if (
+    !requestedLogicalId ||
+    requestedBase.sections
+      .flatMap((section: any) => section.questions)
+      .filter((question: any) => question.logicalId === requestedLogicalId).length !== 1
+  )
+    throw new Error('CONTEXT_INVALIDATED');
+  const targets = latest.sections
+    .flatMap((section: any) => section.questions)
+    .filter((question: any) => question.logicalId === requestedLogicalId);
+  if (targets.length !== 1) throw new Error('CONTEXT_INVALIDATED');
+  const target = targets[0]!;
+  const base = latest;
   const revision = await tx.assessmentRevision.create({
     data: {
       assessmentId: assessment.id,
-      revisionNumber,
+      revisionNumber: latest.revisionNumber + 1,
       idempotencyKey: `generation:${run.id}`,
       requestFingerprint: fingerprint(run.frozenSpecification),
       curriculumVersionId: base.curriculumVersionId,
@@ -1189,6 +1250,7 @@ export async function processGenerationRun(
         const output = generatedQuestionOutputSchema.parse(response.output);
         if (output.citations.some((id) => !selectedIds.has(id))) throw new Error('OUTPUT_INVALID');
         const succeeded = await client.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${run.assessmentId}::text, 60))`;
           if (!(await contextStillEligible(runId, selected, tx)))
             throw new Error('CONTEXT_INVALIDATED');
           const persisted = await persistRegeneratedRevision(tx, run, output, selected);
