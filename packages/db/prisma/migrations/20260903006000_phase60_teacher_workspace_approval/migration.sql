@@ -212,10 +212,39 @@ BEGIN
       WHERE c.id<>run_row.base_revision_id
   )
   SELECT count(*),
-         bool_and(assessment_id=run_row.assessment_id AND state='FINALIZED')
-         AND bool_and(id=run_row.base_revision_id OR idempotency_key LIKE 'generation:%')
+         bool_and(
+           l.assessment_id=run_row.assessment_id
+           AND l.state='FINALIZED'
+           AND (
+             l.id=run_row.base_revision_id
+             OR EXISTS (
+               SELECT 1
+                 FROM generation_runs proof
+                 JOIN assessments proof_assessment ON proof_assessment.id=proof.assessment_id
+                 JOIN assessment_revisions proof_base ON proof_base.id=proof.base_revision_id
+                 JOIN assessment_questions proof_target ON proof_target.id=proof.target_question_id
+                 JOIN assessment_sections proof_target_section ON proof_target_section.id=proof_target.section_id
+                 WHERE proof.id=CASE
+                   WHEN l.idempotency_key ~* '^generation:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                     THEN substring(l.idempotency_key FROM 12)::uuid
+                   ELSE NULL
+                 END
+                   AND l.idempotency_key='generation:' || proof.id::text
+                   AND proof.output_revision_id=l.id
+                   AND (SELECT count(*) FROM generation_runs claim WHERE claim.output_revision_id=l.id)=1
+                   AND proof.state='SUCCEEDED'
+                   AND proof.operation='REGENERATE_QUESTION'
+                   AND proof.assessment_id=run_row.assessment_id
+                   AND proof.organization_id=run_row.organization_id
+                   AND proof_assessment.organization_id=proof.organization_id
+                   AND proof_base.assessment_id=proof.assessment_id
+                   AND proof_base.state='FINALIZED'
+                   AND proof_target_section.revision_id=proof_base.id
+             )
+           )
+         )
     INTO lineage_count, lineage_valid
-    FROM lineage;
+    FROM lineage l;
   IF effective_base_row.revision_number < (SELECT revision_number FROM assessment_revisions WHERE id=run_row.base_revision_id)
      OR lineage_count <> effective_base_row.revision_number - (SELECT revision_number FROM assessment_revisions WHERE id=run_row.base_revision_id) + 1
      OR NOT COALESCE(lineage_valid,FALSE)
@@ -227,7 +256,7 @@ BEGIN
            WHERE c.id<>run_row.base_revision_id
        ) SELECT 1 FROM lineage WHERE id=run_row.base_revision_id
      ) THEN
-    PERFORM phase60_raise('P6006','phase60 regeneration rebase is not a generation-only lineage');
+    PERFORM phase60_raise('P6006','phase60 regeneration rebase is not a proven generation lineage');
   END IF;
 
   SELECT count(*), (array_agg(q.id))[1]

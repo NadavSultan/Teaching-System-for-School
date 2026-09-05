@@ -819,9 +819,68 @@ async function persistRegeneratedRevision(
       (revision, index) =>
         index > 0 &&
         (revision.revisionNumber !== chain[index - 1]!.revisionNumber + 1 ||
-          revision.baseRevisionId !== chain[index - 1]!.id ||
-          !revision.idempotencyKey.startsWith('generation:')),
+          revision.baseRevisionId !== chain[index - 1]!.id),
     )
+  )
+    throw new Error('CONTEXT_INVALIDATED');
+  const generationKey =
+    /^generation:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+  const lineageRunIds = chain.slice(1).map((revision) => {
+    const match = generationKey.exec(revision.idempotencyKey);
+    if (!match) throw new Error('CONTEXT_INVALIDATED');
+    return match[1]!;
+  });
+  const lineageRuns = await tx.generationRun.findMany({
+    where: { id: { in: lineageRunIds } },
+    select: {
+      id: true,
+      organizationId: true,
+      assessmentId: true,
+      operation: true,
+      state: true,
+      baseRevisionId: true,
+      targetQuestionId: true,
+      outputRevisionId: true,
+      baseRevision: { select: { id: true, assessmentId: true, state: true } },
+      targetQuestion: {
+        select: { id: true, section: { select: { revisionId: true } } },
+      },
+    },
+  });
+  const lineageOutputIds = chain.slice(1).map((revision) => revision.id);
+  const outputClaims = await tx.generationRun.findMany({
+    where: { outputRevisionId: { in: lineageOutputIds } },
+    select: { outputRevisionId: true },
+  });
+  const outputClaimCounts = new Map<string, number>();
+  for (const claim of outputClaims)
+    if (claim.outputRevisionId)
+      outputClaimCounts.set(
+        claim.outputRevisionId,
+        (outputClaimCounts.get(claim.outputRevisionId) ?? 0) + 1,
+      );
+  const lineageRunsById = new Map(lineageRuns.map((proof) => [proof.id, proof]));
+  if (
+    lineageRuns.length !== lineageRunIds.length ||
+    chain.slice(1).some((revision, index) => {
+      const proof = lineageRunsById.get(lineageRunIds[index]!);
+      return (
+        !proof ||
+        proof.outputRevisionId !== revision.id ||
+        outputClaimCounts.get(revision.id) !== 1 ||
+        proof.state !== 'SUCCEEDED' ||
+        proof.operation !== 'REGENERATE_QUESTION' ||
+        proof.assessmentId !== assessment.id ||
+        proof.organizationId !== run.organizationId ||
+        !proof.baseRevisionId ||
+        proof.baseRevision?.id !== proof.baseRevisionId ||
+        proof.baseRevision.assessmentId !== assessment.id ||
+        proof.baseRevision.state !== 'FINALIZED' ||
+        !proof.targetQuestionId ||
+        proof.targetQuestion?.id !== proof.targetQuestionId ||
+        proof.targetQuestion.section.revisionId !== proof.baseRevisionId
+      );
+    })
   )
     throw new Error('CONTEXT_INVALIDATED');
   const requestedTarget = requestedBase.sections

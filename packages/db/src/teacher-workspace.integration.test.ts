@@ -1312,6 +1312,90 @@ describe('Phase 60 persisted immutable editor', () => {
     }
     expect(await graph(base.id)).toEqual(baseBefore);
   });
+  it('rejects a finalized manual descendant with a forged generation key at both lineage boundaries', async () => {
+    const f = await createGenerationFixture({ multiQuestion: true });
+    const drafted = await processGenerationRun(
+      f.generationRunId,
+      prisma,
+      new DeterministicFakeModelGateway(),
+    );
+    const base = await graph(drafted!.outputRevisionId!);
+    const target = base.sections[0]!.questions[0]!;
+    const queued = await requestQuestionRegeneration(f.context, {
+      version: '1.0.0',
+      assessmentId: f.assessmentId,
+      baseRevisionId: base.id,
+      targetQuestionId: target.id,
+      idempotencyKey: crypto.randomUUID(),
+      instruction: 'This stale run must not cross a forged lineage',
+      query: 'שלום',
+    });
+    const manual = await saveEditedRevision(
+      f.context,
+      requestFromGraph(f.assessmentId, base, (sections) => {
+        sections[0].title = 'Trusted manual descendant';
+      }),
+    );
+    const forgedRunId = crypto.randomUUID();
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SET LOCAL session_replication_role = replica`;
+      await tx.assessmentRevision.update({
+        where: { id: manual.revisionId },
+        data: { idempotencyKey: `generation:${forgedRunId}` },
+      });
+    });
+    const forged = await prisma.assessmentRevision.findUniqueOrThrow({
+      where: { id: manual.revisionId },
+    });
+    const forgedGraph = await graph(forged.id);
+    const beforeRows = await persistedAssessmentRows(f.assessmentId, f.context.organizationId);
+    const beforeAudits = await prisma.auditEvent.count({
+      where: { organizationId: f.context.organizationId },
+    });
+
+    await expect(
+      prisma.$transaction(async (tx) => {
+        const probe = await tx.assessmentRevision.create({
+          data: {
+            assessmentId: f.assessmentId,
+            revisionNumber: forged.revisionNumber + 1,
+            idempotencyKey: `generation:${queued.id}`,
+            requestFingerprint: 'f'.repeat(64),
+            curriculumVersionId: forged.curriculumVersionId,
+            scoringMode: forged.scoringMode,
+            totalScoreUnits: forged.totalScoreUnits,
+            state: 'BUILDING',
+            baseRevisionId: forged.id,
+          },
+        });
+        await tx.$queryRaw`
+          SELECT phase60_regeneration_effective_target(${queued.id}::uuid, ${probe.id}::uuid)
+        `;
+        throw new Error('FORGED_LINEAGE_WAS_ACCEPTED');
+      }),
+    ).rejects.toThrow('phase60 regeneration rebase is not a proven generation lineage');
+
+    const result = await processGenerationRun(
+      queued.id,
+      prisma,
+      new DeterministicFakeModelGateway(),
+    );
+    expect(result).toMatchObject({
+      state: 'INSUFFICIENT_CONTEXT',
+      failureCode: 'CONTEXT_INVALIDATED',
+      outputRevisionId: null,
+    });
+    expect(await graph(forged.id)).toEqual(forgedGraph);
+    expect(
+      persistenceDelta(
+        beforeRows,
+        await persistedAssessmentRows(f.assessmentId, f.context.organizationId),
+      ),
+    ).toEqual(zeroPersistenceDelta);
+    expect(
+      await prisma.auditEvent.count({ where: { organizationId: f.context.organizationId } }),
+    ).toBe(beforeAudits);
+  });
   it('C10 a real advisory-lock barrier proves overlap and exact final graph/audit cardinality', async () => {
     const f = await fixture();
     const a = await requestFor(f, undefined, 'a');
