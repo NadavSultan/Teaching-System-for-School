@@ -18,7 +18,11 @@ import {
   resolveAccessContext,
   saveEditedRevision,
 } from '@teach/db';
-import type { AuthenticatedPrincipal } from '@teach/contracts';
+import {
+  teacherAssessmentCreateResultSchema,
+  validationAcknowledgementResultSchema,
+  type AuthenticatedPrincipal,
+} from '@teach/contracts';
 
 @Injectable()
 export class TeacherWorkspaceService {
@@ -53,7 +57,17 @@ export class TeacherWorkspaceService {
     );
   }
   async create(principal: AuthenticatedPrincipal, organizationId: string, body: unknown) {
-    return createAssessment(await this.context(principal, organizationId), body);
+    const assessment = await createAssessment(await this.context(principal, organizationId), body);
+    return teacherAssessmentCreateResultSchema.parse({
+      version: '1.0.0',
+      id: assessment.id,
+      type: assessment.type,
+      title: assessment.title,
+      latestRevisionNumber: null,
+      latestRevisionId: null,
+      latestApprovalRevisionId: null,
+      updatedAt: assessment.updatedAt.toISOString(),
+    });
   }
   async save(principal: AuthenticatedPrincipal, organizationId: string, body: unknown) {
     return saveEditedRevision(await this.context(principal, organizationId), body);
@@ -81,7 +95,15 @@ export class TeacherWorkspaceService {
     return getValidationResult(await this.context(principal, organizationId), id);
   }
   async acknowledge(principal: AuthenticatedPrincipal, organizationId: string, body: unknown) {
-    return acknowledgeSemanticWarning(await this.context(principal, organizationId), body);
+    const acknowledgement = await acknowledgeSemanticWarning(
+      await this.context(principal, organizationId),
+      body,
+    );
+    return validationAcknowledgementResultSchema.parse({
+      version: '1.0.0',
+      acknowledgementId: acknowledgement.id,
+      findingId: acknowledgement.findingId,
+    });
   }
   async readiness(
     principal: AuthenticatedPrincipal,

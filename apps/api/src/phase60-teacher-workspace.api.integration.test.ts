@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { apiErrorSchema } from '@teach/contracts';
+import { apiErrorSchema, teacherAssessmentCreateResultSchema } from '@teach/contracts';
 import { createPersonalWorkspace, prisma } from '@teach/db';
 import { createApp } from './bootstrap.js';
 
@@ -72,6 +72,21 @@ describe('Phase 60 teacher workspace transport', () => {
     expect(error.message).toBe('Malformed request');
     expect(JSON.stringify(response.body)).not.toContain('ZodError');
     expect(JSON.stringify(response.body)).not.toContain('internal-only-input');
+
+    const created = await request(app.getHttpServer())
+      .post('/v1/teacher/assessments')
+      .set('x-dev-user-id', workspace.user.id)
+      .set('x-dev-user-email', workspace.user.normalizedEmail)
+      .set('x-organization-id', workspace.organization.id)
+      .send({ version: '1.0.0', type: 'WORKSHEET', title: 'הערכה שמורה' });
+    const createdContract = teacherAssessmentCreateResultSchema.parse(created.body);
+    expect(created.status).toBe(201);
+    expect(createdContract).toMatchObject({
+      type: 'WORKSHEET',
+      title: 'הערכה שמורה',
+      latestRevisionId: null,
+      latestApprovalRevisionId: null,
+    });
   });
 
   it('D10 captures API logger success and failure events without protected content', async () => {

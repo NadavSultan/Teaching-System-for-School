@@ -7,7 +7,7 @@ export default defineConfig({
   reporter: 'list',
   use: { baseURL: `http://127.0.0.1:${port}`, channel: 'chrome', trace: 'retain-on-failure' },
   webServer: {
-    command: `node ./node_modules/next/dist/bin/next dev -p ${port}`,
+    command: `node ./node_modules/next/dist/bin/next dev --webpack -p ${port}`,
     cwd: './apps/web',
     port,
     reuseExistingServer: !process.env.CI,

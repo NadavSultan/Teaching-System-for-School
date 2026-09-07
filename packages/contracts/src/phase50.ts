@@ -235,3 +235,10 @@ export const validationAcknowledgementSchema = z
     idempotencyKey: z.string().min(1).max(255),
   })
   .strict();
+export const validationAcknowledgementResultSchema = z
+  .object({
+    version: z.literal(VALIDATION_SCHEMA_VERSION),
+    acknowledgementId: z.string().uuid(),
+    findingId: z.string().uuid(),
+  })
+  .strict();

@@ -1,12 +1,17 @@
 import Link from 'next/link';
 import { WorkspaceClient } from '../../workspace-client';
 
-export default function AssessmentPage() {
+export default async function AssessmentPage({
+  params,
+}: {
+  params: Promise<{ assessmentId: string }>;
+}) {
+  const { assessmentId } = await params;
   return (
     <>
-      <WorkspaceClient readOnly />
+      <WorkspaceClient assessmentId={assessmentId} readOnly />
       <p className="workspace-shell">
-        <Link href="./edit">פתיחת גרסה לעריכה</Link>
+        <Link href={`/assessments/${assessmentId}/edit`}>פתיחת גרסה לעריכה</Link>
       </p>
     </>
   );

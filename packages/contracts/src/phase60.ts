@@ -101,6 +101,8 @@ export const teacherAssessmentListResponseSchema = z
   })
   .strict();
 
+export const teacherAssessmentCreateResultSchema = teacherAssessmentListItemSchema;
+
 export const teacherRevisionHistoryItemSchema = z
   .object({
     id: uuidSchema,
