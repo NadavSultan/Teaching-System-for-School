@@ -37,7 +37,7 @@ describe('Phase 60 teacher workspace transport', () => {
     expect(apiErrorSchema.parse(malformedQuery.body).error.message).toBe('Malformed request');
   });
 
-  it('O2 rejects malformed organization and assessment path identifiers', async () => {
+  it('rejects malformed organization and assessment path identifiers', async () => {
     const malformedOrganization = await request(app.getHttpServer())
       .get(`/v1/teacher/assessments/${assessmentId}`)
       .set('x-dev-user-id', '00000000-0000-4000-8000-000000000013')
@@ -74,10 +74,7 @@ describe('Phase 60 teacher workspace transport', () => {
     expect(JSON.stringify(response.body)).not.toContain('internal-only-input');
   });
 
-  // D10 handoff: API evidence is captured here; the worker logger evidence is
-  // covered by the existing OutboxWorker telemetry test, while the client
-  // logger is deferred to the not-yet-built P60-5 UI package.
-  it('D10 captures API logger evidence and records the P60-5 client logger handoff', async () => {
+  it('captures API logger success and failure events without protected content', async () => {
     const captured: string[] = [];
     const originalLog = console.log;
     console.log = (...args: unknown[]) => {

@@ -397,7 +397,7 @@ describe('Phase 60 teacher workspace API operations', () => {
     expect(JSON.stringify(audit.metadata)).not.toContain('Edited through the teacher API');
   });
 
-  it('O7-O10 persist validation, readiness, approval, safe preview, status/history, and mapped rejection contracts', async () => {
+  it('O7 persists validation, readiness, approval, safe preview, status and history contracts', async () => {
     const seeded = await fixture();
     const headers = headersFor(seeded);
     const validation = await request(app.getHttpServer())
@@ -526,5 +526,111 @@ describe('Phase 60 teacher workspace API operations', () => {
     expect(deniedApproval.status).toBe(404);
     expect(deniedApproval.headers['x-request-id']).toBe('phase60-o10-rejection');
     expect(rejection).toMatchObject({ code: 'NOT_FOUND', requestId: 'phase60-o10-rejection' });
+  });
+
+  it('O9 maps 404 and 409 plus exact pending and source-eligibility 422 approval rejections with zero writes', async () => {
+    const seeded = await fixture();
+    const headers = headersFor(seeded);
+    const approvalCounts = async () => {
+      const [approvals, audits] = await Promise.all([
+        prisma.assessmentApproval.count({ where: { assessmentId: seeded.assessmentId } }),
+        prisma.auditEvent.count({
+          where: {
+            eventType: 'assessment.revision.approved',
+            organizationId: seeded.context.organizationId,
+          },
+        }),
+      ]);
+      return { approvals, audits };
+    };
+    const validation = await request(app.getHttpServer())
+      .post('/v1/teacher/validations')
+      .set(headers)
+      .send({
+        version: '1.0.0',
+        assessmentId: seeded.assessmentId,
+        assessmentRevisionId: seeded.revisionId,
+        idempotencyKey: crypto.randomUUID(),
+      });
+    expect(validation.status).toBe(201);
+
+    const pending = await request(app.getHttpServer())
+      .post('/v1/teacher/approvals')
+      .set(headers)
+      .send({
+        version: '1.0.0',
+        assessmentId: seeded.assessmentId,
+        assessmentRevisionId: seeded.revisionId,
+        idempotencyKey: crypto.randomUUID(),
+      });
+    expect(pending.status).toBe(422);
+    expect(apiErrorSchema.parse(pending.body).error).toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'VALIDATION_PENDING',
+    });
+    expect(await approvalCounts()).toEqual({ approvals: 0, audits: 0 });
+
+    const run = validationStatusSchema.parse(validation.body);
+    expect((await processValidationRun(run.id))?.state).toBe('SUCCEEDED');
+    await setSourceLifecycle(
+      seeded.context,
+      seeded.sourceVersionId,
+      'SUSPENDED',
+      'Phase 60 O9 source eligibility changed',
+    );
+    const sourceChanged = await request(app.getHttpServer())
+      .post('/v1/teacher/approvals')
+      .set(headers)
+      .send({
+        version: '1.0.0',
+        assessmentId: seeded.assessmentId,
+        assessmentRevisionId: seeded.revisionId,
+        idempotencyKey: crypto.randomUUID(),
+      });
+    expect(sourceChanged.status).toBe(422);
+    expect(apiErrorSchema.parse(sourceChanged.body).error).toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'SOURCE_ELIGIBILITY_CHANGED',
+    });
+    expect(await approvalCounts()).toEqual({ approvals: 0, audits: 0 });
+
+    const missing = await request(app.getHttpServer())
+      .post('/v1/teacher/approvals')
+      .set(headers)
+      .send({
+        version: '1.0.0',
+        assessmentId: seeded.assessmentId,
+        assessmentRevisionId: crypto.randomUUID(),
+        idempotencyKey: crypto.randomUUID(),
+      });
+    expect(missing.status).toBe(404);
+
+    const base = teacherWorkspaceSchema.parse(
+      (
+        await request(app.getHttpServer())
+          .get(`/v1/teacher/assessments/${seeded.assessmentId}`)
+          .set(headers)
+      ).body,
+    );
+    const edit = editorRequest(base);
+    edit.sections[0]!.title = `${edit.sections[0]!.title} O9 stale revision`;
+    expect(
+      (await request(app.getHttpServer()).post('/v1/teacher/revisions').set(headers).send(edit))
+        .status,
+    ).toBe(201);
+    const stale = await request(app.getHttpServer())
+      .post('/v1/teacher/approvals')
+      .set(headers)
+      .send({
+        version: '1.0.0',
+        assessmentId: seeded.assessmentId,
+        assessmentRevisionId: seeded.revisionId,
+        idempotencyKey: crypto.randomUUID(),
+      });
+    expect(stale.status).toBe(409);
+    expect(apiErrorSchema.parse(stale.body).error.message).toBe(
+      'Request conflicts with current state',
+    );
+    expect(await approvalCounts()).toEqual({ approvals: 0, audits: 0 });
   });
 });

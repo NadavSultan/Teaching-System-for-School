@@ -455,6 +455,72 @@ describe('Phase 60 persisted teacher validation workflow', () => {
       }),
     ).rejects.toThrow();
   });
+
+  it('O2 returns selected revision history validation readiness and approval from one RepeatableRead snapshot', async () => {
+    const f = await generatedFixture();
+    const validation = await completedRun(f);
+    const approved = await approveAssessmentRevision(f.context, {
+      version: '1.0.0',
+      assessmentId: f.assessmentId,
+      assessmentRevisionId: f.revisionId,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const base = await workspace(f);
+
+    let firstReadEntered = false;
+    let enterSnapshotRead!: () => void;
+    let releaseSnapshotRead!: () => void;
+    const snapshotReadEntered = new Promise<void>((resolve) => {
+      enterSnapshotRead = resolve;
+    });
+    const releaseSnapshot = new Promise<void>((resolve) => {
+      releaseSnapshotRead = resolve;
+    });
+    const snapshotClient = prisma.$extends({
+      query: {
+        assessment: {
+          async findFirst({ args, query }) {
+            const result = await query(args);
+            if (!firstReadEntered) {
+              firstReadEntered = true;
+              enterSnapshotRead();
+              await releaseSnapshot;
+            }
+            return result;
+          },
+        },
+      },
+    });
+
+    const read = getTeacherWorkspace(
+      f.context,
+      f.assessmentId,
+      undefined,
+      snapshotClient as unknown as typeof prisma,
+    );
+    await snapshotReadEntered;
+
+    const edit = editorInput(base);
+    edit.sections[0]!.title = `${edit.sections[0]!.title} concurrent snapshot edit`;
+    const concurrent = await saveEditedRevision(f.context, edit);
+    expect(concurrent.revisionNumber).toBe(base.revision.revisionNumber + 1);
+
+    releaseSnapshotRead();
+    const view = await read;
+    expect(view.revision.id).toBe(f.revisionId);
+    expect(view.assessment).toMatchObject({
+      latestRevisionId: f.revisionId,
+      latestRevisionNumber: base.revision.revisionNumber,
+      latestApprovalRevisionId: f.revisionId,
+    });
+    expect(view.history.map((item) => item.id)).toEqual([f.revisionId]);
+    expect(view.validation).toMatchObject({
+      id: validation.id,
+      assessmentRevisionId: f.revisionId,
+    });
+    expect(view.readiness).toMatchObject({ status: 'READY', validationRunId: validation.id });
+    expect(view.approval).toMatchObject({ approved: true, approvalId: approved.approvalId });
+  });
 });
 
 describe('Phase 60 persisted tenant and authority reloads', () => {
