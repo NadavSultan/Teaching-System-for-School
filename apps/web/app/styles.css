@@ -9,6 +9,7 @@
 }
 body {
   margin: 0;
+  overflow-x: hidden;
 }
 .skip-link {
   position: absolute;
@@ -25,6 +26,67 @@ body {
   margin-inline: auto;
   padding-inline: 1.5rem;
   padding-block: 3rem;
+}
+.workspace-shell {
+  max-inline-size: 70rem;
+  margin-inline: auto;
+  padding: 1.25rem;
+  overflow-wrap: anywhere;
+}
+.workspace-header {
+  display: flex;
+  gap: 1rem;
+  align-items: start;
+  justify-content: space-between;
+}
+.workspace-shell section {
+  margin-block: 1rem;
+}
+.workspace-shell nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding-block: 1rem;
+}
+.workspace-shell textarea,
+.workspace-shell input,
+.workspace-shell select {
+  display: block;
+  inline-size: 100%;
+  max-inline-size: 42rem;
+  margin-block: 0.5rem 1rem;
+  font: inherit;
+}
+.workspace-shell textarea {
+  min-block-size: 7rem;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+button,
+a {
+  min-block-size: 2.75rem;
+}
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 0.2rem solid #145cc4;
+  outline-offset: 0.15rem;
+}
+.status {
+  font-weight: 700;
+}
+@media (max-width: 42rem) {
+  .workspace-header {
+    flex-direction: column;
+  }
+  .workspace-shell {
+    padding: 0.75rem;
+  }
 }
 .eyebrow {
   direction: ltr;

@@ -23,6 +23,7 @@
     "verify:phase50": "node scripts/verify-phase50-control.mjs",
     "verify:phase60": "node scripts/verify-phase60-control.mjs",
     "test-integration:phase50-upgrade": "node scripts/phase50-upgrade-test.mjs",
+    "test:e2e:phase60": "playwright test --config playwright.phase60.config.ts",
     "live-evaluation:preflight": "node scripts/live-evaluation-preflight.mjs",
     "test:architecture": "vitest run tests/architecture.test.ts",
     "contracts:generate": "pnpm --filter @teach/contracts build && node packages/contracts/scripts/generate-schemas.mjs",
@@ -35,6 +36,7 @@
   },
   "devDependencies": {
     "@eslint/js": "9.39.2",
+    "@playwright/test": "1.51.1",
     "@types/node": "24.10.1",
     "embedded-postgres": "17.10.0-beta.17",
     "eslint": "9.39.2",

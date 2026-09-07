@@ -74,7 +74,7 @@ describe('Phase 60 teacher workspace transport', () => {
     expect(JSON.stringify(response.body)).not.toContain('internal-only-input');
   });
 
-  it('captures API logger success and failure events without protected content', async () => {
+  it('D10 captures API logger success and failure events without protected content', async () => {
     const captured: string[] = [];
     const originalLog = console.log;
     console.log = (...args: unknown[]) => {
