@@ -15,6 +15,7 @@ import { CONTRACT_VERSION } from '@teach/contracts';
 import { databaseReady, databaseReadyAt, prisma, resolveAccessContext } from '@teach/db';
 import { AccessDeniedError, authorizeWorkspace } from '@teach/domain';
 import { AuthService } from './auth.js';
+import { TeacherWorkspaceModule } from './teacher-workspace.module.js';
 
 @Injectable()
 export class WorkspaceService {
@@ -147,5 +148,9 @@ export class AppController {
   }
 }
 
-@Module({ controllers: [AppController], providers: [AuthService, WorkspaceService] })
+@Module({
+  imports: [TeacherWorkspaceModule],
+  controllers: [AppController],
+  providers: [AuthService, WorkspaceService],
+})
 export class AppModule {}

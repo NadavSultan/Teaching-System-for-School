@@ -43,6 +43,7 @@ async function reloadValidationContext(context: AccessContext, client: Db): Prom
     include: { user: true, organization: true },
   });
   if (!membership) throw new Error('Resource not found or unavailable');
+  if (membership.user.platformAdmin) throw new Error('Resource not found or unavailable');
   return {
     principal: context.principal,
     organizationId: membership.organizationId,
@@ -58,7 +59,7 @@ function fingerprint(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
-function status(run: any) {
+export function validationStatusFromRun(run: any) {
   return validationStatusSchema.parse({
     version: '1.0.0',
     id: run.id,
@@ -427,7 +428,7 @@ export async function requestRevisionValidation(
           if (existing) {
             if (existing.requestFingerprint !== requestFingerprint)
               throw new IdempotencyConflictError();
-            return status(existing);
+            return validationStatusFromRun(existing);
           }
           const sequence =
             (
@@ -470,7 +471,7 @@ export async function requestRevisionValidation(
               metadata: { rulesetVersion: RULESET_VERSION, evaluatorVersion: EVALUATOR_VERSION },
             },
           });
-          return status(run);
+          return validationStatusFromRun(run);
         },
         { isolationLevel: 'Serializable' },
       );
@@ -492,7 +493,7 @@ export async function getValidationStatus(
   const run = await client.validationRun.findFirst({
     where: { id: runId, organizationId: trustedContext.organizationId },
   });
-  return run ? status(run) : null;
+  return run ? validationStatusFromRun(run) : null;
 }
 
 export async function getValidationResult(
@@ -506,7 +507,7 @@ export async function getValidationResult(
   if (!run) return null;
   return validationResultSchema.parse({
     version: '1.0.0',
-    status: status(run),
+    status: validationStatusFromRun(run),
     executions: run.executions.map((row) => ({
       ruleId: row.ruleDefinition.ruleId,
       ruleVersion: row.ruleDefinition.ruleVersion,
@@ -617,86 +618,139 @@ export async function getRevisionValidationReadiness(
   client: PrismaClient = prisma,
   onBeforeApprovabilityAssertion: () => void = () => undefined,
 ): Promise<ValidationReadiness> {
-  return client.$transaction(async (tx) => {
-    const trustedContext = await reloadValidationContext(context, tx);
-    authorizeWorkspace(trustedContext, trustedContext.organizationId, 'READ_ASSESSMENT');
-    const revision = await tx.assessmentRevision.findFirst({
-      where: {
-        id: assessmentRevisionId,
-        assessmentId,
-        assessment: { organizationId: trustedContext.organizationId },
-      },
-    });
-    if (!revision)
-      return validationReadinessSchema.parse({
-        version: '1.0.0',
-        status: 'BLOCKED',
-        reasonCode: 'VALIDATION_REQUIRED',
-        validationRunId: null,
-      });
-    const run = await tx.validationRun.findFirst({
-      where: { organizationId: trustedContext.organizationId, assessmentId, assessmentRevisionId },
-      orderBy: { revisionSequence: 'desc' },
-      include: {
-        findings: { include: { acknowledgements: true } },
-        executions: true,
-        semanticEvaluation: true,
-      },
-    });
-    let reasonCode: string | null = null;
-    if (!run) reasonCode = 'VALIDATION_REQUIRED';
-    else if (run.state !== 'SUCCEEDED')
-      reasonCode =
-        run.state === 'FAILED'
-          ? 'VALIDATION_FAILED'
-          : run.state === 'PENDING'
-            ? 'VALIDATION_PENDING'
-            : 'VALIDATION_PROCESSING';
-    else if (run.rulesetVersion !== RULESET_VERSION || run.evaluatorVersion !== EVALUATOR_VERSION)
-      reasonCode = 'VALIDATION_VERSION_STALE';
-    else if (
-      run.findings.some(
-        (finding) =>
-          finding.severity === 'BLOCKING' ||
-          (finding.severity === 'WARNING' && finding.acknowledgements.length === 0),
-      )
-    )
-      reasonCode = run.findings.some((finding) => finding.kind === 'DETERMINISTIC')
-        ? 'DETERMINISTIC_BLOCKER'
-        : run.findings.some((finding) => finding.severity === 'BLOCKING')
-          ? 'SEMANTIC_BLOCKER'
-          : 'WARNING_ACKNOWLEDGEMENT_REQUIRED';
-    else if (
-      run.executions.length !== 11 ||
-      !run.semanticEvaluation ||
-      run.semanticEvaluation.state !== 'SUCCEEDED'
-    )
-      reasonCode = 'VALIDATION_FAILED';
-    if (!reasonCode && run) {
-      try {
-        onBeforeApprovabilityAssertion();
-        const rows = await tx.$queryRaw<
-          Array<{ assert_revision_approvable: string }>
-        >`SELECT assert_revision_approvable(${trustedContext.organizationId}::uuid, ${assessmentRevisionId}::uuid)`;
-        if (rows[0]?.assert_revision_approvable !== run.id) reasonCode = 'VALIDATION_FAILED';
-      } catch (error) {
-        const dbCode =
-          error && typeof error === 'object'
-            ? String(
-                (error as { code?: unknown }).code === 'P2010'
-                  ? (error as { meta?: { code?: unknown } }).meta?.code
-                  : (error as { code?: unknown }).code,
-              )
-            : '';
-        reasonCode = dbCode === 'P5030' ? 'SOURCE_ELIGIBILITY_CHANGED' : 'VALIDATION_FAILED';
-      }
-    }
+  return client.$transaction(async (tx) =>
+    getRevisionValidationReadinessInTransaction(
+      context,
+      assessmentId,
+      assessmentRevisionId,
+      tx,
+      true,
+      onBeforeApprovabilityAssertion,
+    ),
+  );
+}
+
+export async function getRevisionValidationReadinessInTransaction(
+  context: AccessContext,
+  assessmentId: string,
+  assessmentRevisionId: string,
+  tx: Prisma.TransactionClient,
+  assertDatabase = true,
+  onBeforeApprovabilityAssertion: () => void = () => undefined,
+): Promise<ValidationReadiness> {
+  const trustedContext = await reloadValidationContext(context, tx);
+  authorizeWorkspace(trustedContext, trustedContext.organizationId, 'READ_ASSESSMENT');
+  const revision = await tx.assessmentRevision.findFirst({
+    where: {
+      id: assessmentRevisionId,
+      assessmentId,
+      assessment: { organizationId: trustedContext.organizationId },
+    },
+  });
+  if (!revision)
     return validationReadinessSchema.parse({
       version: '1.0.0',
-      status: reasonCode ? 'BLOCKED' : 'READY',
-      reasonCode,
-      validationRunId: run?.id ?? null,
+      status: 'BLOCKED',
+      reasonCode: 'VALIDATION_REQUIRED',
+      validationRunId: null,
     });
+  const run = await tx.validationRun.findFirst({
+    where: { organizationId: trustedContext.organizationId, assessmentId, assessmentRevisionId },
+    orderBy: { revisionSequence: 'desc' },
+    include: {
+      findings: { include: { acknowledgements: true } },
+      executions: true,
+      semanticEvaluation: true,
+    },
+  });
+  let reasonCode: string | null = null;
+  if (!run) reasonCode = 'VALIDATION_REQUIRED';
+  else if (run.state !== 'SUCCEEDED')
+    reasonCode =
+      run.state === 'FAILED'
+        ? 'VALIDATION_FAILED'
+        : run.state === 'PENDING'
+          ? 'VALIDATION_PENDING'
+          : 'VALIDATION_PROCESSING';
+  else if (run.rulesetVersion !== RULESET_VERSION || run.evaluatorVersion !== EVALUATOR_VERSION)
+    reasonCode = 'VALIDATION_VERSION_STALE';
+  else if (
+    run.findings.some(
+      (finding) =>
+        finding.severity === 'BLOCKING' ||
+        (finding.severity === 'WARNING' && finding.acknowledgements.length === 0),
+    )
+  )
+    reasonCode = run.findings.some((finding) => finding.kind === 'DETERMINISTIC')
+      ? 'DETERMINISTIC_BLOCKER'
+      : run.findings.some((finding) => finding.severity === 'BLOCKING')
+        ? 'SEMANTIC_BLOCKER'
+        : 'WARNING_ACKNOWLEDGEMENT_REQUIRED';
+  else if (
+    run.executions.length !== 11 ||
+    !run.semanticEvaluation ||
+    run.semanticEvaluation.state !== 'SUCCEEDED'
+  )
+    reasonCode = 'VALIDATION_FAILED';
+  if (!reasonCode && run) {
+    const invalidSource = await tx.$queryRaw<Array<{ invalid: boolean }>>`
+        SELECT EXISTS (
+          SELECT 1
+          FROM assessment_sections sec
+          JOIN assessment_questions q ON q.section_id = sec.id
+          JOIN question_source_links qsl ON qsl.assessment_question_id = q.id
+          JOIN knowledge_items ki ON ki.id = qsl.knowledge_item_id
+          JOIN source_versions sv ON sv.id = qsl.source_version_id
+          JOIN knowledge_sources ks ON ks.id = sv.source_id
+          LEFT JOIN LATERAL (
+            SELECT pr.decision FROM pedagogical_reviews pr
+            WHERE pr.source_version_id = sv.id ORDER BY pr.created_at DESC, pr.id DESC LIMIT 1
+          ) review ON true
+          LEFT JOIN LATERAL (
+            SELECT up.decision, up.valid_until FROM usage_permissions up
+            WHERE up.source_version_id = sv.id ORDER BY up.created_at DESC, up.id DESC LIMIT 1
+          ) permission ON true
+          WHERE sec.revision_id = ${assessmentRevisionId}::uuid
+            AND NOT (
+              sv.lifecycle = 'ACTIVE'
+              AND COALESCE((SELECT sle.to_status FROM source_lifecycle_events sle WHERE sle.source_id = ks.id ORDER BY sle.created_at DESC, sle.id DESC LIMIT 1), sv.lifecycle) = 'ACTIVE'
+              AND ki.status = 'ACTIVE'
+              AND review.decision = 'APPROVED'
+              AND permission.decision = 'ALLOWED' AND (permission.valid_until IS NULL OR permission.valid_until > now())
+              AND (ks.visibility = 'PLATFORM_SHARED' OR ks.organization_id = ${trustedContext.organizationId}::uuid)
+              AND (ki.visibility = 'PLATFORM_SHARED' OR ki.organization_id = ${trustedContext.organizationId}::uuid)
+              AND qsl.curriculum_version_id = (SELECT curriculum_version_id FROM assessment_revisions WHERE id = ${assessmentRevisionId}::uuid)
+              AND EXISTS (SELECT 1 FROM curriculum_versions cv WHERE cv.id = qsl.curriculum_version_id AND cv.status = 'PUBLISHED')
+              AND EXISTS (SELECT 1 FROM assessment_revision_node_links arnl WHERE arnl.revision_id = ${assessmentRevisionId}::uuid AND arnl.curriculum_node_id = qsl.curriculum_node_id)
+            )
+        ) AS invalid
+      `;
+    if (invalidSource[0]?.invalid) reasonCode = 'SOURCE_ELIGIBILITY_CHANGED';
+  }
+  if (!reasonCode && run && assertDatabase) {
+    try {
+      onBeforeApprovabilityAssertion();
+      const rows = await tx.$queryRaw<
+        Array<{ assert_revision_approvable: string }>
+      >`SELECT assert_revision_approvable(${trustedContext.organizationId}::uuid, ${assessmentRevisionId}::uuid)`;
+      if (rows[0]?.assert_revision_approvable !== run.id) reasonCode = 'VALIDATION_FAILED';
+    } catch (error) {
+      const dbCode =
+        error && typeof error === 'object'
+          ? String(
+              (error as { code?: unknown }).code === 'P2010'
+                ? (error as { meta?: { code?: unknown } }).meta?.code
+                : (error as { code?: unknown }).code,
+            )
+          : '';
+      reasonCode = dbCode === 'P5030' ? 'SOURCE_ELIGIBILITY_CHANGED' : 'VALIDATION_FAILED';
+    }
+  }
+  return validationReadinessSchema.parse({
+    version: '1.0.0',
+    status: reasonCode ? 'BLOCKED' : 'READY',
+    reasonCode,
+    validationRunId: run?.id ?? null,
   });
 }
 
@@ -719,10 +773,10 @@ export async function processValidationRun(
   return client.$transaction(async (tx) => {
     const run = await tx.validationRun.findUnique({ where: { id: validationRunId } });
     if (!run || run.state === 'SUCCEEDED' || run.state === 'FAILED')
-      return run ? status(run) : null;
+      return run ? validationStatusFromRun(run) : null;
     const now = new Date();
     if (run.state === 'PROCESSING') {
-      if (!run.leaseExpiresAt || run.leaseExpiresAt >= now) return status(run);
+      if (!run.leaseExpiresAt || run.leaseExpiresAt >= now) return validationStatusFromRun(run);
       await tx.validationRun.update({
         where: { id: run.id },
         data: {
@@ -746,7 +800,7 @@ export async function processValidationRun(
     });
     if (claimedRows.count !== 1) {
       const current = await tx.validationRun.findUnique({ where: { id: run.id } });
-      return current ? status(current) : null;
+      return current ? validationStatusFromRun(current) : null;
     }
     const claimed = await tx.validationRun.findUniqueOrThrow({ where: { id: run.id } });
     const rules = await tx.validationRuleDefinition.findMany({
@@ -754,7 +808,7 @@ export async function processValidationRun(
       orderBy: { deterministicOrder: 'asc' },
     });
     if (rules.length !== 11)
-      return status(
+      return validationStatusFromRun(
         await tx.validationRun.update({
           where: { id: claimed.id },
           data: {
@@ -930,7 +984,7 @@ export async function processValidationRun(
           metadata: { failureCode, deterministicFailCount: failedRun.deterministicFailCount },
         },
       });
-      return status(failedRun);
+      return validationStatusFromRun(failedRun);
     }
     const failed = results.filter((result) => result.outcome === 'FAIL').length;
     const complete = await tx.validationRun.update({
@@ -960,6 +1014,6 @@ export async function processValidationRun(
         },
       },
     });
-    return status(complete);
+    return validationStatusFromRun(complete);
   });
 }

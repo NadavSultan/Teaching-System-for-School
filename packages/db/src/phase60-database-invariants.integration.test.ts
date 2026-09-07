@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   createAssessmentRevision,
+  approveAssessmentRevision,
   createPersonalWorkspace,
   prisma,
   publishCurriculumVersion,
@@ -342,10 +343,10 @@ describe('Phase 60 direct PostgreSQL database invariants', () => {
     });
     const buildingSection = await prisma.$queryRaw<
       Array<{ id: string }>
-    >`INSERT INTO assessment_sections (revision_id,key,title,"order") VALUES (${building[0]!.id}::uuid,'d08','D08',0) RETURNING id`;
+    >`INSERT INTO assessment_sections (revision_id,key,title,"order") VALUES (${building[0]!.id}::uuid,'lineage-section','Lineage section',0) RETURNING id`;
     await rejects(
       () =>
-        prisma.$executeRaw`INSERT INTO assessment_questions (section_id,logical_id,key,type,prompt,"order") VALUES (${buildingSection[0]!.id}::uuid,${otherQuestion.logicalId}::uuid,'d08','SHORT_TEXT','D08',0)`,
+        prisma.$executeRaw`INSERT INTO assessment_questions (section_id,logical_id,key,type,prompt,"order") VALUES (${buildingSection[0]!.id}::uuid,${otherQuestion.logicalId}::uuid,'lineage-question','SHORT_TEXT','Lineage question',0)`,
       'P6002',
       'phase60 logical question identity cannot cross assessments',
     );
@@ -354,7 +355,67 @@ describe('Phase 60 direct PostgreSQL database invariants', () => {
     ).toBe(1);
   });
 
-  it('D09 serializes a real overlapping newer revision creation against approval on one assessment', async () => {
+  it('D09 persists approval audit metadata with only safe IDs counts operation class and version stamps', async () => {
+    const f = await fixture();
+    const run = await readyRun(f);
+    const approval = await approveAssessmentRevision(f.context, {
+      version: '1.0.0',
+      assessmentId: f.assessment.id,
+      assessmentRevisionId: f.revision.id,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const audit = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: 'assessment.revision.approved', targetId: approval.approvalId },
+    });
+    expect(audit.metadata).toEqual({
+      operation: 'ASSESSMENT_REVISION_APPROVED',
+      assessmentId: f.assessment.id,
+      assessmentRevisionId: f.revision.id,
+      validationRunId: run.id,
+      approvalSequence: 1,
+      approvalCount: 1,
+      contractVersion: '1.0.0',
+      validationRulesetVersion: 'v1',
+    });
+    const serialized = JSON.stringify(audit.metadata).toLowerCase();
+    for (const forbidden of [
+      'prompt',
+      'answer',
+      'source',
+      'token',
+      'secret',
+      'cookie',
+      'authorization',
+    ])
+      expect(serialized).not.toContain(forbidden);
+  });
+
+  it('A01 approves the latest READY revision with its persisted validation identity', async () => {
+    const f = await fixture();
+    const run = await readyRun(f);
+    const approval = await approveAssessmentRevision(f.context, {
+      version: '1.0.0',
+      assessmentId: f.assessment.id,
+      assessmentRevisionId: f.revision.id,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(approval).toMatchObject({
+      assessmentId: f.assessment.id,
+      assessmentRevisionId: f.revision.id,
+      validationRunId: run.id,
+      approvalSequence: 1,
+    });
+    expect(
+      await prisma.assessmentApproval.count({ where: { assessmentId: f.assessment.id } }),
+    ).toBe(1);
+    expect(
+      await prisma.auditEvent.count({
+        where: { eventType: 'assessment.revision.approved', targetId: approval.approvalId },
+      }),
+    ).toBe(1);
+  });
+
+  it('C05 serializes a real overlapping newer revision creation against approval on one assessment', async () => {
     const f = await fixture();
     const run = await readyRun(f);
     const barrier = deferred();

@@ -69,7 +69,8 @@ export type WorkspaceOperation =
   | 'RENAME_WORKSPACE'
   | 'CREATE_ASSESSMENT'
   | 'READ_ASSESSMENT'
-  | 'CREATE_ASSESSMENT_REVISION';
+  | 'CREATE_ASSESSMENT_REVISION'
+  | 'APPROVE_ASSESSMENT_REVISION';
 export type AccessContext = {
   principal: AuthenticatedPrincipal;
   organizationId: string;
@@ -99,7 +100,8 @@ export function authorizeWorkspace(
     operation === 'READ_WORKSPACE_CONTEXT' ||
     operation === 'CREATE_ASSESSMENT' ||
     operation === 'READ_ASSESSMENT' ||
-    operation === 'CREATE_ASSESSMENT_REVISION'
+    operation === 'CREATE_ASSESSMENT_REVISION' ||
+    operation === 'APPROVE_ASSESSMENT_REVISION'
       ? ['TEACHER', 'COORDINATOR', 'SCHOOL_ADMIN']
       : context.workspaceType === 'PERSONAL'
         ? ['TEACHER']

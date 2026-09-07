@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { validationReadinessSchema, validationStatusSchema } from './phase50.js';
 
 export const PHASE60_SCHEMA_VERSION = '1.0.0' as const;
 const boundedText = (maximum: number) => z.string().trim().min(1).max(maximum);
@@ -118,6 +119,17 @@ export const teacherWorkspaceSchema = z
     assessment: teacherAssessmentListItemSchema,
     revision: teacherRevisionSchema.extend({ baseRevisionId: uuidSchema.nullable() }).strict(),
     history: z.array(teacherRevisionHistoryItemSchema).max(1000),
+    validation: validationStatusSchema.nullable(),
+    readiness: validationReadinessSchema,
+    approval: z
+      .object({
+        version,
+        assessmentRevisionId: uuidSchema,
+        approved: z.boolean(),
+        approvalId: uuidSchema.nullable(),
+        approvalSequence: revisionNumber.nullable(),
+      })
+      .strict(),
   })
   .strict();
 

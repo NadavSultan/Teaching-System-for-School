@@ -444,7 +444,7 @@ async function overlap(assessmentId: string, operations: Array<() => Promise<unk
   return { exactLock, waiterPids, results: await Promise.allSettled(pending) };
 }
 
-describe('Phase 60 persisted immutable editor', () => {
+describe('Phase 60 persisted immutable editor and concurrency', () => {
   afterAll(() => prisma.$disconnect());
 
   it('E01 creates N+1 for title/instruction edits and leaves N canonically unchanged', async () => {

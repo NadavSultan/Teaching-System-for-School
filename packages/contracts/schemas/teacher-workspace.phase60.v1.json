@@ -452,13 +452,426 @@
             "additionalProperties": false
           },
           "maxItems": 1000
+        },
+        "validation": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "type": "string",
+                      "const": "1.0.0"
+                    },
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "assessmentId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "assessmentRevisionId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "revisionSequence": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0
+                    },
+                    "rulesetVersion": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "evaluatorVersion": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "attempts": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "deterministicPassCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "deterministicFailCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "semanticFindingCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "state": {
+                      "type": "string",
+                      "const": "PENDING"
+                    },
+                    "failureCode": {
+                      "type": "null"
+                    },
+                    "completedAt": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "id",
+                    "assessmentId",
+                    "assessmentRevisionId",
+                    "revisionSequence",
+                    "rulesetVersion",
+                    "evaluatorVersion",
+                    "attempts",
+                    "deterministicPassCount",
+                    "deterministicFailCount",
+                    "semanticFindingCount",
+                    "state",
+                    "failureCode",
+                    "completedAt"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/version"
+                    },
+                    "id": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/id"
+                    },
+                    "assessmentId": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/assessmentId"
+                    },
+                    "assessmentRevisionId": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/assessmentRevisionId"
+                    },
+                    "revisionSequence": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/revisionSequence"
+                    },
+                    "rulesetVersion": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/rulesetVersion"
+                    },
+                    "evaluatorVersion": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/evaluatorVersion"
+                    },
+                    "attempts": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/attempts"
+                    },
+                    "deterministicPassCount": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/deterministicPassCount"
+                    },
+                    "deterministicFailCount": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/deterministicFailCount"
+                    },
+                    "semanticFindingCount": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/semanticFindingCount"
+                    },
+                    "state": {
+                      "type": "string",
+                      "const": "PROCESSING"
+                    },
+                    "failureCode": {
+                      "type": "null"
+                    },
+                    "completedAt": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "id",
+                    "assessmentId",
+                    "assessmentRevisionId",
+                    "revisionSequence",
+                    "rulesetVersion",
+                    "evaluatorVersion",
+                    "attempts",
+                    "deterministicPassCount",
+                    "deterministicFailCount",
+                    "semanticFindingCount",
+                    "state",
+                    "failureCode",
+                    "completedAt"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/version"
+                    },
+                    "id": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/id"
+                    },
+                    "assessmentId": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/assessmentId"
+                    },
+                    "assessmentRevisionId": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/assessmentRevisionId"
+                    },
+                    "revisionSequence": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/revisionSequence"
+                    },
+                    "rulesetVersion": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/rulesetVersion"
+                    },
+                    "evaluatorVersion": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/evaluatorVersion"
+                    },
+                    "attempts": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/attempts"
+                    },
+                    "deterministicPassCount": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/deterministicPassCount"
+                    },
+                    "deterministicFailCount": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/deterministicFailCount"
+                    },
+                    "semanticFindingCount": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/semanticFindingCount"
+                    },
+                    "state": {
+                      "type": "string",
+                      "const": "SUCCEEDED"
+                    },
+                    "failureCode": {
+                      "type": "null"
+                    },
+                    "completedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "id",
+                    "assessmentId",
+                    "assessmentRevisionId",
+                    "revisionSequence",
+                    "rulesetVersion",
+                    "evaluatorVersion",
+                    "attempts",
+                    "deterministicPassCount",
+                    "deterministicFailCount",
+                    "semanticFindingCount",
+                    "state",
+                    "failureCode",
+                    "completedAt"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/version"
+                    },
+                    "id": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/id"
+                    },
+                    "assessmentId": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/assessmentId"
+                    },
+                    "assessmentRevisionId": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/assessmentRevisionId"
+                    },
+                    "revisionSequence": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/revisionSequence"
+                    },
+                    "rulesetVersion": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/rulesetVersion"
+                    },
+                    "evaluatorVersion": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/evaluatorVersion"
+                    },
+                    "attempts": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/attempts"
+                    },
+                    "deterministicPassCount": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/deterministicPassCount"
+                    },
+                    "deterministicFailCount": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/deterministicFailCount"
+                    },
+                    "semanticFindingCount": {
+                      "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/validation/anyOf/0/anyOf/0/properties/semanticFindingCount"
+                    },
+                    "state": {
+                      "type": "string",
+                      "const": "FAILED"
+                    },
+                    "failureCode": {
+                      "type": "string",
+                      "enum": [
+                        "RULESET_INTEGRITY",
+                        "DETERMINISTIC_RULE_FAILED",
+                        "TIMEOUT",
+                        "TRANSIENT_EXHAUSTED",
+                        "PERMANENT_EVALUATOR_ERROR",
+                        "OUTPUT_INVALID"
+                      ]
+                    },
+                    "completedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "id",
+                    "assessmentId",
+                    "assessmentRevisionId",
+                    "revisionSequence",
+                    "rulesetVersion",
+                    "evaluatorVersion",
+                    "attempts",
+                    "deterministicPassCount",
+                    "deterministicFailCount",
+                    "semanticFindingCount",
+                    "state",
+                    "failureCode",
+                    "completedAt"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "readiness": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "version": {
+                  "type": "string",
+                  "const": "1.0.0"
+                },
+                "status": {
+                  "type": "string",
+                  "const": "READY"
+                },
+                "reasonCode": {
+                  "type": "null"
+                },
+                "validationRunId": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "required": [
+                "version",
+                "status",
+                "reasonCode",
+                "validationRunId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "version": {
+                  "type": "string",
+                  "const": "1.0.0"
+                },
+                "status": {
+                  "type": "string",
+                  "const": "BLOCKED"
+                },
+                "reasonCode": {
+                  "type": "string",
+                  "enum": [
+                    "VALIDATION_REQUIRED",
+                    "VALIDATION_PENDING",
+                    "VALIDATION_PROCESSING",
+                    "VALIDATION_FAILED",
+                    "DETERMINISTIC_BLOCKER",
+                    "SEMANTIC_BLOCKER",
+                    "WARNING_ACKNOWLEDGEMENT_REQUIRED",
+                    "VALIDATION_VERSION_STALE",
+                    "SOURCE_ELIGIBILITY_CHANGED"
+                  ]
+                },
+                "validationRunId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "version",
+                "status",
+                "reasonCode",
+                "validationRunId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "approval": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/version"
+            },
+            "assessmentRevisionId": {
+              "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/assessment/properties/id"
+            },
+            "approved": {
+              "type": "boolean"
+            },
+            "approvalId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/assessment/properties/id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "approvalSequence": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TeacherWorkspacePhase60V1/properties/assessment/properties/latestRevisionNumber/anyOf/0"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "version",
+            "assessmentRevisionId",
+            "approved",
+            "approvalId",
+            "approvalSequence"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
         "version",
         "assessment",
         "revision",
-        "history"
+        "history",
+        "validation",
+        "readiness",
+        "approval"
       ],
       "additionalProperties": false
     }
